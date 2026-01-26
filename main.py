@@ -7,6 +7,8 @@ Usage:
     python main.py [--host HOST] [--port PORT] [--debug]
 """
 
+__version__ = "1.0.0"
+
 import sys
 import argparse
 import signal
@@ -19,6 +21,11 @@ def parse_args():
     """Parse command line arguments"""
     parser = argparse.ArgumentParser(
         description="Cat/Ball Detection & Tracking System for RPi Zero 2W"
+    )
+    parser.add_argument(
+        '--version',
+        action='version',
+        version=f'%(prog)s {__version__}'
     )
     parser.add_argument(
         '--host',
@@ -57,10 +64,10 @@ def signal_handler(signum, frame):
 
 def print_banner():
     """Print startup banner"""
-    banner = """
+    banner = f"""
 ╔═══════════════════════════════════════════════════════════════╗
 ║                                                               ║
-║     🐱 Cat/Ball Detection & Tracking System 🏀               ║
+║     🐱 Cat/Ball Detection & Tracking System 🏀  v{__version__:<9}║
 ║                                                               ║
 ║     Raspberry Pi Zero 2W + Camera Module 3                    ║
 ║     TensorFlow Lite + OpenCV + Flask                          ║
