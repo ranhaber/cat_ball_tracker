@@ -1,0 +1,43 @@
+# Cat/Ball Detection & Tracking System
+# Requirements for Raspberry Pi Zero 2W
+#
+# INSTALLATION ON RASPBERRY PI:
+# =============================
+# Most packages should be installed via apt (system-wide):
+#   sudo apt install python3-numpy python3-opencv python3-flask python3-scipy python3-pillow python3-picamera2
+#
+# Then create venv with system packages:
+#   python3 -m venv --system-site-packages venv
+#   source venv/bin/activate
+#
+# For TFLite on RPi, use Google's wheel:
+#   pip install --extra-index-url https://google-coral.github.io/py-repo/ tflite_runtime
+#
+# Or skip TFLite - system will use mock detections for testing
+
+# WSGI server for production
+gunicorn==21.2.0
+
+# ============================================
+# Below packages are usually pre-installed via apt on RPi
+# Only needed if running on non-RPi systems:
+# ============================================
+
+# OpenCV for image processing (headless version for server)
+# opencv-python-headless==4.8.1.78
+
+# Web framework
+# Flask==3.0.0
+
+# Numerical operations
+# numpy==1.24.4
+
+# Scientific computing (for distance calculations in tracker)
+# scipy==1.11.4
+
+# Image processing utilities
+# Pillow==10.1.0
+
+# TensorFlow Lite Runtime - OPTIONAL
+# Install via: pip install --extra-index-url https://google-coral.github.io/py-repo/ tflite_runtime
+# If not installed, system runs in mock detection mode

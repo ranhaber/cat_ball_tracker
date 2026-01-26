@@ -1,0 +1,365 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Cat/Ball Tracker - RPi Zero 2W</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>🐱 Cat/Ball Tracker 🏀</h1>
+            <p class="subtitle">Raspberry Pi Zero 2W Detection System</p>
+        </header>
+
+        <nav class="tabs">
+            <button class="tab-btn active" data-tab="video">📹 Video Stream</button>
+            <button class="tab-btn" data-tab="map">🗺️ Position Map</button>
+            <button class="tab-btn" data-tab="control">⚙️ Control Panel</button>
+        </nav>
+
+        <main>
+            <!-- Video Tab -->
+            <section id="video-tab" class="tab-content active">
+                <div class="video-container">
+                    <img id="video-stream" src="/video_feed" alt="Video Stream">
+                    <div class="video-overlay">
+                        <span id="fps-display">FPS: --</span>
+                        <span id="mode-display">Mode: --</span>
+                    </div>
+                </div>
+                <div class="video-info">
+                    <p>Live video stream with detection and tracking overlays.</p>
+                    <p>Objects are tracked with unique IDs. Blue polygon shows detection zone.</p>
+                </div>
+            </section>
+
+            <!-- Map Tab -->
+            <section id="map-tab" class="tab-content">
+                <div class="map-container">
+                    <!-- Mini Map Display -->
+                    <div class="minimap-section">
+                        <h2>📍 Real-Time Position Map</h2>
+                        <p>Top-down view of your yard with object positions in meters</p>
+                        
+                        <div class="minimap-wrapper">
+                            <canvas id="minimap-canvas" width="400" height="400"></canvas>
+                            <div class="minimap-legend">
+                                <div class="legend-item">
+                                    <span class="legend-dot cat"></span> Cat
+                                </div>
+                                <div class="legend-item">
+                                    <span class="legend-dot ball"></span> Ball
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div class="position-display">
+                            <h3>Detected Objects</h3>
+                            <div id="objects-list" class="objects-list">
+                                <p class="no-objects">No objects detected</p>
+                            </div>
+                        </div>
+                        
+                        <div class="calibration-status-bar">
+                            <span id="calibration-badge" class="calibration-badge not-calibrated">
+                                ⚠️ Not Calibrated
+                            </span>
+                            <span class="calibration-hint">
+                                Go to Control Panel → Calibration to set up real-world coordinates
+                            </span>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Control Tab -->
+            <section id="control-tab" class="tab-content">
+                <div class="control-panel">
+                    <!-- Sub-tabs Navigation -->
+                    <nav class="sub-tabs">
+                        <button class="sub-tab-btn active" data-subtab="detection">🎯 Detection</button>
+                        <button class="sub-tab-btn" data-subtab="calibration">📐 Calibration</button>
+                        <button class="sub-tab-btn" data-subtab="settings">⚡ Settings</button>
+                    </nav>
+
+                    <!-- Sub-tab: Detection (Mode + Zone) -->
+                    <div id="detection-subtab" class="sub-tab-content active">
+                        <!-- Detection Mode Toggle -->
+                        <div class="control-section">
+                            <h2>Detection Mode</h2>
+                            <p>Select what to detect and track:</p>
+                            <div class="toggle-container">
+                                <button id="mode-cat" class="mode-btn active">
+                                    <span class="icon">🐱</span>
+                                    <span class="label">Cat</span>
+                                </button>
+                                <button id="mode-ball" class="mode-btn">
+                                    <span class="icon">🏀</span>
+                                    <span class="label">Ball</span>
+                                </button>
+                            </div>
+                            <p class="mode-status">Current: <strong id="current-mode">Cat</strong></p>
+                        </div>
+
+                        <!-- Detection Zone / Perimeter Editor -->
+                        <div class="control-section">
+                            <h2>Detection Zone</h2>
+                            <p>Define the area where objects will be detected:</p>
+                            <div class="perimeter-editor">
+                                <canvas id="perimeter-canvas" width="640" height="480"></canvas>
+                                <div class="snapshot-controls">
+                                    <button id="refresh-perimeter-snapshot" class="btn btn-secondary btn-sm">
+                                        📷 Refresh Snapshot
+                                    </button>
+                                    <span class="snapshot-hint">Click to update the camera view</span>
+                                </div>
+                                <div class="perimeter-controls">
+                                    <button id="clear-perimeter" class="btn btn-secondary">
+                                        🗑️ Clear Zone
+                                    </button>
+                                    <button id="save-perimeter" class="btn btn-primary">
+                                        💾 Save Zone
+                                    </button>
+                                </div>
+                                <p class="hint">Click on the image to add zone points. Minimum 3 points required.</p>
+                                <p id="points-count">Points: 0</p>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Sub-tab: Calibration -->
+                    <div id="calibration-subtab" class="sub-tab-content">
+                        <div class="control-section">
+                            <h2>📐 Camera Calibration</h2>
+                            <p>Set 4 reference points to convert pixel positions to real-world meters:</p>
+                            
+                            <div class="calibration-editor">
+                                <div class="calibration-instructions">
+                                    <ol>
+                                        <li>Place 4 markers in your yard at known positions</li>
+                                        <li>Click <strong>📷 Refresh Snapshot</strong> to capture the camera view</li>
+                                        <li>Click on each marker in the image</li>
+                                        <li>Enter the real-world X,Y coordinates (in meters)</li>
+                                        <li>Click "Save Calibration"</li>
+                                    </ol>
+                                </div>
+                                
+                                <div class="calibration-canvas-container">
+                                    <canvas id="calibration-canvas" width="640" height="480"></canvas>
+                                    <div class="snapshot-controls">
+                                        <button id="refresh-snapshot" class="btn btn-secondary btn-sm">
+                                            📷 Refresh Snapshot
+                                        </button>
+                                        <span class="snapshot-hint">Click to update the camera view</span>
+                                    </div>
+                                    <p class="hint">Click on the markers in your yard to add calibration points (4 required)</p>
+                                </div>
+                                
+                                <div class="calibration-points-list" id="calibration-points-list">
+                                    <!-- Points will be added here dynamically -->
+                                </div>
+                                
+                                <div class="calibration-controls">
+                                    <button id="clear-calibration" class="btn btn-secondary">
+                                        🗑️ Clear Calibration
+                                    </button>
+                                    <button id="save-calibration" class="btn btn-primary">
+                                        💾 Save Calibration
+                                    </button>
+                                </div>
+                                
+                                <div class="calibration-status" id="calibration-status">
+                                    <span class="status-icon">⚠️</span>
+                                    <span class="status-text">Not calibrated - add 4 points</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Sub-tab: Settings (Performance + Status) -->
+                    <div id="settings-subtab" class="sub-tab-content">
+                        <!-- Performance Settings -->
+                        <div class="control-section">
+                            <h2>⚡ Performance Settings</h2>
+                            <p>Adjust these settings to optimize for your Pi Zero 2W:</p>
+                            
+                            <div class="performance-controls">
+                                <!-- Resolution -->
+                                <div class="perf-control">
+                                    <label for="resolution-select">📐 Resolution</label>
+                                    <select id="resolution-select" class="perf-select">
+                                        <option value="320,240">320×240 (Low - Fastest)</option>
+                                        <option value="480,360">480×360 (Medium)</option>
+                                        <option value="640,480" selected>640×480 (High - Best Quality)</option>
+                                    </select>
+                                    <p class="perf-hint">Lower resolution = faster processing, less detail</p>
+                                </div>
+                                
+                                <!-- Frame Rate -->
+                                <div class="perf-control">
+                                    <label for="framerate-select">🎬 Frame Rate</label>
+                                    <select id="framerate-select" class="perf-select">
+                                        <option value="5">5 FPS (Lowest CPU)</option>
+                                        <option value="10">10 FPS</option>
+                                        <option value="15" selected>15 FPS (Default)</option>
+                                        <option value="20">20 FPS</option>
+                                        <option value="30">30 FPS (Smoothest)</option>
+                                    </select>
+                                    <p class="perf-hint">Lower FPS = less CPU usage, choppier video</p>
+                                </div>
+                                
+                                <!-- Frame Skip -->
+                                <div class="perf-control">
+                                    <label for="frameskip-select">⏭️ Detection Frame Skip</label>
+                                    <select id="frameskip-select" class="perf-select">
+                                        <option value="1">Every frame (Accurate)</option>
+                                        <option value="2" selected>Every 2nd frame (Default)</option>
+                                        <option value="3">Every 3rd frame</option>
+                                        <option value="4">Every 4th frame</option>
+                                        <option value="5">Every 5th frame (Fastest)</option>
+                                    </select>
+                                    <p class="perf-hint">Skip more frames = faster, but may miss quick movements</p>
+                                </div>
+                            </div>
+                            
+                            <div class="perf-status">
+                                <span class="perf-indicator" id="perf-indicator">●</span>
+                                <span id="perf-status-text">Settings loaded</span>
+                            </div>
+                        </div>
+
+                        <!-- System Status -->
+                        <div class="control-section">
+                            <h2>📊 System Status</h2>
+                            <div class="status-grid">
+                                <div class="status-item">
+                                    <span class="status-label">FPS</span>
+                                    <span class="status-value" id="status-fps">--</span>
+                                </div>
+                                <div class="status-item">
+                                    <span class="status-label">Objects</span>
+                                    <span class="status-value" id="status-objects">--</span>
+                                </div>
+                                <div class="status-item">
+                                    <span class="status-label">Frames</span>
+                                    <span class="status-value" id="status-frames">--</span>
+                                </div>
+                                <div class="status-item">
+                                    <span class="status-label">Zone Points</span>
+                                    <span class="status-value" id="status-perimeter">--</span>
+                                </div>
+                                <div class="status-item">
+                                    <span class="status-label">Resolution</span>
+                                    <span class="status-value" id="status-resolution">--</span>
+                                </div>
+                                <div class="status-item">
+                                    <span class="status-label">Frame Skip</span>
+                                    <span class="status-value" id="status-frameskip">--</span>
+                                </div>
+                                <div class="status-item">
+                                    <span class="status-label">🧠 RAM</span>
+                                    <span class="status-value" id="status-ram">--</span>
+                                </div>
+                                <div class="status-item">
+                                    <span class="status-label">🌡️ CPU Temp</span>
+                                    <span class="status-value" id="status-temp">--</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+        </main>
+
+        <footer>
+            <p>Powered by TensorFlow Lite + OpenCV on Raspberry Pi Zero 2W</p>
+            <button id="help-btn" class="help-btn">❓ Help</button>
+        </footer>
+    </div>
+
+    <!-- Help Modal -->
+    <div id="help-modal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>📖 User Guide</h2>
+                <button class="modal-close" id="close-help">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="help-section">
+                    <h3>🎬 Video Stream Tab</h3>
+                    <p>View live camera feed with detection overlays. Detected objects are highlighted with bounding boxes and tracking IDs.</p>
+                </div>
+
+                <div class="help-section">
+                    <h3>🗺️ Position Map Tab</h3>
+                    <p>Top-down view of your yard showing detected objects in real-world coordinates (meters). Requires calibration to work.</p>
+                </div>
+
+                <div class="help-section">
+                    <h3>⚙️ Control Panel Tab</h3>
+                    <p>The Control Panel has 3 sub-tabs:</p>
+                    <ul>
+                        <li><strong>🎯 Detection:</strong>
+                            <ul>
+                                <li>Switch between Cat 🐱 and Ball 🏀 detection</li>
+                                <li>Draw a polygon on the camera view to limit the detection area</li>
+                            </ul>
+                        </li>
+                        <li><strong>📐 Calibration:</strong>
+                            <ul>
+                                <li>Set up 4 reference points to convert pixels to meters</li>
+                                <li>Required for the Position Map to work</li>
+                            </ul>
+                        </li>
+                        <li><strong>⚡ Settings:</strong>
+                            <ul>
+                                <li>Adjust resolution, FPS, and frame skip for performance</li>
+                                <li>View system status and statistics</li>
+                            </ul>
+                        </li>
+                    </ul>
+                </div>
+
+                <div class="help-section highlight">
+                    <h3>📐 How to Calibrate the Camera</h3>
+                    <p>Calibration converts pixel positions to real-world meters. Follow these steps:</p>
+                    <ol>
+                        <li><strong>Place 4 markers</strong> in your yard at known positions (e.g., corners of a rectangle)</li>
+                        <li><strong>Measure their positions</strong> from a reference point (0,0) in meters</li>
+                        <li>Go to <strong>Control Panel → 📐 Calibration</strong> sub-tab</li>
+                        <li>Click <strong>📷 Refresh Snapshot</strong> to capture the current camera view</li>
+                        <li><strong>Click on each marker</strong> in the snapshot image</li>
+                        <li><strong>Enter the X,Y coordinates</strong> in meters when prompted</li>
+                        <li>Click <strong>Save Calibration</strong></li>
+                    </ol>
+                    
+                    <div class="help-example">
+                        <p><strong>Example:</strong> For a 10m × 8m yard with camera at corner:</p>
+                        <pre>
+Point 1: (0, 0)   - bottom-left corner
+Point 2: (10, 0)  - bottom-right corner
+Point 3: (10, 8)  - top-right corner
+Point 4: (0, 8)   - top-left corner</pre>
+                    </div>
+                    
+                    <p class="help-tip">💡 <strong>Tip:</strong> Use tape or cones as markers. The more accurate your measurements, the better the position tracking!</p>
+                </div>
+
+                <div class="help-section">
+                    <h3>🎯 Tips for Best Results</h3>
+                    <ul>
+                        <li>Lower resolution = faster detection on Pi Zero 2W</li>
+                        <li>Frame skip of 2-3 is a good balance</li>
+                        <li>Make sure lighting is consistent for reliable detection</li>
+                        <li>Calibration points should be spread across the camera view</li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="{{ url_for('static', filename='js/app.js') }}"></script>
+</body>
+</html>

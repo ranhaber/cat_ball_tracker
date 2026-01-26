@@ -1,0 +1,6 @@
+# Model files directory
+# TFLite models will be downloaded here on first run
+#
+# Expected files after first run:
+# - detect.tflite (COCO SSD MobileNet v1 quantized)
+# - labelmap.txt (COCO class labels)
