@@ -337,8 +337,8 @@ class VideoProcessor:
                 # Update tracker with latest detections
                 tracked_objects = self.tracker.update(last_detections)
                 
-                # Draw annotations
-                annotated = frame.copy()
+                # OPTIMIZATION A: Draw directly on frame, only copy once at the end
+                annotated = frame
                 
                 # Draw motion regions if enabled (only those inside perimeter)
                 if self.show_motion_regions and self.motion_first_enabled:
@@ -362,9 +362,9 @@ class VideoProcessor:
                 # Draw FPS and status
                 self._draw_status(annotated)
                 
-                # Update current frame
+                # OPTIMIZATION A: Store reference, copy only when encoding to JPEG
                 with self.frame_lock:
-                    self.current_frame = annotated.copy()
+                    self.current_frame = annotated
                     
                 # Update FPS
                 self._update_fps()
@@ -443,9 +443,11 @@ class VideoProcessor:
             
     def get_frame_jpeg(self):
         """Get current frame as JPEG bytes"""
+        # OPTIMIZATION A: Only copy when encoding (required by imencode)
         with self.frame_lock:
             if self.current_frame is None:
                 return None
+            # imencode doesn't modify the frame, but we copy for thread safety
             frame = self.current_frame.copy()
             
         # Encode as JPEG

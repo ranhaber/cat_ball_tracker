@@ -44,6 +44,9 @@ class MotionDetector:
         self.background = None
         self.last_frame_size = None  # Track resolution changes
         
+        # OPTIMIZATION J: Check if GPU acceleration available
+        self.use_gpu = getattr(config, 'USE_GPU_ACCELERATION', False) and self._check_gpu_available()
+        
         # Motion state
         self.motion_detected = False
         self.motion_regions = []
@@ -52,6 +55,15 @@ class MotionDetector:
         
         # Settings
         self.cooldown_after_motion = 10  # Keep detecting for N frames after motion stops
+    
+    def _check_gpu_available(self):
+        """Check if GPU/OpenCL acceleration is available"""
+        try:
+            # Test UMat creation
+            test = cv2.UMat(np.zeros((10, 10), dtype=np.uint8))
+            return cv2.ocl.haveOpenCL()
+        except:
+            return False
         
     def reset(self):
         """Reset motion detector state"""
@@ -90,11 +102,19 @@ class MotionDetector:
         # Downscale for motion detection (saves memory)
         small_w = int(w * self.detection_scale)
         small_h = int(h * self.detection_scale)
-        small_frame = cv2.resize(frame, (small_w, small_h), interpolation=cv2.INTER_AREA)
         
-        # Convert to grayscale
-        gray = cv2.cvtColor(small_frame, cv2.COLOR_BGR2GRAY)
-        gray = cv2.GaussianBlur(gray, (self.blur_size, self.blur_size), 0)
+        # OPTIMIZATION J: Use GPU acceleration if available
+        if self.use_gpu:
+            # Upload to GPU
+            frame_gpu = cv2.UMat(frame)
+            small_frame_gpu = cv2.resize(frame_gpu, (small_w, small_h), interpolation=cv2.INTER_AREA)
+            gray_gpu = cv2.cvtColor(small_frame_gpu, cv2.COLOR_BGR2GRAY)
+            gray = cv2.GaussianBlur(gray_gpu, (self.blur_size, self.blur_size), 0).get()
+        else:
+            # CPU path (original)
+            small_frame = cv2.resize(frame, (small_w, small_h), interpolation=cv2.INTER_AREA)
+            gray = cv2.cvtColor(small_frame, cv2.COLOR_BGR2GRAY)
+            gray = cv2.GaussianBlur(gray, (self.blur_size, self.blur_size), 0)
         
         # Build background model
         self.frame_history.append(gray.astype(np.float32))

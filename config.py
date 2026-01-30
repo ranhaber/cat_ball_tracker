@@ -116,6 +116,11 @@ USE_THREADED_CAPTURE = True
 # Number of threads for TFLite inference
 TFLITE_NUM_THREADS = 4  # Use all 4 cores of RPi Zero 2W
 
+# OPTIMIZATION J: Enable GPU acceleration (OpenCL/UMat) if available
+# Set to True to attempt GPU-accelerated operations
+# Falls back to CPU if GPU not available
+USE_GPU_ACCELERATION = True
+
 # ============================================================================
 # PERFORMANCE OPTIONS (user-selectable via web UI)
 # ============================================================================

@@ -41,6 +41,10 @@ class TFLiteDetector:
         self.output_details = None
         self.input_shape = None
         
+        # OPTIMIZATION I: Pre-compute static values
+        self.input_h = None
+        self.input_w = None
+        
         self.detection_mode = config.DEFAULT_DETECTION_MODE
         self.target_class_id = config.COCO_CLASSES[self.detection_mode]
         
@@ -102,6 +106,11 @@ class TFLiteDetector:
             
             # Get expected input shape
             self.input_shape = self.input_details[0]['shape']
+            
+            # OPTIMIZATION I: Pre-compute input dimensions
+            self.input_h = self.input_shape[1]
+            self.input_w = self.input_shape[2]
+            
             print(f"Model loaded. Input shape: {self.input_shape}")
             
         except Exception as e:
@@ -157,9 +166,10 @@ class TFLiteDetector:
         # Get frame dimensions
         frame_h, frame_w = frame.shape[:2]
         
-        # Prepare input - resize and convert to RGB
-        input_h, input_w = self.input_shape[1], self.input_shape[2]
-        input_frame = cv2.resize(frame, (input_w, input_h))
+        # OPTIMIZATION I: Use pre-computed dimensions
+        # OPTIMIZATION D: No color conversion needed if camera outputs BGR
+        # But model still expects RGB, so we need this conversion
+        input_frame = cv2.resize(frame, (self.input_w, self.input_h))
         input_frame = cv2.cvtColor(input_frame, cv2.COLOR_BGR2RGB)
         
         # Add batch dimension and ensure uint8

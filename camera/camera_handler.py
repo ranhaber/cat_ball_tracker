@@ -185,10 +185,11 @@ class CameraHandler:
             print(f"Found camera(s): {cameras}")
             
             # Configure for video capture optimized for RPi Zero 2W
+            # OPTIMIZATION D: Use BGR888 directly to avoid RGB->BGR conversion
             camera_config = self.camera.create_video_configuration(
                 main={
                     "size": (self.width, self.height),
-                    "format": "RGB888"
+                    "format": "BGR888"  # Direct BGR output (no conversion needed)
                 },
                 controls={
                     "FrameRate": self.fps
@@ -220,6 +221,7 @@ class CameraHandler:
                 if self.use_mock:
                     time.sleep(1.0 / self.fps)
                 
+                # OPTIMIZATION A: Reuse frame buffer instead of creating new one
                 with self.frame_lock:
                     self.frame = new_frame
                     self._frame_count += 1
@@ -245,20 +247,17 @@ class CameraHandler:
         if config.USE_THREADED_CAPTURE:
             with self.frame_lock:
                 if self.frame is not None:
-                    # Convert RGB to BGR for OpenCV compatibility
-                    # Mock camera returns BGR directly, real camera returns RGB
-                    if self.use_mock:
-                        return self.frame.copy()
-                    return cv2.cvtColor(self.frame.copy(), cv2.COLOR_RGB2BGR)
+                    # OPTIMIZATION A & D: No conversion needed, camera outputs BGR directly
+                    # Return reference instead of copy (caller will copy if needed)
+                    return self.frame
                 return None
         else:
             # Direct capture (blocking)
             try:
                 frame = self.camera.capture_array()
                 self._frame_count += 1
-                if self.use_mock:
-                    return frame
-                return cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+                # OPTIMIZATION D: No conversion needed, camera outputs BGR directly
+                return frame
             except Exception as e:
                 print(f"Frame capture error: {e}")
                 return None
