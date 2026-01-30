@@ -7,6 +7,7 @@ import time
 import threading
 import os
 import logging
+from datetime import datetime
 import cv2
 from flask import Flask, Response, render_template, jsonify, request
 
@@ -430,6 +431,16 @@ class VideoProcessor:
                 motion_color,
                 1
             )
+        
+        # Draw timestamp in top-right corner (dd/mm/yyyy HH:MM:SS)
+        timestamp = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
+        (ts_w, ts_h), _ = cv2.getTextSize(timestamp, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
+        ts_x = frame.shape[1] - ts_w - 10
+        ts_y = ts_h + 10
+        
+        # Background for timestamp
+        cv2.rectangle(frame, (ts_x - 5, 5), (frame.shape[1] - 5, ts_y + 5), (0, 0, 0), -1)
+        cv2.putText(frame, timestamp, (ts_x, ts_y), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
         
     def _update_fps(self):
         """Update FPS calculation"""
