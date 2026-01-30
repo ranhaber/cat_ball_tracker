@@ -229,8 +229,9 @@ class VideoProcessor:
                             # Run detection on full frame
                             detections = self.detector.detect(frame)
                         
-                        # Filter by perimeter
-                        detections = self.perimeter.filter_detections(detections)
+                        # Filter by perimeter (pass frame resolution for scaling)
+                        frame_res = (frame_w, frame_h)
+                        detections = self.perimeter.filter_detections(detections, frame_resolution=frame_res)
                         last_detections = detections
                         self.ai_detections_count += 1
                         
@@ -614,27 +615,44 @@ def create_app():
         """Set perimeter points"""
         data = request.get_json()
         points = data.get('points', [])
-        source_width = data.get('source_width', 640)
-        source_height = data.get('source_height', 480)
+        source_width = data.get('source_width')
+        source_height = data.get('source_height')
         
         if len(points) < 3:
             return jsonify({"error": "Need at least 3 points"}), 400
         
-        # Scale points from source (canvas) resolution to camera resolution
         cam_width, cam_height = video_processor.current_resolution
-        scale_x = cam_width / source_width
-        scale_y = cam_height / source_height
         
-        scaled_points = []
-        for p in points:
-            x = int(p[0] * scale_x)
-            y = int(p[1] * scale_y)
-            scaled_points.append([x, y])
+        # If source dimensions provided and different from camera, scale the points
+        if source_width and source_height and (source_width != cam_width or source_height != cam_height):
+            scale_x = cam_width / source_width
+            scale_y = cam_height / source_height
+            
+            scaled_points = []
+            for p in points:
+                x = int(p[0] * scale_x)
+                y = int(p[1] * scale_y)
+                scaled_points.append([x, y])
+            
+            print(f"Perimeter: scaled from {source_width}x{source_height} to {cam_width}x{cam_height}")
+            print(f"  Original first point: {points[0]}, Scaled: {scaled_points[0]}")
+        else:
+            # Points already at camera resolution
+            scaled_points = [[int(p[0]), int(p[1])] for p in points]
+            print(f"Perimeter: saved at camera resolution {cam_width}x{cam_height}")
+            print(f"  First point: {scaled_points[0]}")
         
-        print(f"Perimeter: scaling from {source_width}x{source_height} to {cam_width}x{cam_height}")
-        
+        # Set perimeter with resolution info
+        if video_processor.perimeter:
+            video_processor.perimeter.set_saved_resolution(cam_width, cam_height)
         success = video_processor.set_perimeter(scaled_points)
-        return jsonify({"success": success, "points": video_processor.get_perimeter()})
+        
+        return jsonify({
+            "success": success, 
+            "points": video_processor.get_perimeter(),
+            "camera_resolution": [cam_width, cam_height],
+            "source_resolution": [source_width, source_height] if source_width else None
+        })
         
     @app.route('/api/perimeter', methods=['DELETE'])
     def clear_perimeter():
