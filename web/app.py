@@ -436,7 +436,7 @@ class VideoProcessor:
         """Get current detection threshold"""
         if self.detector:
             return self.detector.get_threshold()
-        return config.DEFAULT_DETECTION_MODE
+        return config.DETECTION_THRESHOLD
         
     def set_perimeter(self, points):
         """Set perimeter points"""
