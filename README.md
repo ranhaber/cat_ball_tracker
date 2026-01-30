@@ -1,6 +1,8 @@
-# Cat/Ball Detection & Tracking System for Raspberry Pi Zero 2W
+# Cat Dome - Detection & Tracking System
 
-A real-time object detection and tracking system designed specifically for the Raspberry Pi Zero 2W with Camera Module 3. Features a web interface for live video streaming, real-world position tracking, and control.
+A real-time cat and ball detection system for Raspberry Pi Zero 2W with Camera Module 3. Features motion-first detection for efficiency, a web interface for live streaming, and zone-based tracking.
+
+**Version:** 1.2.0
 
 ---
 
@@ -10,19 +12,25 @@ A real-time object detection and tracking system designed specifically for the R
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │                           RPi Zero 2W System                                │
 │  ┌──────────────┐    ┌──────────────┐    ┌──────────────┐                   │
-│  │   Camera     │───▶│  Detection   │───▶│   Tracker    │                   │
-│  │  Module 3    │    │   (TFLite)   │    │  (Centroid)  │                   │
-│  │              │    │              │    │              │                   │
-│  │  picamera2   │    │ MobileNetSSD │    │  + Perimeter │                   │
+│  │   Camera     │───▶│   Motion     │───▶│  Detection   │                   │
+│  │  Module 3    │    │  Detector    │    │   (TFLite)   │                   │
+│  │  (IMX708)    │    │ (Low memory) │    │ MobileNetSSD │                   │
+│  │  picamera2   │    │              │    │              │                   │
 │  └──────────────┘    └──────────────┘    └──────────────┘                   │
 │         │                   │                   │                           │
-│         ▼                   ▼                   ▼                           │
+│         │                   │                   ▼                           │
+│         │                   │          ┌──────────────┐                     │
+│         │                   │          │   Tracker    │                     │
+│         │                   │          │  (Centroid)  │                     │
+│         │                   │          │ + Perimeter  │                     │
+│         │                   │          └──────────────┘                     │
+│         ▼                   ▼                   │                           │
 │  ┌─────────────────────────────────────────────────────┐                    │
 │  │              Frame Processor                        │                    │
-│  │  - Overlay bounding boxes & tracking IDs            │                    │
-│  │  - Draw perimeter boundaries                        │                    │
-│  │  - Apply detection mode (cat/ball)                  │                    │
-│  │  - Calculate real-world positions (calibration)     │                    │
+│  │  - Motion detection (runs first, saves CPU)         │                    │
+│  │  - AI detection only when motion detected           │                    │
+│  │  - Draw perimeter and detection boxes               │                    │
+│  │  - Overlay FPS, RAM, CPU temp status                │                    │
 │  └─────────────────────────────────────────────────────┘                    │
 │                            │                                                │
 │                            ▼                                                │
@@ -30,7 +38,7 @@ A real-time object detection and tracking system designed specifically for the R
 │  │              Flask Web Server                       │                    │
 │  │  - MJPEG video streaming                            │                    │
 │  │  - REST API for control                             │                    │
-│  │  - Static file serving                              │                    │
+│  │  - Settings persistence (JSON)                      │                    │
 │  └─────────────────────────────────────────────────────┘                    │
 │                            │                                                │
 └────────────────────────────┼────────────────────────────────────────────────┘
@@ -39,23 +47,23 @@ A real-time object detection and tracking system designed specifically for the R
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │                         Web Browser (Client)                                │
 │  ┌─────────────────────────────────────────────────────┐                    │
-│  │  Tab 1: Video Stream                                │                    │
+│  │  Tab 1: 📹 Video Stream                             │                    │
 │  │  - Live MJPEG feed with detection overlays          │                    │
-│  │  - Perimeter visualization                          │                    │
-│  │  - Object tracking IDs                              │                    │
+│  │  - Motion status indicator                          │                    │
+│  │  - RAM/CPU temp display                             │                    │
+│  │  - Show motion regions checkbox                     │                    │
 │  └─────────────────────────────────────────────────────┘                    │
 │  ┌─────────────────────────────────────────────────────┐                    │
-│  │  Tab 2: Position Map                                │                    │
-│  │  - Top-down view with real-world coordinates        │                    │
-│  │  - Object positions in meters                       │                    │
+│  │  Tab 2: ⚙️ Settings                                 │                    │
+│  │  - Detection mode toggle (Cat / Ball)               │                    │
+│  │  - Camera resolution selector                       │                    │
+│  │  - Frame skip (performance tuning)                  │                    │
+│  │  - System status (FPS, RAM, CPU temp)               │                    │
 │  └─────────────────────────────────────────────────────┘                    │
 │  ┌─────────────────────────────────────────────────────┐                    │
-│  │  Tab 3: Control Panel                               │                    │
-│  │  - Toggle: Cat / Ball detection mode                │                    │
-│  │  - Perimeter drawing interface                      │                    │
-│  │  - Camera calibration for real-world coordinates    │                    │
-│  │  - Performance settings                             │                    │
-│  │  - System status & FPS display                      │                    │
+│  │  Tab 3: 📍 Zone                                     │                    │
+│  │  - Detection zone editor (click on camera frame)    │                    │
+│  │  - Distance calibration (line-based)                │                    │
 │  └─────────────────────────────────────────────────────┘                    │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -64,14 +72,15 @@ A real-time object detection and tracking system designed specifically for the R
 
 ## ✨ Features
 
-- **🐱 Cat & Ball Detection** - TensorFlow Lite-powered object detection
+- **🐱 Cat & Ball Detection** - TensorFlow Lite MobileNet SSD
+- **🎯 Motion-First Detection** - AI only runs when motion detected (saves ~30% CPU/memory)
 - **🔢 Object Tracking** - Consistent IDs across frames using centroid tracking
-- **📐 Camera Calibration** - Convert pixel positions to real-world meters
-- **🗺️ Position Map** - Top-down view showing object positions in meters
-- **🎯 Detection Zones** - Draw perimeter to limit detection area
-- **⚡ Performance Controls** - Adjust resolution, FPS, and processing speed
+- **📍 Detection Zones** - Draw perimeter on camera snapshot to limit detection area
+- **📏 Distance Calibration** - Define reference distances for real-world measurements
+- **⚡ Performance Controls** - Resolution and frame skip adjustment
+- **💾 Settings Persistence** - All settings saved and restored on reboot
+- **📊 System Monitoring** - RAM usage and CPU temperature display
 - **📱 Responsive Web UI** - Works on desktop and mobile browsers
-- **❓ Built-in Help** - In-app guide for calibration and usage
 
 ---
 
@@ -79,160 +88,139 @@ A real-time object detection and tracking system designed specifically for the R
 
 ```
 cat_ball_tracker/
-├── README.md                    # This file - Project documentation
+├── README.md                    # This file
 ├── requirements.txt             # Python dependencies
 ├── config.py                    # Configuration settings
-├── main.py                      # Application entry point
-├── setup_car_dome.sh            # Automated setup script for Raspberry Pi
+├── main.py                      # Application entry point (v1.2.0)
+├── settings.py                  # Settings persistence
+├── cat_ball_tracker.service     # Systemd service file
 │
 ├── camera/
 │   ├── __init__.py
-│   └── camera_handler.py        # RPi Camera Module 3 interface (picamera2)
+│   └── camera_handler.py        # RPi Camera Module 3 interface
 │
 ├── detection/
 │   ├── __init__.py
-│   ├── detector.py              # TensorFlow Lite MobileNet SSD detector
-│   ├── tracker.py               # Centroid-based object tracking
-│   ├── perimeter.py             # User-defined ROI/perimeter management
-│   └── calibration.py           # Camera calibration for real-world coordinates
+│   ├── detector.py              # TensorFlow Lite detector
+│   ├── tracker.py               # Centroid-based tracking
+│   ├── perimeter.py             # Detection zone management
+│   ├── motion_detector.py       # Lightweight motion detection
+│   └── calibration.py           # Distance calibration
 │
 ├── web/
 │   ├── __init__.py
-│   ├── app.py                   # Flask web server & MJPEG streaming
+│   ├── app.py                   # Flask server & video processor
 │   ├── templates/
-│   │   └── index.html           # Main web interface (tabbed UI)
+│   │   └── index.html           # Web interface (3 tabs)
 │   └── static/
-│       ├── css/
-│       │   └── style.css        # UI styling
-│       └── js/
-│           └── app.js           # Frontend JavaScript
+│       ├── css/style.css
+│       └── js/app.js
 │
 └── models/
-    └── .gitkeep                 # Model files go here (downloaded on first run)
+    └── (downloaded on first run)
 ```
 
 ---
 
-## 🚀 Quick Start (Raspberry Pi OS Bookworm)
+## 🚀 Quick Start
 
-### Automated Setup
+### Prerequisites
 
-```bash
-# Copy setup script to your Pi and run it
-chmod +x setup_car_dome.sh
-./setup_car_dome.sh
-```
+- Raspberry Pi Zero 2W
+- Camera Module 3 (IMX708)
+- Raspberry Pi OS Bookworm (64-bit)
 
-The script will:
-1. Update system packages
-2. Install all dependencies
-3. Create Python virtual environment
-4. Install TFLite runtime
-5. Download detection model
-6. Create systemd service for auto-start
-
-### Manual Installation
-
-#### 1. System Dependencies
+### Installation
 
 ```bash
-# Update system
-sudo apt update && sudo apt upgrade -y
+# Clone or copy the project
+cd ~
+git clone <your-repo-url> cat_ball_tracker
+cd cat_ball_tracker
 
-# Install required packages
-sudo apt install -y \
-    python3-full \
-    python3-pip \
-    python3-venv \
-    python3-opencv \
-    python3-picamera2 \
-    python3-flask \
-    python3-numpy \
-    python3-pil \
-    libatlas-base-dev
-```
+# Install system dependencies
+sudo apt update
+sudo apt install -y python3-full python3-pip python3-venv \
+    python3-opencv python3-picamera2 python3-flask \
+    python3-numpy python3-pil libopenblas-dev
 
-#### 2. Python Environment
-
-```bash
-# Create virtual environment with system packages
+# Create virtual environment
 python3 -m venv venv --system-site-packages
 source venv/bin/activate
 
-# Install TFLite (if available for your Python version)
+# Install TFLite (optional - works without it in mock mode)
 pip install tflite-runtime --extra-index-url https://www.piwheels.org/simple
 
-# Install gunicorn
-pip install gunicorn
-```
-
-#### 3. Run the Application
-
-```bash
-source venv/bin/activate
+# Run the application
 python main.py
 ```
 
-Open your browser: `http://<raspberry-pi-ip>:5000`
+Open browser: `http://<raspberry-pi-ip>:5000`
+
+### Auto-Start on Boot
+
+```bash
+# Copy service file
+sudo cp cat_ball_tracker.service /etc/systemd/system/
+
+# Enable and start
+sudo systemctl daemon-reload
+sudo systemctl enable cat_ball_tracker
+sudo systemctl start cat_ball_tracker
+
+# Check status
+sudo systemctl status cat_ball_tracker
+
+# View logs
+sudo journalctl -u cat_ball_tracker -f
+```
 
 ---
 
-## 📐 Camera Calibration
+## 🎯 Motion-First Detection
 
-Calibration converts pixel coordinates to real-world positions (meters).
+Cat Dome uses a two-stage detection approach to save resources:
 
-### How to Calibrate
+1. **Motion Detection** (always running, low CPU)
+   - Runs on 1/4 resolution
+   - Compares consecutive frames
+   - Detects areas with movement
 
-1. **Place 4 markers** in your yard at known positions
-   - Use cones, tape, or any visible markers
-   - Measure their positions from a reference point (0,0)
+2. **AI Detection** (only when motion detected)
+   - TensorFlow Lite MobileNet SSD
+   - Runs on cropped motion region
+   - Filters by cat or ball class
 
-2. **Open the web interface** and go to **Control Panel → Camera Calibration**
-
-3. **Click on each marker** in the video preview
-
-4. **Enter the X,Y coordinates** in meters when prompted
-
-5. Click **Save Calibration**
-
-### Example Setup
-
-```
-Your yard (10m × 8m) with camera at bottom-left:
-
-        (0,8)────────────(10,8)
-          │                 │
-          │     YARD        │
-          │                 │
-        (0,0)────────────(10,0)
-            ↑ Camera here
-
-Calibration Points:
-  Point 1: Click bottom-left  → Enter (0, 0)
-  Point 2: Click bottom-right → Enter (10, 0)
-  Point 3: Click top-right    → Enter (10, 8)
-  Point 4: Click top-left     → Enter (0, 8)
-```
-
-### After Calibration
-
-- Go to the **Position Map** tab
-- See detected objects displayed on a top-down map
-- Object positions shown in meters from origin
+**Benefits:**
+- ~30% less CPU usage during idle
+- Enables higher resolutions (up to 1536x864)
+- Better for detecting at distance
 
 ---
 
-## ⚡ Performance Optimization
+## 📍 Detection Zone Setup
 
-The Pi Zero 2W has limited resources. Use these settings to optimize:
+1. Go to **Zone** tab
+2. Click **Load Camera Frame** - loads full-resolution snapshot
+3. Click to add polygon points (minimum 3)
+4. Click **Save Zone**
+5. Only objects inside the zone will be detected
 
-| Setting | Low CPU | Balanced | Best Quality |
-|---------|---------|----------|--------------|
-| Resolution | 320×240 | 480×360 | 640×480 |
-| Frame Rate | 5 FPS | 10 FPS | 15 FPS |
-| Frame Skip | 5 | 2-3 | 1 |
+---
 
-Access these settings in **Control Panel → Performance Settings**
+## ⚡ Performance Settings
+
+| Setting | Description | Recommended |
+|---------|-------------|-------------|
+| Resolution | Camera capture size | 1536x864 |
+| Frame Skip | Skip N frames between AI runs | 2 |
+
+Access in **Settings** tab.
+
+**Memory Limits (RPi Zero 2W - 512MB RAM):**
+- 640x480: ~150MB
+- 1536x864: ~250MB
+- 1920x1080: May fail (too much RAM)
 
 ---
 
@@ -241,52 +229,44 @@ Access these settings in **Control Panel → Performance Settings**
 | Endpoint | Method | Description |
 |----------|--------|-------------|
 | `/` | GET | Web interface |
-| `/video_feed` | GET | MJPEG video stream |
-| `/api/status` | GET | System status (FPS, detections, etc.) |
+| `/video_feed` | GET | MJPEG stream |
+| `/video_feed?snapshot=1` | GET | Single JPEG frame |
+| `/api/status` | GET | System status |
 | `/api/mode` | GET/POST | Detection mode (cat/ball) |
-| `/api/perimeter` | GET/POST/DELETE | Detection zone management |
-| `/api/calibration` | GET/POST/DELETE | Camera calibration |
+| `/api/perimeter` | GET/POST/DELETE | Detection zone |
+| `/api/calibration` | GET/DELETE | Calibration status |
+| `/api/calibration/lines` | GET/POST | Calibration lines |
+| `/api/motion` | GET | Motion detection status |
+| `/api/motion/toggle` | POST | Toggle motion-first mode |
+| `/api/motion/show_regions` | POST | Toggle motion region display |
 | `/api/performance` | GET | Performance settings |
 | `/api/performance/resolution` | POST | Set resolution |
-| `/api/performance/framerate` | POST | Set frame rate |
 | `/api/performance/frameskip` | POST | Set frame skip |
 
 ---
 
 ## ⚙️ Configuration
 
-Edit `config.py` to customize:
+Edit `config.py`:
 
 ```python
-# Detection settings
-DETECTION_THRESHOLD = 0.5      # Confidence threshold (0.0 - 1.0)
-DEFAULT_DETECTION_MODE = "cat" # Default mode: "cat" or "ball"
+# Detection
+DETECTION_THRESHOLD = 0.5
+DEFAULT_DETECTION_MODE = "cat"  # or "ball"
 
-# Camera settings
-FRAME_WIDTH = 640              # Default resolution
-FRAME_HEIGHT = 480
-TARGET_FPS = 15
+# Camera
+DEFAULT_RESOLUTION = (1536, 864)
+DEFAULT_FRAMERATE = 15
+DEFAULT_FRAME_SKIP = 2
 
-# Calibration
-CAMERA_HEIGHT_METERS = 3.0     # Camera height (for reference)
+# Motion-First
+MOTION_FIRST_ENABLED = True
+MOTION_DETECTION_SCALE = 0.25
 
-# Server settings
+# Server
 HOST = "0.0.0.0"
 PORT = 5000
 ```
-
----
-
-## 📊 Performance Expectations
-
-| Metric | Expected Value |
-|--------|----------------|
-| Detection FPS | 3-5 FPS (with TFLite) |
-| Tracking overhead | <10ms |
-| Streaming latency | ~100-200ms |
-| Memory usage | ~300-400MB |
-
-**Note**: Without TFLite, the system runs in mock mode for testing.
 
 ---
 
@@ -294,54 +274,48 @@ PORT = 5000
 
 ### Camera not detected
 ```bash
-libcamera-hello --list-cameras
+rpicam-hello --list-cameras
 ```
 
-### TFLite not installing
-- Use Raspberry Pi OS Bookworm (Debian 12)
-- Use Python 3.11 (not 3.13)
-- The app works in mock mode without TFLite
+### Service not starting
+```bash
+sudo journalctl -u cat_ball_tracker -n 50
+```
 
-### Low FPS
-- Reduce resolution in Performance Settings
-- Increase frame skip
-- Close other applications
+### "Cannot allocate memory"
+- Reduce resolution to 1536x864 or lower
+- Check RAM: `free -h`
 
-### Calibration not working
-- Ensure 4 points are placed
-- Points should be spread across the view
-- Re-measure real-world distances if positions are wrong
+### Perimeter in wrong position
+- Delete `perimeter.json` and recreate
+- Ensure snapshot resolution matches camera resolution
+
+### TFLite not available
+- System works in mock mode (random detections)
+- Install from piwheels if Python version supported
 
 ---
 
-## 🔄 Auto-Start on Boot
+## 📊 Expected Performance
 
-The setup script creates a systemd service:
+| Metric | Value |
+|--------|-------|
+| FPS (with TFLite) | 3-8 FPS |
+| FPS (mock mode) | 15+ FPS |
+| Memory usage | 180-250MB |
+| Motion detection | <10ms |
+| AI detection | 200-500ms |
 
-```bash
-# Enable auto-start
-sudo systemctl enable cat-tracker
+---
 
-# Manual control
-sudo systemctl start cat-tracker
-sudo systemctl stop cat-tracker
-sudo systemctl status cat-tracker
+## 📝 Version History
 
-# View logs
-journalctl -u cat-tracker -f
-```
+- **v1.2.0** - Motion-first detection, zone editor with snapshots, settings persistence
+- **v1.1.0** - RAM/CPU monitoring, resolution controls
+- **v1.0.0** - Initial release
 
 ---
 
 ## 📝 License
 
-MIT License - Feel free to use and modify for your projects.
-
----
-
-## 🤝 Acknowledgments
-
-- TensorFlow Lite team for edge-optimized models
-- Raspberry Pi Foundation for picamera2
-- COCO dataset for pre-trained object classes
-- OpenCV for computer vision tools
+MIT License - Feel free to use and modify.

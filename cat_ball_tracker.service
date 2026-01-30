@@ -1,0 +1,19 @@
+[Unit]
+Description=Cat Dome - Detection & Tracking System
+After=network.target
+
+[Service]
+Type=simple
+User=ranhaber
+WorkingDirectory=/home/ranhaber/cat_ball_tracker
+Environment=PATH=/home/ranhaber/cat_ball_tracker/venv/bin:/usr/bin
+ExecStart=/home/ranhaber/cat_ball_tracker/venv/bin/python main.py
+Restart=on-failure
+RestartSec=10
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

@@ -1,23 +1,30 @@
 #!/bin/bash
-# Installation script for Raspberry Pi Zero 2W
-# Tested on Raspberry Pi OS Bookworm (Debian 12)
+# Cat Dome - Installation Script
+# For Raspberry Pi Zero 2W with Camera Module 3
+# Tested on Raspberry Pi OS Bookworm (64-bit)
 
 set -e
 
-echo "=========================================="
-echo "🐱 Cat/Ball Tracker - RPi Installation"
-echo "=========================================="
-
-# Update package lists first
+echo "╔═══════════════════════════════════════════════════════════════╗"
+echo "║                                                               ║"
+echo "║              🐱 Cat Dome - Installation Script 🏀             ║"
+echo "║                                                               ║"
+echo "╚═══════════════════════════════════════════════════════════════╝"
 echo ""
+
+# Get the directory where this script is located
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$SCRIPT_DIR"
+
+# Update package lists
 echo "📦 Updating package lists..."
 sudo apt update
 
 # Install system dependencies
-# Note: libatlas-base-dev is replaced by libopenblas-dev on Bookworm
 echo ""
 echo "📦 Installing system dependencies..."
 sudo apt install -y \
+    python3-full \
     python3-pip \
     python3-venv \
     python3-numpy \
@@ -30,9 +37,6 @@ sudo apt install -y \
     libcap-dev \
     python3-libcamera \
     python3-picamera2
-
-# Alternative: if libopenblas-dev fails, try:
-# sudo apt install -y libatlas3-base
 
 echo ""
 echo "✅ System packages installed!"
@@ -47,15 +51,42 @@ source venv/bin/activate
 echo ""
 echo "📦 Installing Python packages..."
 pip install --upgrade pip
-pip install tflite-runtime gunicorn
+
+# Try to install TFLite (may not work on all Python versions)
+echo ""
+echo "📦 Installing TFLite runtime..."
+pip install tflite-runtime --extra-index-url https://www.piwheels.org/simple || {
+    echo "⚠️ TFLite installation failed - will run in mock mode"
+}
+
+# Install gunicorn for production
+pip install gunicorn
+
+# Download model if not exists
+echo ""
+echo "📥 Checking for detection model..."
+if [ ! -f "models/ssd_mobilenet_v1_coco.tflite" ]; then
+    mkdir -p models
+    echo "Downloading model..."
+    wget -q -O models/ssd_mobilenet_v1_coco.tflite \
+        "https://storage.googleapis.com/download.tensorflow.org/models/tflite/coco_ssd_mobilenet_v1_1.0_quant_2018_06_29.zip" || {
+        echo "⚠️ Model download failed - will download on first run"
+    }
+fi
 
 echo ""
-echo "=========================================="
 echo "✅ Installation complete!"
 echo ""
-echo "To run the tracker:"
+echo "=========================================="
+echo "To run Cat Dome manually:"
 echo "  source venv/bin/activate"
 echo "  python main.py"
 echo ""
-echo "Then open: http://$(hostname -I | awk '{print $1}'):5000"
+echo "To install as a service (auto-start on boot):"
+echo "  sudo cp cat_ball_tracker.service /etc/systemd/system/"
+echo "  sudo systemctl daemon-reload"
+echo "  sudo systemctl enable cat_ball_tracker"
+echo "  sudo systemctl start cat_ball_tracker"
+echo ""
+echo "Web interface: http://$(hostname -I | awk '{print $1}'):5000"
 echo "=========================================="

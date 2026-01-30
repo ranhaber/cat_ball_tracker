@@ -1,8 +1,9 @@
 #!/bin/bash
 
 # ============================================================================
-# Cat/Ball Tracker - Raspberry Pi Setup Script
-# For Raspberry Pi OS Bookworm (32-bit or 64-bit)
+# Cat Dome - Raspberry Pi Setup Script
+# For Raspberry Pi OS Bookworm (64-bit recommended)
+# Version: 1.2.0
 # ============================================================================
 
 set -e  # Exit on any error
@@ -10,9 +11,10 @@ set -e  # Exit on any error
 echo ""
 echo "╔═══════════════════════════════════════════════════════════════╗"
 echo "║                                                               ║"
-echo "║     🐱 Cat/Ball Tracker Setup Script 🏀                      ║"
+echo "║              🐱 Cat Dome Setup Script 🏀                      ║"
+echo "║                       v1.2.0                                  ║"
 echo "║                                                               ║"
-echo "║     For Raspberry Pi OS Bookworm                              ║"
+echo "║     For Raspberry Pi OS Bookworm (64-bit)                     ║"
 echo "║     Raspberry Pi Zero 2W + Camera Module 3                    ║"
 echo "║                                                               ║"
 echo "╚═══════════════════════════════════════════════════════════════╝"
@@ -261,7 +263,7 @@ SERVICE_FILE="/etc/systemd/system/cat-tracker.service"
 
 sudo tee "$SERVICE_FILE" > /dev/null << EOF
 [Unit]
-Description=Cat/Ball Tracker Service
+Description=Cat Dome - Detection & Tracking System
 After=network.target
 
 [Service]

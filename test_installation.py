@@ -20,7 +20,7 @@ def check_package(name, import_name=None):
 
 def main():
     print("=" * 60)
-    print("🔍 Cat/Ball Tracker - Installation Verification")
+    print("🔍 Cat Dome - Installation Verification")
     print("=" * 60)
     print()
     
