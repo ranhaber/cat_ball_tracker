@@ -58,14 +58,17 @@
                         <p>Select resolution (higher = slower but sharper):</p>
                         <select id="resolution-select" class="resolution-select">
                             <option value="320x240">320x240 (Fast)</option>
-                            <option value="640x480" selected>640x480 (Balanced)</option>
+                            <option value="640x480" selected>640x480 (Default)</option>
                             <option value="800x600">800x600</option>
-                            <option value="1280x720">1280x720 (HD)</option>
+                            <option value="1280x720">1280x720 (HD 720p)</option>
+                            <option value="1536x864">1536x864 (Native)</option>
                             <option value="1920x1080">1920x1080 (Full HD)</option>
+                            <option value="2304x1296">2304x1296 (Native)</option>
                             <option value="2592x1944">2592x1944 (5MP)</option>
-                            <option value="4056x3040">4056x3040 (12MP Max)</option>
+                            <option value="4056x3040">4056x3040 (12MP)</option>
+                            <option value="4608x2592">4608x2592 (Max Native)</option>
                         </select>
-                        <p class="hint">⚠️ Higher resolutions may reduce FPS significantly on RPi Zero 2W</p>
+                        <p class="hint">⚠️ Higher resolutions reduce FPS significantly on RPi Zero 2W</p>
                     </div>
 
                     <!-- Perimeter Editor -->

@@ -140,30 +140,42 @@ function initResolutionSelector() {
     }
 }
 
-async function setResolution(resolution) {
+async function setResolution(resolutionStr) {
     try {
-        const response = await fetch('/api/resolution', {
+        // Parse "640x480" into width and height
+        const [width, height] = resolutionStr.split('x').map(Number);
+        
+        showConnectionStatus('connecting');
+        
+        const response = await fetch('/api/performance/resolution', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ resolution })
+            body: JSON.stringify({ width, height })
         });
         
         if (response.ok) {
-            // Reconnect video with new resolution
-            setTimeout(reconnectVideo, 1000);
+            console.log(`Resolution changed to ${width}x${height}`);
+            // Wait for camera to restart, then reconnect video
+            setTimeout(reconnectVideo, 2000);
+        } else {
+            const err = await response.json();
+            alert('Failed to change resolution: ' + (err.error || 'Unknown error'));
         }
     } catch (error) {
         console.error('Error setting resolution:', error);
+        alert('Error setting resolution: ' + error.message);
     }
 }
 
 async function loadResolution() {
     try {
-        const response = await fetch('/api/resolution');
+        const response = await fetch('/api/performance');
         const data = await response.json();
         const selector = document.getElementById('resolution-select');
-        if (selector && data.resolution) {
-            selector.value = data.resolution;
+        
+        if (selector && data.current && data.current.resolution) {
+            const [width, height] = data.current.resolution;
+            selector.value = `${width}x${height}`;
         }
     } catch (error) {
         console.error('Error loading resolution:', error);
@@ -378,7 +390,13 @@ async function updateStatus() {
         if (statusPerimeter) statusPerimeter.textContent = status.perimeter_points;
         
         const statusResolution = document.getElementById('status-resolution');
-        if (statusResolution) statusResolution.textContent = status.resolution || '--';
+        if (statusResolution) {
+            if (status.resolution && Array.isArray(status.resolution)) {
+                statusResolution.textContent = `${status.resolution[0]}x${status.resolution[1]}`;
+            } else {
+                statusResolution.textContent = status.resolution || '--';
+            }
+        }
         
     } catch (error) {
         console.error('Error fetching status:', error);

@@ -116,10 +116,18 @@ TFLITE_NUM_THREADS = 4  # Use all 4 cores of RPi Zero 2W
 # PERFORMANCE OPTIONS (user-selectable via web UI)
 # ============================================================================
 # Available resolution options (width, height)
+# Matches IMX708 (Camera Module 3) capabilities: 4608x2592 max
 RESOLUTION_OPTIONS = [
-    (320, 240),   # Low - fastest, lowest quality
-    (480, 360),   # Medium - balanced
-    (640, 480),   # High - default, best quality
+    (320, 240),     # Fastest - for testing/low bandwidth
+    (640, 480),     # Default - good balance for RPi Zero 2W
+    (800, 600),     # Medium
+    (1280, 720),    # HD 720p
+    (1536, 864),    # Native mode 1
+    (1920, 1080),   # Full HD 1080p
+    (2304, 1296),   # Native mode 2
+    (2592, 1944),   # 5MP equivalent
+    (4056, 3040),   # 12MP
+    (4608, 2592),   # Max resolution (native)
 ]
 
 # Available frame rate options
