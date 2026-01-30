@@ -161,7 +161,13 @@ MOTION_MIN_AREA = 100            # Minimum contour area for motion (lower = smal
 MOTION_HISTORY_FRAMES = 3        # Frames to average for background
 
 # Crop size for AI detection when motion detected
-MOTION_CROP_MIN_SIZE = (640, 480)  # Minimum crop size for AI detection
+# Use fixed 300x300 crop (no scaling) for better small object detection
+MOTION_CROP_SIZE = (300, 300)      # Fixed crop size matching AI input (no scaling!)
+MOTION_CROP_MIN_SIZE = (640, 480)  # Legacy - not used with fixed crop
+
+# Temporal confirmation - require detection in N consecutive frames
+# 1 = instant (current behavior), 2-3 = more reliable, fewer false positives
+DETECTION_CONFIRM_FRAMES = 1
 
 # ============================================================================
 # CALIBRATION SETTINGS (for real-world coordinates)

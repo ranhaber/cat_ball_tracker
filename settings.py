@@ -20,6 +20,7 @@ def get_default_settings():
         "frame_skip": config.DEFAULT_FRAME_SKIP,
         "detection_mode": config.DEFAULT_DETECTION_MODE,
         "detection_threshold": config.DETECTION_THRESHOLD,
+        "confirm_frames": getattr(config, 'DETECTION_CONFIRM_FRAMES', 1),
         "motion_first_enabled": getattr(config, 'MOTION_FIRST_ENABLED', True),
         "show_motion_regions": getattr(config, 'SHOW_MOTION_REGIONS', False)
     }

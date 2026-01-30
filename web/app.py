@@ -118,6 +118,10 @@ class VideoProcessor:
         self.motion_detected = False
         self.ai_detections_count = 0
         
+        # Temporal confirmation - require detection in N consecutive frames
+        self.confirm_frames = saved.get("confirm_frames", getattr(config, 'DETECTION_CONFIRM_FRAMES', 1))
+        self.detection_history = []  # List of recent detection counts
+        
         # Store last detections with world coordinates for API
         self.last_detections_with_world = []
         
@@ -222,10 +226,12 @@ class VideoProcessor:
                             self.motion_detected = False
                         
                         if self.motion_detected:
-                            # Get crop region for AI detection
-                            crop_region = self.motion_detector.get_crop_region(
+                            # Get fixed 300x300 crop centered on motion (no scaling!)
+                            # This preserves object pixel size for better detection
+                            crop_size = getattr(config, 'MOTION_CROP_SIZE', (300, 300))
+                            crop_region = self.motion_detector.get_fixed_crop_region(
                                 frame.shape, 
-                                min_size=(640, 480)
+                                crop_size=crop_size
                             )
                             run_ai_detection = True
                     else:
@@ -260,12 +266,25 @@ class VideoProcessor:
                         frame_res = (frame_w, frame_h)
                         raw_count = len(detections)
                         detections = self.perimeter.filter_detections(detections, frame_resolution=frame_res)
-                        last_detections = detections
                         self.ai_detections_count += 1
+                        
+                        # Temporal confirmation - require detection in N consecutive frames
+                        self.detection_history.append(len(detections) > 0)
+                        if len(self.detection_history) > self.confirm_frames:
+                            self.detection_history.pop(0)
+                        
+                        # Only confirm detections if detected in enough consecutive frames
+                        if self.confirm_frames > 1:
+                            confirmed = len(self.detection_history) >= self.confirm_frames and all(self.detection_history)
+                            if not confirmed:
+                                detections = []  # Not confirmed yet
+                        
+                        last_detections = detections
                         
                         # Debug: log detections
                         if raw_count > 0:
-                            print(f"[DEBUG] Raw detections: {raw_count}, After perimeter filter: {len(detections)}")
+                            confirmed_str = f", Confirmed: {len(detections) > 0}" if self.confirm_frames > 1 else ""
+                            print(f"[DEBUG] Raw detections: {raw_count}, After perimeter filter: {len(detections)}{confirmed_str}")
                         
                         # Compute world coordinates for each detection
                         self.last_detections_with_world = []
@@ -437,6 +456,13 @@ class VideoProcessor:
         if self.detector:
             return self.detector.get_threshold()
         return config.DETECTION_THRESHOLD
+    
+    def set_confirm_frames(self, frames):
+        """Set temporal confirmation frames (1 = instant, 2-5 = require N consecutive detections)"""
+        self.confirm_frames = max(1, min(5, int(frames)))
+        self.detection_history = []  # Reset history when changing
+        settings.update_setting("confirm_frames", self.confirm_frames)
+        print(f"[SETTING] Confirmation frames changed to: {self.confirm_frames}")
         
     def set_perimeter(self, points):
         """Set perimeter points"""
@@ -469,6 +495,7 @@ class VideoProcessor:
             "frame_count": self.frame_count,
             "detection_mode": self.get_detection_mode(),
             "detection_threshold": self.get_detection_threshold(),
+            "confirm_frames": self.confirm_frames,
             "object_count": self.tracker.get_object_count() if self.tracker else 0,
             "perimeter_points": len(self.get_perimeter()),
             "resolution": list(self.current_resolution),
@@ -782,6 +809,27 @@ def create_app():
         
         video_processor.set_detection_threshold(threshold)
         return jsonify({"success": True, "threshold": threshold})
+    
+    @app.route('/api/performance/confirm_frames', methods=['GET'])
+    def get_confirm_frames():
+        """Get current confirmation frames setting"""
+        return jsonify({"confirm_frames": video_processor.confirm_frames})
+    
+    @app.route('/api/performance/confirm_frames', methods=['POST'])
+    def set_confirm_frames():
+        """Set detection confirmation frames (temporal confirmation)"""
+        data = request.get_json()
+        frames = data.get('frames')
+        
+        if frames is None:
+            return jsonify({"error": "Frames value required"}), 400
+        
+        frames = int(frames)
+        if frames < 1 or frames > 5:
+            return jsonify({"error": "Frames must be between 1 and 5"}), 400
+        
+        video_processor.set_confirm_frames(frames)
+        return jsonify({"success": True, "confirm_frames": frames})
     
     # =========================================================================
     # Motion Detection API Endpoints

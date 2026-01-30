@@ -235,9 +235,51 @@ class MotionDetector:
         
         return regions
     
+    def get_fixed_crop_region(self, frame_shape, crop_size=(300, 300)):
+        """
+        Get a fixed-size crop region centered on motion (NO SCALING needed).
+        This preserves object pixel size for better small object detection.
+        
+        Args:
+            frame_shape: (height, width) of original frame
+            crop_size: Fixed (width, height) for crop - should match AI input size
+            
+        Returns:
+            (x, y, w, h) crop region, or None if no motion
+        """
+        if not self.motion_regions:
+            return None
+            
+        h, w = frame_shape[:2]
+        crop_w, crop_h = crop_size
+        
+        # Get center of all motion regions
+        min_x = min(r[0] for r in self.motion_regions)
+        min_y = min(r[1] for r in self.motion_regions)
+        max_x = max(r[0] + r[2] for r in self.motion_regions)
+        max_y = max(r[1] + r[3] for r in self.motion_regions)
+        
+        # Center of motion
+        cx = (min_x + max_x) // 2
+        cy = (min_y + max_y) // 2
+        
+        # Center the fixed crop on motion center
+        crop_x = cx - crop_w // 2
+        crop_y = cy - crop_h // 2
+        
+        # Clamp to frame bounds
+        crop_x = max(0, min(crop_x, w - crop_w))
+        crop_y = max(0, min(crop_y, h - crop_h))
+        
+        # Handle edge case where frame is smaller than crop
+        crop_w = min(crop_w, w)
+        crop_h = min(crop_h, h)
+        
+        return (crop_x, crop_y, crop_w, crop_h)
+    
     def get_crop_region(self, frame_shape, min_size=(640, 480)):
         """
-        Get the best crop region for AI detection.
+        Get the best crop region for AI detection (legacy - variable size).
         
         Args:
             frame_shape: (height, width) of original frame

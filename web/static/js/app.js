@@ -17,6 +17,7 @@ document.addEventListener('DOMContentLoaded', () => {
     initMotionControls();
     initCalibration();
     initThresholdSlider();
+    initConfirmSlider();
     loadCurrentState();
 });
 
@@ -273,6 +274,55 @@ async function loadThreshold() {
         }
     } catch (error) {
         console.error('Error loading threshold:', error);
+    }
+}
+
+// ============================================================================
+// Confirmation Frames Slider (Temporal Confirmation)
+// ============================================================================
+function initConfirmSlider() {
+    const slider = document.getElementById('confirm-slider');
+    const valueDisplay = document.getElementById('confirm-value');
+    
+    if (slider) {
+        // Update display when slider moves
+        slider.addEventListener('input', (e) => {
+            valueDisplay.textContent = e.target.value;
+        });
+        
+        // Save when slider is released
+        slider.addEventListener('change', async (e) => {
+            const frames = parseInt(e.target.value);
+            try {
+                const response = await fetch('/api/performance/confirm_frames', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ frames })
+                });
+                if (response.ok) {
+                    console.log(`Confirmation frames set to ${frames}`);
+                }
+            } catch (error) {
+                console.error('Error setting confirmation frames:', error);
+            }
+        });
+    }
+}
+
+async function loadConfirmFrames() {
+    try {
+        const response = await fetch('/api/performance/confirm_frames');
+        const data = await response.json();
+        
+        if (data.confirm_frames !== undefined) {
+            const slider = document.getElementById('confirm-slider');
+            const valueDisplay = document.getElementById('confirm-value');
+            
+            if (slider) slider.value = data.confirm_frames;
+            if (valueDisplay) valueDisplay.textContent = data.confirm_frames;
+        }
+    } catch (error) {
+        console.error('Error loading confirmation frames:', error);
     }
 }
 
@@ -914,6 +964,7 @@ async function loadCurrentState() {
         await loadResolution();
         await loadMotionSettings();
         await loadThreshold();
+        await loadConfirmFrames();
         await loadCalibrationStatus();
         await updateStatus();
         

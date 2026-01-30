@@ -91,6 +91,13 @@
                         </div>
                         <p class="hint">Lower = more detections (may include false positives)<br>Higher = fewer but more accurate detections</p>
                         
+                        <p style="margin-top: 15px;">Confirmation frames:</p>
+                        <div class="threshold-control">
+                            <input type="range" id="confirm-slider" min="1" max="5" value="1" step="1">
+                            <span id="confirm-value">1</span>
+                        </div>
+                        <p class="hint">1 = instant detection, 2-5 = require detection in N consecutive frames (reduces false positives)</p>
+                        
                         <p class="mode-status" style="margin-top: 10px;">Motion: <strong id="motion-status">--</strong> | AI runs: <strong id="ai-runs">0</strong></p>
                     </div>
 
@@ -173,7 +180,7 @@
         </main>
 
         <footer>
-            <p>Cat Dome - Detection & Tracking System | <span id="version">v1.3.0</span></p>
+            <p>Cat Dome - Detection & Tracking System | <span id="version">v1.4.0</span></p>
         </footer>
     </div>
 
