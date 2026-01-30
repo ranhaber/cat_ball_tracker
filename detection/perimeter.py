@@ -236,7 +236,6 @@ class PerimeterManager:
         
         # Draw corner points
         for point in scaled_points:
-        for point in self.points:
             cv2.circle(frame, point, 5, config.PERIMETER_COLOR, -1)
             
         return frame
