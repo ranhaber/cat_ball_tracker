@@ -16,6 +16,7 @@ document.addEventListener('DOMContentLoaded', () => {
     initResolutionSelector();
     initMotionControls();
     initCalibration();
+    initTopDownView();
     initThresholdSlider();
     initConfirmSlider();
     loadCurrentState();
@@ -358,8 +359,7 @@ async function loadMotionSettings() {
 // ============================================================================
 let calibrationCanvas, calibrationCtx;
 let calibrationImage = null;
-let calibrationLines = [];  // Array of { p1: [x,y], p2: [x,y], distance: number }
-let calibrationTempPoint = null;  // First point of current line being drawn
+let calibrationPoints = [];  // Array of { pixel: [x,y], world: [x,y] }
 
 function initCalibration() {
     calibrationCanvas = document.getElementById('calibration-canvas');
@@ -369,6 +369,9 @@ function initCalibration() {
     
     // Load snapshot button
     document.getElementById('load-snapshot-calibration')?.addEventListener('click', loadCalibrationSnapshot);
+    
+    // Save button
+    document.getElementById('save-calibration')?.addEventListener('click', saveCalibrationPoints);
     
     // Clear button
     document.getElementById('clear-calibration')?.addEventListener('click', clearCalibration);
@@ -422,39 +425,37 @@ function handleCalibrationClick(e) {
         return;
     }
     
+    // Max 4 points
+    if (calibrationPoints.length >= 4) {
+        alert('Maximum 4 points. Clear to start over.');
+        return;
+    }
+    
     const rect = calibrationCanvas.getBoundingClientRect();
     // Scale from display size to actual canvas/image resolution
     const scaleX = calibrationCanvas.width / rect.width;
     const scaleY = calibrationCanvas.height / rect.height;
     
     // Coordinates are at full camera resolution
-    const x = Math.round((e.clientX - rect.left) * scaleX);
-    const y = Math.round((e.clientY - rect.top) * scaleY);
+    const px = Math.round((e.clientX - rect.left) * scaleX);
+    const py = Math.round((e.clientY - rect.top) * scaleY);
     
-    if (calibrationTempPoint === null) {
-        // First point of a line
-        calibrationTempPoint = [x, y];
-        drawCalibration();
-    } else {
-        // Second point - complete the line
-        const p1 = calibrationTempPoint;
-        const p2 = [x, y];
-        calibrationTempPoint = null;
-        
-        // Ask for distance
-        const distance = prompt('Enter the distance between these two points (in meters):');
-        if (distance && !isNaN(parseFloat(distance))) {
-            calibrationLines.push({
-                p1: p1,
-                p2: p2,
-                distance: parseFloat(distance)
-            });
-            updateCalibrationLinesCount();
-            saveCalibrationToServer();
-        }
-        
-        drawCalibration();
-    }
+    // Ask for world coordinates
+    const pointNum = calibrationPoints.length + 1;
+    const worldX = prompt(`Point ${pointNum}: Enter X coordinate in meters (left-right):`);
+    if (worldX === null || isNaN(parseFloat(worldX))) return;
+    
+    const worldY = prompt(`Point ${pointNum}: Enter Y coordinate in meters (near-far):`);
+    if (worldY === null || isNaN(parseFloat(worldY))) return;
+    
+    // Add point
+    calibrationPoints.push({
+        pixel: [px, py],
+        world: [parseFloat(worldX), parseFloat(worldY)]
+    });
+    
+    updateCalibrationPointsUI();
+    drawCalibration();
 }
 
 function drawCalibration() {
@@ -468,63 +469,126 @@ function drawCalibration() {
         calibrationCtx.fillRect(0, 0, calibrationCanvas.width, calibrationCanvas.height);
     }
     
-    // Draw existing lines
-    calibrationLines.forEach((line, index) => {
-        drawCalibrationLine(line.p1, line.p2, line.distance, index + 1);
-    });
+    // Colors for each point
+    const colors = ['#ff0000', '#00ff00', '#0000ff', '#ffff00'];
     
-    // Draw temp point if exists
-    if (calibrationTempPoint) {
-        calibrationCtx.fillStyle = '#ffff00';
+    // Draw calibration points
+    calibrationPoints.forEach((point, index) => {
+        const [px, py] = point.pixel;
+        const [wx, wy] = point.world;
+        const color = colors[index % colors.length];
+        
+        // Draw point circle
+        calibrationCtx.fillStyle = color;
         calibrationCtx.beginPath();
-        calibrationCtx.arc(calibrationTempPoint[0], calibrationTempPoint[1], 8, 0, Math.PI * 2);
+        calibrationCtx.arc(px, py, 10, 0, Math.PI * 2);
         calibrationCtx.fill();
         
-        calibrationCtx.fillStyle = '#000';
-        calibrationCtx.font = 'bold 12px sans-serif';
+        // Draw white border
+        calibrationCtx.strokeStyle = '#fff';
+        calibrationCtx.lineWidth = 2;
+        calibrationCtx.stroke();
+        
+        // Draw point number
+        calibrationCtx.fillStyle = '#fff';
+        calibrationCtx.font = 'bold 14px sans-serif';
         calibrationCtx.textAlign = 'center';
-        calibrationCtx.fillText('Click 2nd point', calibrationTempPoint[0], calibrationTempPoint[1] - 15);
+        calibrationCtx.textBaseline = 'middle';
+        calibrationCtx.fillText(String(index + 1), px, py);
+        
+        // Draw world coordinates label
+        const label = `(${wx}m, ${wy}m)`;
+        calibrationCtx.font = 'bold 12px sans-serif';
+        calibrationCtx.textBaseline = 'top';
+        
+        // Background for label
+        const metrics = calibrationCtx.measureText(label);
+        calibrationCtx.fillStyle = 'rgba(0,0,0,0.7)';
+        calibrationCtx.fillRect(px - metrics.width/2 - 3, py + 15, metrics.width + 6, 18);
+        
+        calibrationCtx.fillStyle = color;
+        calibrationCtx.fillText(label, px, py + 17);
+    });
+    
+    // Draw hint if less than 4 points
+    if (calibrationPoints.length < 4) {
+        const hint = `Click to add point ${calibrationPoints.length + 1}/4`;
+        calibrationCtx.fillStyle = 'rgba(0,0,0,0.7)';
+        calibrationCtx.fillRect(10, 10, 200, 25);
+        calibrationCtx.fillStyle = '#fff';
+        calibrationCtx.font = '14px sans-serif';
+        calibrationCtx.textAlign = 'left';
+        calibrationCtx.textBaseline = 'middle';
+        calibrationCtx.fillText(hint, 20, 22);
     }
 }
 
-function drawCalibrationLine(p1, p2, distance, lineNum) {
-    // Draw line
-    calibrationCtx.strokeStyle = '#ff00ff';
-    calibrationCtx.lineWidth = 3;
-    calibrationCtx.beginPath();
-    calibrationCtx.moveTo(p1[0], p1[1]);
-    calibrationCtx.lineTo(p2[0], p2[1]);
-    calibrationCtx.stroke();
+function updateCalibrationPointsUI() {
+    const countEl = document.getElementById('points-count');
+    const containerEl = document.getElementById('points-container');
+    const saveBtn = document.getElementById('save-calibration');
     
-    // Draw endpoints
-    [p1, p2].forEach(point => {
-        calibrationCtx.fillStyle = '#ff00ff';
-        calibrationCtx.beginPath();
-        calibrationCtx.arc(point[0], point[1], 6, 0, Math.PI * 2);
-        calibrationCtx.fill();
-    });
+    if (countEl) {
+        countEl.textContent = `${calibrationPoints.length}/4`;
+    }
     
-    // Draw distance label at midpoint
-    const midX = (p1[0] + p2[0]) / 2;
-    const midY = (p1[1] + p2[1]) / 2;
+    // Enable save button only when we have 4 points
+    if (saveBtn) {
+        saveBtn.disabled = calibrationPoints.length !== 4;
+    }
     
-    const label = `${distance}m`;
-    calibrationCtx.font = 'bold 14px sans-serif';
-    calibrationCtx.textAlign = 'center';
-    
-    // Background for label
-    const metrics = calibrationCtx.measureText(label);
-    calibrationCtx.fillStyle = 'rgba(0,0,0,0.7)';
-    calibrationCtx.fillRect(midX - metrics.width/2 - 5, midY - 10, metrics.width + 10, 20);
-    
-    calibrationCtx.fillStyle = '#fff';
-    calibrationCtx.fillText(label, midX, midY + 5);
-}
-
-function updateCalibrationLinesCount() {
-    const el = document.getElementById('calibration-lines');
-    if (el) {
-        el.textContent = `Lines defined: ${calibrationLines.length}`;
+    // Build points list HTML
+    if (containerEl) {
+        containerEl.innerHTML = '';
+        const colors = ['#ff0000', '#00ff00', '#0000ff', '#ffff00'];
+        
+        calibrationPoints.forEach((point, index) => {
+            const div = document.createElement('div');
+            div.className = 'calibration-point-item';
+            div.innerHTML = `
+                <span class="point-label" style="color: ${colors[index]}">Point ${index + 1}</span>
+                <button class="remove-point" data-index="${index}">✕</button>
+                <div class="point-coords">
+                    <div>
+                        <label>X (m)</label>
+                        <input type="number" step="0.1" value="${point.world[0]}" 
+                               data-index="${index}" data-coord="x" class="world-coord-input">
+                    </div>
+                    <div>
+                        <label>Y (m)</label>
+                        <input type="number" step="0.1" value="${point.world[1]}" 
+                               data-index="${index}" data-coord="y" class="world-coord-input">
+                    </div>
+                </div>
+            `;
+            containerEl.appendChild(div);
+        });
+        
+        // Add event listeners for remove buttons
+        containerEl.querySelectorAll('.remove-point').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                const index = parseInt(e.target.dataset.index);
+                calibrationPoints.splice(index, 1);
+                updateCalibrationPointsUI();
+                drawCalibration();
+            });
+        });
+        
+        // Add event listeners for world coordinate inputs
+        containerEl.querySelectorAll('.world-coord-input').forEach(input => {
+            input.addEventListener('change', (e) => {
+                const index = parseInt(e.target.dataset.index);
+                const coord = e.target.dataset.coord;
+                const value = parseFloat(e.target.value) || 0;
+                
+                if (coord === 'x') {
+                    calibrationPoints[index].world[0] = value;
+                } else {
+                    calibrationPoints[index].world[1] = value;
+                }
+                drawCalibration();
+            });
+        });
     }
 }
 
@@ -533,13 +597,16 @@ async function loadCalibrationStatus() {
         const response = await fetch('/api/calibration');
         const data = await response.json();
         
-        // Load saved lines if any
-        if (data.lines && Array.isArray(data.lines)) {
-            calibrationLines = data.lines;
-            updateCalibrationLinesCount();
+        // Load saved points if any
+        if (data.points && Array.isArray(data.points) && data.points.length > 0) {
+            calibrationPoints = data.points;
+            updateCalibrationPointsUI();
         }
         
         updateCalibrationStatusUI(data);
+        
+        // Show top-down view if calibrated
+        updateTopDownVisibility(data.is_calibrated);
     } catch (error) {
         console.error('Error loading calibration:', error);
     }
@@ -548,9 +615,12 @@ async function loadCalibrationStatus() {
 function updateCalibrationStatusUI(data) {
     const statusEl = document.getElementById('calibration-status');
     if (statusEl) {
-        if (data.is_calibrated || calibrationLines.length > 0) {
-            statusEl.textContent = `Calibrated (${calibrationLines.length} line${calibrationLines.length !== 1 ? 's' : ''})`;
+        if (data.is_calibrated) {
+            statusEl.textContent = 'Calibrated (4 points)';
             statusEl.style.color = '#3fb950';
+        } else if (calibrationPoints.length > 0) {
+            statusEl.textContent = `${calibrationPoints.length}/4 points defined`;
+            statusEl.style.color = '#d29922';
         } else {
             statusEl.textContent = 'Not calibrated';
             statusEl.style.color = '#d29922';
@@ -558,27 +628,38 @@ function updateCalibrationStatusUI(data) {
     }
 }
 
-async function saveCalibrationToServer() {
+async function saveCalibrationPoints() {
+    if (calibrationPoints.length !== 4) {
+        alert('Need exactly 4 calibration points');
+        return;
+    }
+    
     try {
-        const response = await fetch('/api/calibration/lines', {
+        const response = await fetch('/api/calibration', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ lines: calibrationLines })
+            body: JSON.stringify({ points: calibrationPoints })
         });
+        
         if (response.ok) {
             const data = await response.json();
-            updateCalibrationStatusUI(data);
+            updateCalibrationStatusUI(data.calibration);
+            updateTopDownVisibility(data.calibration.is_calibrated);
+            alert('Calibration saved successfully!');
             console.log('Calibration saved');
+        } else {
+            const err = await response.json();
+            alert('Calibration failed: ' + (err.error || 'Unknown error'));
         }
     } catch (error) {
         console.error('Error saving calibration:', error);
+        alert('Error saving calibration');
     }
 }
 
 async function clearCalibration() {
-    calibrationLines = [];
-    calibrationTempPoint = null;
-    updateCalibrationLinesCount();
+    calibrationPoints = [];
+    updateCalibrationPointsUI();
     drawCalibration();
     
     try {
@@ -588,11 +669,199 @@ async function clearCalibration() {
         if (response.ok) {
             const data = await response.json();
             updateCalibrationStatusUI(data.calibration || {});
+            updateTopDownVisibility(false);
             console.log('Calibration cleared');
         }
     } catch (error) {
         console.error('Error clearing calibration:', error);
     }
+}
+
+// ============================================================================
+// Top-Down View (Bird's Eye)
+// ============================================================================
+
+let topdownCanvas = null;
+let topdownCtx = null;
+let topdownUpdateInterval = null;
+
+function initTopDownView() {
+    topdownCanvas = document.getElementById('topdown-canvas');
+    if (!topdownCanvas) return;
+    
+    topdownCtx = topdownCanvas.getContext('2d');
+    
+    // Start update loop when visible
+    startTopDownUpdates();
+}
+
+function updateTopDownVisibility(isCalibrated) {
+    const container = document.getElementById('topdown-container');
+    if (container) {
+        container.style.display = isCalibrated ? 'block' : 'none';
+        
+        if (isCalibrated && !topdownUpdateInterval) {
+            startTopDownUpdates();
+        } else if (!isCalibrated && topdownUpdateInterval) {
+            stopTopDownUpdates();
+        }
+    }
+}
+
+function startTopDownUpdates() {
+    if (topdownUpdateInterval) return;
+    
+    // Update every 500ms
+    topdownUpdateInterval = setInterval(updateTopDownView, 500);
+    updateTopDownView(); // Initial update
+}
+
+function stopTopDownUpdates() {
+    if (topdownUpdateInterval) {
+        clearInterval(topdownUpdateInterval);
+        topdownUpdateInterval = null;
+    }
+}
+
+async function updateTopDownView() {
+    if (!topdownCanvas || !topdownCtx) {
+        topdownCanvas = document.getElementById('topdown-canvas');
+        if (!topdownCanvas) return;
+        topdownCtx = topdownCanvas.getContext('2d');
+    }
+    
+    try {
+        const response = await fetch('/api/topdown');
+        const data = await response.json();
+        
+        if (!data.is_calibrated) {
+            updateTopDownVisibility(false);
+            return;
+        }
+        
+        drawTopDownView(data);
+    } catch (error) {
+        console.error('Error updating top-down view:', error);
+    }
+}
+
+function drawTopDownView(data) {
+    const canvas = topdownCanvas;
+    const ctx = topdownCtx;
+    const bounds = data.world_bounds;
+    
+    if (!bounds) return;
+    
+    // Clear canvas
+    ctx.fillStyle = '#1a1a2e';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    
+    // Calculate scale and offset
+    const worldWidth = bounds.max_x - bounds.min_x;
+    const worldHeight = bounds.max_y - bounds.min_y;
+    
+    const padding = 30;
+    const availWidth = canvas.width - 2 * padding;
+    const availHeight = canvas.height - 2 * padding;
+    
+    const scale = Math.min(availWidth / worldWidth, availHeight / worldHeight);
+    
+    // Transform function: world -> canvas
+    const toCanvas = (wx, wy) => {
+        const cx = padding + (wx - bounds.min_x) * scale;
+        // Flip Y axis so positive Y goes up (away from camera)
+        const cy = canvas.height - padding - (wy - bounds.min_y) * scale;
+        return [cx, cy];
+    };
+    
+    // Draw grid
+    ctx.strokeStyle = '#333';
+    ctx.lineWidth = 1;
+    
+    // Vertical lines (every 1m)
+    for (let x = Math.ceil(bounds.min_x); x <= bounds.max_x; x++) {
+        const [cx1, cy1] = toCanvas(x, bounds.min_y);
+        const [cx2, cy2] = toCanvas(x, bounds.max_y);
+        ctx.beginPath();
+        ctx.moveTo(cx1, cy1);
+        ctx.lineTo(cx2, cy2);
+        ctx.stroke();
+    }
+    
+    // Horizontal lines (every 1m)
+    for (let y = Math.ceil(bounds.min_y); y <= bounds.max_y; y++) {
+        const [cx1, cy1] = toCanvas(bounds.min_x, y);
+        const [cx2, cy2] = toCanvas(bounds.max_x, y);
+        ctx.beginPath();
+        ctx.moveTo(cx1, cy1);
+        ctx.lineTo(cx2, cy2);
+        ctx.stroke();
+    }
+    
+    // Draw perimeter polygon
+    if (data.perimeter_world && data.perimeter_world.length >= 3) {
+        ctx.fillStyle = 'rgba(0, 255, 0, 0.2)';
+        ctx.strokeStyle = '#00ff00';
+        ctx.lineWidth = 2;
+        
+        ctx.beginPath();
+        const [startX, startY] = toCanvas(data.perimeter_world[0].x, data.perimeter_world[0].y);
+        ctx.moveTo(startX, startY);
+        
+        for (let i = 1; i < data.perimeter_world.length; i++) {
+            const [cx, cy] = toCanvas(data.perimeter_world[i].x, data.perimeter_world[i].y);
+            ctx.lineTo(cx, cy);
+        }
+        
+        ctx.closePath();
+        ctx.fill();
+        ctx.stroke();
+    }
+    
+    // Draw tracked objects
+    if (data.objects && data.objects.length > 0) {
+        data.objects.forEach(obj => {
+            const [cx, cy] = toCanvas(obj.world_x, obj.world_y);
+            
+            // Draw object as circle
+            ctx.fillStyle = '#ff0000';
+            ctx.beginPath();
+            ctx.arc(cx, cy, 8, 0, Math.PI * 2);
+            ctx.fill();
+            
+            // Draw white border
+            ctx.strokeStyle = '#fff';
+            ctx.lineWidth = 2;
+            ctx.stroke();
+            
+            // Draw ID
+            if (obj.id) {
+                ctx.fillStyle = '#fff';
+                ctx.font = 'bold 10px sans-serif';
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                ctx.fillText(String(obj.id), cx, cy);
+            }
+        });
+    }
+    
+    // Draw scale indicator
+    ctx.fillStyle = '#888';
+    ctx.font = '10px sans-serif';
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'bottom';
+    ctx.fillText(`Scale: 1m = ${scale.toFixed(0)}px`, 5, canvas.height - 5);
+    
+    // Draw camera indicator at bottom center
+    const [camX, camY] = toCanvas((bounds.min_x + bounds.max_x) / 2, bounds.min_y);
+    ctx.fillStyle = '#58a6ff';
+    ctx.beginPath();
+    ctx.moveTo(camX, camY + 10);
+    ctx.lineTo(camX - 8, camY + 20);
+    ctx.lineTo(camX + 8, camY + 20);
+    ctx.closePath();
+    ctx.fill();
+    ctx.fillText('📷', camX - 6, camY + 35);
 }
 
 // ============================================================================

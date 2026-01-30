@@ -30,6 +30,16 @@
                         <span id="temp-display">Temp: --</span>
                     </div>
                 </div>
+                
+                <!-- Top-Down View (Bird's Eye) -->
+                <div class="topdown-container" id="topdown-container" style="display: none;">
+                    <h3>Top-Down View</h3>
+                    <canvas id="topdown-canvas" width="400" height="300"></canvas>
+                    <div class="topdown-legend">
+                        <span class="legend-item"><span class="legend-color" style="background: #00ff00;"></span> Detection Zone</span>
+                        <span class="legend-item"><span class="legend-color" style="background: #ff0000;"></span> Tracked Objects</span>
+                    </div>
+                </div>
                 <div class="video-controls">
                     <label class="checkbox-label">
                         <input type="checkbox" id="show-motion-checkbox">
@@ -155,24 +165,31 @@
                         </div>
                     </div>
 
-                    <!-- Calibration -->
+                    <!-- 4-Point Calibration for Perspective Transform -->
                     <div class="control-section">
-                        <h2>Distance Calibration</h2>
-                        <p>Define reference distances for real-world measurements:</p>
+                        <h2>Perspective Calibration</h2>
+                        <p>Click 4 points on the ground and enter their real-world X,Y coordinates (meters):</p>
                         <div class="calibration-editor">
                             <div class="editor-toolbar">
                                 <button id="load-snapshot-calibration" class="btn btn-primary">📷 Load Camera Frame</button>
+                                <button id="save-calibration" class="btn btn-success" disabled>💾 Save Calibration</button>
                                 <button id="clear-calibration" class="btn btn-secondary">🗑️ Clear</button>
                             </div>
                             <div class="canvas-container">
                                 <canvas id="calibration-canvas" width="640" height="480"></canvas>
                                 <p class="canvas-hint" id="calibration-hint">Click "Load Camera Frame" to start</p>
                             </div>
+                            
+                            <!-- Calibration Points List -->
+                            <div class="calibration-points-list" id="calibration-points-list">
+                                <p><strong>Calibration Points:</strong> <span id="points-count">0/4</span></p>
+                                <div id="points-container"></div>
+                            </div>
+                            
                             <div class="calibration-info">
                                 <p>Status: <strong id="calibration-status">Not calibrated</strong></p>
-                                <p id="calibration-lines">Lines defined: 0</p>
                             </div>
-                            <p class="hint">Click two points to define a line, then enter the distance in meters</p>
+                            <p class="hint">Click 4 points on the ground plane. For each point, enter the real-world X (left-right) and Y (near-far) coordinates in meters.</p>
                         </div>
                     </div>
                 </div>
@@ -180,7 +197,7 @@
         </main>
 
         <footer>
-            <p>Cat Dome - Detection & Tracking System | <span id="version">v1.4.0</span></p>
+            <p>Cat Dome - Detection & Tracking System | <span id="version">v1.5.0</span></p>
         </footer>
     </div>
 

@@ -541,6 +541,61 @@ class VideoProcessor:
             return self.calibration.pixel_to_world(pixel_x, pixel_y)
         return None
     
+    def get_topdown_data(self):
+        """
+        Get top-down (bird's eye) view data for the UI.
+        Transforms perimeter and tracked objects to world coordinates.
+        """
+        is_calibrated = self.calibration and self.calibration.is_calibrated
+        
+        result = {
+            "is_calibrated": is_calibrated,
+            "world_bounds": self.calibration.get_world_bounds() if is_calibrated else None,
+            "perimeter_world": [],
+            "objects": []
+        }
+        
+        if not is_calibrated:
+            return result
+        
+        # Transform perimeter points to world coordinates
+        perimeter_points = self.get_perimeter()
+        if perimeter_points:
+            # Get current frame resolution for scaling
+            frame_res = None
+            if self.camera and self.camera.is_running:
+                frame_res = self.camera.get_resolution()
+            
+            for point in perimeter_points:
+                # Scale perimeter point to frame resolution if needed
+                px, py = point
+                if frame_res and hasattr(self.perimeter, 'saved_resolution') and self.perimeter.saved_resolution:
+                    saved_w, saved_h = self.perimeter.saved_resolution
+                    curr_w, curr_h = frame_res
+                    if saved_w > 0 and saved_h > 0:
+                        px = px * curr_w / saved_w
+                        py = py * curr_h / saved_h
+                
+                world_pos = self.calibration.pixel_to_world(px, py)
+                if world_pos:
+                    result["perimeter_world"].append({
+                        "x": round(world_pos[0], 2),
+                        "y": round(world_pos[1], 2)
+                    })
+        
+        # Get tracked objects with world coordinates
+        for det in self.last_detections_with_world:
+            if det.get("world_pos"):
+                result["objects"].append({
+                    "id": det.get("track_id", 0),
+                    "class": det.get("class_id", 0),
+                    "confidence": det.get("confidence", 0),
+                    "world_x": det["world_pos"].get("world_x", 0),
+                    "world_y": det["world_pos"].get("world_y", 0)
+                })
+        
+        return result
+    
     def get_performance_settings(self):
         """Get current performance settings and available options"""
         return {
@@ -967,6 +1022,21 @@ def create_app():
                 "world": {"x": round(world_pos[0], 2), "y": round(world_pos[1], 2)}
             })
         return jsonify({"error": "Not calibrated or conversion failed"}), 400
+    
+    # =========================================================================
+    # Top-Down View (Bird's Eye)
+    # =========================================================================
+    
+    @app.route('/api/topdown', methods=['GET'])
+    def get_topdown_view():
+        """
+        Get top-down (bird's eye) view data including:
+        - Perimeter polygon in world coordinates
+        - Tracked objects in world coordinates
+        - World bounds for scaling
+        """
+        data = video_processor.get_topdown_data()
+        return jsonify(data)
         
     return app
 

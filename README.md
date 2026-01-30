@@ -2,7 +2,7 @@
 
 A real-time cat and ball detection system for Raspberry Pi Zero 2W with Camera Module 3. Features motion-first detection for efficiency, a web interface for live streaming, and zone-based tracking.
 
-**Version:** 1.4.0
+**Version:** 1.5.0
 
 ---
 
@@ -78,7 +78,8 @@ A real-time cat and ball detection system for Raspberry Pi Zero 2W with Camera M
 - **⏱️ Temporal Confirmation** - Require detection in N consecutive frames (reduces false positives)
 - **🔢 Object Tracking** - Consistent IDs across frames using centroid tracking
 - **📍 Detection Zones** - Draw perimeter on camera snapshot to limit detection area
-- **📏 Distance Calibration** - Define reference distances for real-world measurements
+- **🗺️ Top-Down View** - Bird's eye view of detection zone with tracked objects (perspective transform)
+- **📏 4-Point Calibration** - Define real-world X,Y coordinates for perspective mapping
 - **⚡ Performance Controls** - Resolution, frame skip, threshold, and confirmation adjustment
 - **💾 Settings Persistence** - All settings saved and restored on reboot
 - **📊 System Monitoring** - RAM usage and CPU temperature display
@@ -93,7 +94,7 @@ cat_ball_tracker/
 ├── README.md                    # This file
 ├── requirements.txt             # Python dependencies
 ├── config.py                    # Configuration settings
-├── main.py                      # Application entry point (v1.4.0)
+├── main.py                      # Application entry point (v1.5.0)
 ├── settings.py                  # Settings persistence
 ├── cat_ball_tracker.service     # Systemd service file
 │
@@ -217,6 +218,29 @@ Cat Dome uses a two-stage detection approach to save resources:
 
 ---
 
+## 🗺️ Top-Down View & Perspective Calibration
+
+The system can show a **bird's eye view** of your detection zone with tracked objects, using perspective transformation.
+
+### 4-Point Calibration Setup
+
+1. Go to **Zone** tab → **Perspective Calibration**
+2. Click **Load Camera Frame**
+3. Click **4 points** on the ground in the camera view
+4. For each point, enter its real-world X,Y coordinates (in meters):
+   - **X** = left-right position (0 = camera center, positive = right)
+   - **Y** = near-far position (0 = camera position, positive = farther away)
+5. Click **Save Calibration**
+
+### Tips for Accurate Calibration
+
+- Use markers on the ground (tape, cones, etc.) at known positions
+- Points should form a quadrilateral covering your detection area
+- More spread-out points = more accurate transformation
+- The top-down view appears below the video stream once calibrated
+
+---
+
 ## ⚡ Performance Settings
 
 | Setting | Description | Recommended |
@@ -255,6 +279,7 @@ Access in **Settings** tab.
 | `/api/performance/frameskip` | POST | Set frame skip |
 | `/api/performance/threshold` | GET/POST | Detection threshold |
 | `/api/performance/confirm_frames` | GET/POST | Temporal confirmation frames |
+| `/api/topdown` | GET | Top-down view data (perimeter + objects in world coords) |
 
 ---
 
@@ -325,6 +350,7 @@ sudo journalctl -u cat_ball_tracker -n 50
 
 ## 📝 Version History
 
+- **v1.5.0** - Top-down view (bird's eye), 4-point perspective calibration
 - **v1.4.0** - Fixed 300x300 crop (no scaling), temporal confirmation slider
 - **v1.3.0** - Detection threshold slider, settings logging, UI improvements
 - **v1.2.0** - Motion-first detection, zone editor with snapshots, settings persistence
