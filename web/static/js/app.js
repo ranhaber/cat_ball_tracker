@@ -15,6 +15,7 @@ document.addEventListener('DOMContentLoaded', () => {
     initVideoReconnect();
     initResolutionSelector();
     initMotionControls();
+    initCalibration();
     loadCurrentState();
 });
 
@@ -248,6 +249,69 @@ async function loadMotionSettings() {
         }
     } catch (error) {
         console.error('Error loading frame skip:', error);
+    }
+}
+
+// ============================================================================
+// Calibration Controls
+// ============================================================================
+function initCalibration() {
+    const startBtn = document.getElementById('start-calibration');
+    const clearBtn = document.getElementById('clear-calibration');
+    
+    if (startBtn) {
+        startBtn.addEventListener('click', startCalibration);
+    }
+    if (clearBtn) {
+        clearBtn.addEventListener('click', clearCalibration);
+    }
+    
+    // Load initial calibration status
+    loadCalibrationStatus();
+}
+
+async function loadCalibrationStatus() {
+    try {
+        const response = await fetch('/api/calibration');
+        const data = await response.json();
+        updateCalibrationUI(data);
+    } catch (error) {
+        console.error('Error loading calibration:', error);
+    }
+}
+
+function updateCalibrationUI(data) {
+    const statusEl = document.getElementById('calibration-status');
+    if (statusEl) {
+        if (data.is_calibrated) {
+            statusEl.textContent = 'Calibrated';
+            statusEl.style.color = '#3fb950';
+        } else {
+            statusEl.textContent = 'Not calibrated';
+            statusEl.style.color = '#d29922';
+        }
+    }
+}
+
+function startCalibration() {
+    const distanceInput = document.getElementById('calibration-distance');
+    const distance = distanceInput ? parseFloat(distanceInput.value) : 10;
+    
+    alert(`Calibration feature:\n\nTo calibrate, you would click two points on the video that are ${distance} meters apart.\n\nThis feature is available via the API but the full UI is not yet implemented.`);
+}
+
+async function clearCalibration() {
+    try {
+        const response = await fetch('/api/calibration', {
+            method: 'DELETE'
+        });
+        if (response.ok) {
+            const data = await response.json();
+            updateCalibrationUI(data.calibration);
+            console.log('Calibration cleared');
+        }
+    } catch (error) {
+        console.error('Error clearing calibration:', error);
     }
 }
 
@@ -549,6 +613,7 @@ async function loadCurrentState() {
         await loadPerimeter();
         await loadResolution();
         await loadMotionSettings();
+        await loadCalibrationStatus();
         await updateStatus();
         
     } catch (error) {

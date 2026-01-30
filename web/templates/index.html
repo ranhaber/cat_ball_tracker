@@ -13,8 +13,9 @@
         </header>
 
         <nav class="tabs">
-            <button class="tab-btn active" data-tab="video">📹 Video Stream</button>
-            <button class="tab-btn" data-tab="control">⚙️ Control Panel</button>
+            <button class="tab-btn active" data-tab="video">📹 Video</button>
+            <button class="tab-btn" data-tab="settings">⚙️ Settings</button>
+            <button class="tab-btn" data-tab="zone">📍 Zone</button>
         </nav>
 
         <main>
@@ -37,8 +38,8 @@
                 </div>
             </section>
 
-            <!-- Control Tab -->
-            <section id="control-tab" class="tab-content">
+            <!-- Settings Tab -->
+            <section id="settings-tab" class="tab-content">
                 <div class="control-panel">
                     <!-- Detection Mode Toggle -->
                     <div class="control-section">
@@ -68,7 +69,7 @@
                             <option value="1536x864" selected>1536x864 (Recommended)</option>
                             <option value="1920x1080">1920x1080 (Full HD - may fail)</option>
                         </select>
-                        <p class="hint">⚠️ Resolutions above 1536x864 may cause memory errors on RPi Zero 2W</p>
+                        <p class="hint">⚠️ Resolutions above 1536x864 may cause memory errors</p>
                     </div>
 
                     <!-- Performance Settings -->
@@ -83,20 +84,6 @@
                             <option value="5">5 - Every 5th frame (fastest)</option>
                         </select>
                         <p class="mode-status">Motion: <strong id="motion-status">--</strong> | AI runs: <strong id="ai-runs">0</strong></p>
-                    </div>
-
-                    <!-- Perimeter Editor -->
-                    <div class="control-section">
-                        <h2>Detection Zone</h2>
-                        <p>Click to define detection area:</p>
-                        <div class="perimeter-editor">
-                            <canvas id="perimeter-canvas" width="640" height="480"></canvas>
-                            <div class="perimeter-controls">
-                                <button id="clear-perimeter" class="btn btn-secondary">🗑️ Clear</button>
-                                <button id="save-perimeter" class="btn btn-primary">💾 Save</button>
-                            </div>
-                            <p id="points-count">Points: 0</p>
-                        </div>
                     </div>
 
                     <!-- System Status -->
@@ -127,6 +114,43 @@
                                 <span class="status-label">CPU Temp</span>
                                 <span class="status-value" id="status-temp">--</span>
                             </div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Zone Tab -->
+            <section id="zone-tab" class="tab-content">
+                <div class="control-panel">
+                    <!-- Perimeter Editor -->
+                    <div class="control-section">
+                        <h2>Detection Zone</h2>
+                        <p>Click on the image to define the detection area (polygon):</p>
+                        <div class="perimeter-editor">
+                            <canvas id="perimeter-canvas" width="640" height="480"></canvas>
+                            <div class="perimeter-controls">
+                                <button id="clear-perimeter" class="btn btn-secondary">🗑️ Clear</button>
+                                <button id="save-perimeter" class="btn btn-primary">💾 Save</button>
+                            </div>
+                            <p id="points-count">Points: 0</p>
+                        </div>
+                    </div>
+
+                    <!-- Calibration -->
+                    <div class="control-section">
+                        <h2>Distance Calibration</h2>
+                        <p>Calibrate real-world distances for accurate tracking:</p>
+                        <div class="calibration-controls">
+                            <div class="calibration-input">
+                                <label>Reference distance (meters):</label>
+                                <input type="number" id="calibration-distance" value="10" min="1" max="100" step="0.5">
+                            </div>
+                            <div class="calibration-buttons">
+                                <button id="start-calibration" class="btn btn-primary">📏 Start Calibration</button>
+                                <button id="clear-calibration" class="btn btn-secondary">🗑️ Clear</button>
+                            </div>
+                            <p class="calibration-status">Status: <strong id="calibration-status">Not calibrated</strong></p>
+                            <p class="hint">Click two points on the video to set a known distance</p>
                         </div>
                     </div>
                 </div>

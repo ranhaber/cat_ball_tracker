@@ -355,6 +355,57 @@ header h1 {
     margin-bottom: 15px;
 }
 
+/* Calibration */
+.calibration-controls {
+    background: var(--bg-tertiary);
+    border-radius: var(--radius-md);
+    padding: 20px;
+}
+
+.calibration-input {
+    display: flex;
+    align-items: center;
+    gap: 15px;
+    margin-bottom: 15px;
+}
+
+.calibration-input label {
+    color: var(--text-secondary);
+    font-size: 0.9rem;
+}
+
+.calibration-input input {
+    width: 100px;
+    padding: 10px 12px;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+    color: var(--text-primary);
+    font-size: 1rem;
+    font-family: var(--font-mono);
+}
+
+.calibration-input input:focus {
+    outline: none;
+    border-color: var(--accent-primary);
+}
+
+.calibration-buttons {
+    display: flex;
+    gap: 12px;
+    margin-bottom: 15px;
+}
+
+.calibration-status {
+    color: var(--text-secondary);
+    font-size: 0.9rem;
+    margin-bottom: 10px;
+}
+
+.calibration-status strong {
+    color: var(--accent-warning);
+}
+
 .btn {
     padding: 12px 24px;
     border: none;
