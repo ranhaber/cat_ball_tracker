@@ -2,7 +2,7 @@
 
 A real-time cat and ball detection system for Raspberry Pi Zero 2W with Camera Module 3. Features motion-first detection for efficiency, a web interface for live streaming, and zone-based tracking.
 
-**Version:** 1.2.0
+**Version:** 1.4.0
 
 ---
 
@@ -74,10 +74,12 @@ A real-time cat and ball detection system for Raspberry Pi Zero 2W with Camera M
 
 - **🐱 Cat & Ball Detection** - TensorFlow Lite MobileNet SSD
 - **🎯 Motion-First Detection** - AI only runs when motion detected (saves ~30% CPU/memory)
+- **🎯 Fixed 300x300 Crop** - No-scale AI input preserves object pixel size for better detection
+- **⏱️ Temporal Confirmation** - Require detection in N consecutive frames (reduces false positives)
 - **🔢 Object Tracking** - Consistent IDs across frames using centroid tracking
 - **📍 Detection Zones** - Draw perimeter on camera snapshot to limit detection area
 - **📏 Distance Calibration** - Define reference distances for real-world measurements
-- **⚡ Performance Controls** - Resolution and frame skip adjustment
+- **⚡ Performance Controls** - Resolution, frame skip, threshold, and confirmation adjustment
 - **💾 Settings Persistence** - All settings saved and restored on reboot
 - **📊 System Monitoring** - RAM usage and CPU temperature display
 - **📱 Responsive Web UI** - Works on desktop and mobile browsers
@@ -91,7 +93,7 @@ cat_ball_tracker/
 ├── README.md                    # This file
 ├── requirements.txt             # Python dependencies
 ├── config.py                    # Configuration settings
-├── main.py                      # Application entry point (v1.2.0)
+├── main.py                      # Application entry point (v1.4.0)
 ├── settings.py                  # Settings persistence
 ├── cat_ball_tracker.service     # Systemd service file
 │
@@ -188,13 +190,20 @@ Cat Dome uses a two-stage detection approach to save resources:
 
 2. **AI Detection** (only when motion detected)
    - TensorFlow Lite MobileNet SSD
-   - Runs on cropped motion region
+   - **Fixed 300x300 crop** centered on motion (no scaling!)
+   - Preserves object pixel size for better small object detection
    - Filters by cat or ball class
+
+3. **Temporal Confirmation** (optional)
+   - Require detection in N consecutive frames before confirming
+   - Slider in Settings: 1 = instant (default), 2-5 = require multiple frames
+   - Reduces false positives from single-frame noise
 
 **Benefits:**
 - ~30% less CPU usage during idle
 - Enables higher resolutions (up to 1536x864)
-- Better for detecting at distance
+- Better detection for small/distant objects (no scaling loss)
+- Reduced false positives with temporal confirmation
 
 ---
 
@@ -213,7 +222,9 @@ Cat Dome uses a two-stage detection approach to save resources:
 | Setting | Description | Recommended |
 |---------|-------------|-------------|
 | Resolution | Camera capture size | 1536x864 |
-| Frame Skip | Skip N frames between AI runs | 2 |
+| Frame Skip | Skip N frames between AI runs | 1-2 |
+| Threshold | Detection confidence (10-90%) | 30% |
+| Confirm Frames | Consecutive frames for detection | 1-2 |
 
 Access in **Settings** tab.
 
@@ -242,6 +253,8 @@ Access in **Settings** tab.
 | `/api/performance` | GET | Performance settings |
 | `/api/performance/resolution` | POST | Set resolution |
 | `/api/performance/frameskip` | POST | Set frame skip |
+| `/api/performance/threshold` | GET/POST | Detection threshold |
+| `/api/performance/confirm_frames` | GET/POST | Temporal confirmation frames |
 
 ---
 
@@ -251,8 +264,9 @@ Edit `config.py`:
 
 ```python
 # Detection
-DETECTION_THRESHOLD = 0.5
-DEFAULT_DETECTION_MODE = "cat"  # or "ball"
+DETECTION_THRESHOLD = 0.3           # Confidence threshold (0.1 - 0.9)
+DEFAULT_DETECTION_MODE = "cat"      # or "ball"
+DETECTION_CONFIRM_FRAMES = 1        # Require N consecutive frames (1-5)
 
 # Camera
 DEFAULT_RESOLUTION = (1536, 864)
@@ -262,6 +276,7 @@ DEFAULT_FRAME_SKIP = 2
 # Motion-First
 MOTION_FIRST_ENABLED = True
 MOTION_DETECTION_SCALE = 0.25
+MOTION_CROP_SIZE = (300, 300)       # Fixed crop size (matches AI input)
 
 # Server
 HOST = "0.0.0.0"
@@ -310,6 +325,8 @@ sudo journalctl -u cat_ball_tracker -n 50
 
 ## 📝 Version History
 
+- **v1.4.0** - Fixed 300x300 crop (no scaling), temporal confirmation slider
+- **v1.3.0** - Detection threshold slider, settings logging, UI improvements
 - **v1.2.0** - Motion-first detection, zone editor with snapshots, settings persistence
 - **v1.1.0** - RAM/CPU monitoring, resolution controls
 - **v1.0.0** - Initial release
