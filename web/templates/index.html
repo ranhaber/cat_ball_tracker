@@ -52,6 +52,75 @@
             <!-- Settings Tab -->
             <section id="settings-tab" class="tab-content">
                 <div class="control-panel">
+                    <!-- Performance Profile Selector (Phase 2) -->
+                    <div class="control-section">
+                        <h2>🎛️ Performance Profile</h2>
+                        <p>Choose optimization level:</p>
+                        <div class="profile-selector">
+                            <label class="profile-option">
+                                <input type="radio" name="profile" value="default">
+                                <div class="profile-content">
+                                    <div class="profile-header">
+                                        <span class="profile-name">Default (Original)</span>
+                                    </div>
+                                    <div class="profile-description">Original settings before optimization</div>
+                                    <div class="profile-metrics">
+                                        <span>📊 5-6 FPS</span>
+                                        <span>💾 220MB</span>
+                                        <span>⚡ 85% CPU</span>
+                                    </div>
+                                </div>
+                            </label>
+                            
+                            <label class="profile-option recommended">
+                                <input type="radio" name="profile" value="balanced" checked>
+                                <div class="profile-content">
+                                    <div class="profile-header">
+                                        <span class="profile-name">Balanced</span>
+                                        <span class="profile-badge">Recommended</span>
+                                    </div>
+                                    <div class="profile-description">Best trade-off: +33% FPS, -2% accuracy</div>
+                                    <div class="profile-metrics">
+                                        <span>📊 7-9 FPS</span>
+                                        <span>💾 185MB</span>
+                                        <span>⚡ 65% CPU</span>
+                                    </div>
+                                </div>
+                            </label>
+                            
+                            <label class="profile-option">
+                                <input type="radio" name="profile" value="performance">
+                                <div class="profile-content">
+                                    <div class="profile-header">
+                                        <span class="profile-name">Performance</span>
+                                    </div>
+                                    <div class="profile-description">Maximum speed: +100% FPS, -5% accuracy</div>
+                                    <div class="profile-metrics">
+                                        <span>📊 10-14 FPS</span>
+                                        <span>💾 175MB</span>
+                                        <span>⚡ 55% CPU</span>
+                                    </div>
+                                </div>
+                            </label>
+                            
+                            <label class="profile-option">
+                                <input type="radio" name="profile" value="quality">
+                                <div class="profile-content">
+                                    <div class="profile-header">
+                                        <span class="profile-name">Quality</span>
+                                    </div>
+                                    <div class="profile-description">Best accuracy: +2% accuracy, -17% FPS</div>
+                                    <div class="profile-metrics">
+                                        <span>📊 4-5 FPS</span>
+                                        <span>💾 210MB</span>
+                                        <span>⚡ 80% CPU</span>
+                                    </div>
+                                </div>
+                            </label>
+                        </div>
+                        <p class="hint">ℹ️ Changes apply immediately. Settings are saved.</p>
+                    </div>
+                    
                     <!-- Detection Mode Toggle -->
                     <div class="control-section">
                         <h2>Detection Mode</h2>

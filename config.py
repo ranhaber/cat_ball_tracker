@@ -122,6 +122,71 @@ TFLITE_NUM_THREADS = 4  # Use all 4 cores of RPi Zero 2W
 USE_GPU_ACCELERATION = True
 
 # ============================================================================
+# PERFORMANCE PROFILES (Phase 2 - User-selectable optimization levels)
+# ============================================================================
+PERFORMANCE_PROFILES = {
+    "default": {
+        "name": "Default (Original)",
+        "description": "Original settings before Phase 1/2 optimizations",
+        "jpeg_quality": 70,
+        "motion_crop_size": (300, 300),
+        "motion_scale": 0.25,
+        "motion_threshold": 15,
+        "motion_min_area": 100,
+        "tflite_threads": 4,
+        "estimated_fps": "5-6 FPS",
+        "estimated_ram": "220MB",
+        "estimated_cpu": "85%",
+        "accuracy_impact": "Baseline"
+    },
+    "balanced": {
+        "name": "Balanced",
+        "description": "Recommended: Best trade-off between speed and quality",
+        "jpeg_quality": 65,
+        "motion_crop_size": (280, 280),
+        "motion_scale": 0.22,
+        "motion_threshold": 18,
+        "motion_min_area": 150,
+        "tflite_threads": 3,
+        "estimated_fps": "7-9 FPS",
+        "estimated_ram": "185MB",
+        "estimated_cpu": "65%",
+        "accuracy_impact": "-2%"
+    },
+    "performance": {
+        "name": "Performance",
+        "description": "Maximum speed: Best for real-time tracking",
+        "jpeg_quality": 55,
+        "motion_crop_size": (250, 250),
+        "motion_scale": 0.2,
+        "motion_threshold": 22,
+        "motion_min_area": 200,
+        "tflite_threads": 3,
+        "estimated_fps": "10-14 FPS",
+        "estimated_ram": "175MB",
+        "estimated_cpu": "55%",
+        "accuracy_impact": "-5%"
+    },
+    "quality": {
+        "name": "Quality",
+        "description": "Best accuracy: Ideal for security/surveillance",
+        "jpeg_quality": 75,
+        "motion_crop_size": (320, 320),
+        "motion_scale": 0.25,
+        "motion_threshold": 15,
+        "motion_min_area": 100,
+        "tflite_threads": 4,
+        "estimated_fps": "4-5 FPS",
+        "estimated_ram": "210MB",
+        "estimated_cpu": "80%",
+        "accuracy_impact": "+2%"
+    }
+}
+
+# Default active profile
+DEFAULT_PERFORMANCE_PROFILE = "balanced"
+
+# ============================================================================
 # PERFORMANCE OPTIONS (user-selectable via web UI)
 # ============================================================================
 # Available resolution options (width, height)

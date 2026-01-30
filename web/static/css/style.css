@@ -332,6 +332,94 @@ header h1 {
     color: var(--accent-primary);
 }
 
+/* Performance Profile Selector (Phase 2) */
+.profile-selector {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    margin-bottom: 15px;
+}
+
+.profile-option {
+    position: relative;
+    cursor: pointer;
+    display: block;
+}
+
+.profile-option input[type="radio"] {
+    position: absolute;
+    opacity: 0;
+}
+
+.profile-content {
+    background: var(--bg-tertiary);
+    border: 2px solid var(--border-color);
+    border-radius: var(--radius-md);
+    padding: 15px;
+    transition: all 0.2s ease;
+}
+
+.profile-option:hover .profile-content {
+    border-color: var(--accent-primary);
+    background: var(--bg-hover);
+}
+
+.profile-option input[type="radio"]:checked + .profile-content {
+    border-color: var(--accent-primary);
+    background: var(--bg-hover);
+    box-shadow: 0 0 0 1px var(--accent-primary);
+}
+
+.profile-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 8px;
+}
+
+.profile-name {
+    font-weight: 600;
+    font-size: 1.05rem;
+    color: var(--text-primary);
+}
+
+.profile-badge {
+    background: var(--accent-success);
+    color: var(--bg-primary);
+    padding: 3px 10px;
+    border-radius: 12px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    text-transform: uppercase;
+}
+
+.profile-option.recommended input[type="radio"]:checked + .profile-content {
+    border-color: var(--accent-success);
+    box-shadow: 0 0 0 1px var(--accent-success);
+}
+
+.profile-description {
+    color: var(--text-secondary);
+    font-size: 0.9rem;
+    margin-bottom: 10px;
+    line-height: 1.4;
+}
+
+.profile-metrics {
+    display: flex;
+    gap: 15px;
+    flex-wrap: wrap;
+}
+
+.profile-metrics span {
+    font-size: 0.85rem;
+    color: var(--text-muted);
+    font-family: var(--font-mono);
+    background: var(--bg-secondary);
+    padding: 4px 10px;
+    border-radius: var(--radius-sm);
+}
+
 /* Perimeter Editor */
 .perimeter-editor {
     background: var(--bg-tertiary);

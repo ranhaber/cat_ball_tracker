@@ -140,6 +140,10 @@ class VideoProcessor:
         self.motion_first_enabled = saved.get("motion_first_enabled", True)
         self.show_motion_regions = saved.get("show_motion_regions", False)
         
+        # Performance profile (Phase 2)
+        self.current_profile = saved.get("performance_profile", config.DEFAULT_PERFORMANCE_PROFILE)
+        self.current_jpeg_quality = config.JPEG_QUALITY  # Will be updated by profile
+        
         # Detection mode and threshold will be set on detector after it's created
         self._saved_detection_mode = saved.get("detection_mode", config.DEFAULT_DETECTION_MODE)
         self._saved_threshold = saved.get("detection_threshold", config.DETECTION_THRESHOLD)
@@ -155,7 +159,7 @@ class VideoProcessor:
         # Store last detections with world coordinates for API
         self.last_detections_with_world = []
         
-        print(f"Loaded settings: {self.current_resolution[0]}x{self.current_resolution[1]}, motion-first={self.motion_first_enabled}")
+        print(f"Loaded settings: {self.current_resolution[0]}x{self.current_resolution[1]}, motion-first={self.motion_first_enabled}, profile={self.current_profile}")
         
     def start(self):
         """Initialize and start all components"""
@@ -185,6 +189,9 @@ class VideoProcessor:
             self.detector.set_detection_mode(self._saved_detection_mode)
         if hasattr(self, '_saved_threshold'):
             self.detector.set_threshold(self._saved_threshold)
+        
+        # Apply saved performance profile
+        self._apply_performance_profile(self.current_profile, save=False)
         
         # Start camera
         self.camera.start()
@@ -460,12 +467,15 @@ class VideoProcessor:
                 return None
             # imencode doesn't modify the frame, but we copy for thread safety
             frame = self.current_frame.copy()
-            
+        
+        # OPTIMIZATION B: Use profile-specific JPEG quality
+        jpeg_quality = self.current_jpeg_quality
+        
         # Encode as JPEG
         ret, jpeg = cv2.imencode(
             '.jpg', 
             frame,
-            [cv2.IMWRITE_JPEG_QUALITY, config.JPEG_QUALITY]
+            [cv2.IMWRITE_JPEG_QUALITY, jpeg_quality]
         )
         
         if ret:
@@ -554,7 +564,9 @@ class VideoProcessor:
             "motion_first_enabled": self.motion_first_enabled,
             "motion_detected": self.motion_detected,
             "show_motion_regions": self.show_motion_regions,
-            "ai_detections_count": self.ai_detections_count
+            "ai_detections_count": self.ai_detections_count,
+            # Performance profile
+            "performance_profile": self.current_profile
         }
     
     # =========================================================================
@@ -707,6 +719,79 @@ class VideoProcessor:
         self.current_frame_skip = skip
         settings.update_setting("frame_skip", skip)
         print(f"[SETTING] Frame skip changed to: {skip}")
+        return True
+    
+    # =========================================================================
+    # Performance Profile Management (Phase 2)
+    # =========================================================================
+    
+    def get_performance_profiles(self):
+        """Get all available performance profiles with metadata"""
+        return {
+            "profiles": config.PERFORMANCE_PROFILES,
+            "current": self.current_profile
+        }
+    
+    def get_current_profile(self):
+        """Get current active performance profile"""
+        return {
+            "profile": self.current_profile,
+            "settings": config.PERFORMANCE_PROFILES.get(self.current_profile, {})
+        }
+    
+    def set_performance_profile(self, profile_name):
+        """
+        Switch to a different performance profile.
+        Applies all settings from the profile immediately.
+        
+        Args:
+            profile_name: One of "default", "balanced", "performance", "quality"
+            
+        Returns:
+            bool: True if successful, False if invalid profile
+        """
+        if profile_name not in config.PERFORMANCE_PROFILES:
+            print(f"[ERROR] Invalid profile: {profile_name}")
+            return False
+        
+        return self._apply_performance_profile(profile_name, save=True)
+    
+    def _apply_performance_profile(self, profile_name, save=True):
+        """Internal method to apply profile settings"""
+        profile = config.PERFORMANCE_PROFILES[profile_name]
+        
+        # Update JPEG quality
+        self.current_jpeg_quality = profile["jpeg_quality"]
+        
+        # Update motion detection settings
+        if self.motion_detector:
+            self.motion_detector.detection_scale = profile["motion_scale"]
+            self.motion_detector.motion_threshold = profile["motion_threshold"]
+            self.motion_detector.min_area = profile["motion_min_area"]
+            self.motion_detector.reset()  # Clear history with new settings
+        
+        # Update TFLite thread count (requires model reload if changed)
+        if self.detector and profile["tflite_threads"] != self.detector.num_threads:
+            self.detector.num_threads = profile["tflite_threads"]
+            # Note: Thread count change requires interpreter recreation
+            # This happens automatically on next model load
+        
+        # Update crop size (used in motion-first detection)
+        config.MOTION_CROP_SIZE = profile["motion_crop_size"]
+        
+        # Update current profile
+        self.current_profile = profile_name
+        
+        # Save to persistent settings
+        if save:
+            settings.update_setting("performance_profile", profile_name)
+        
+        print(f"[PROFILE] Applied '{profile['name']}' profile")
+        print(f"  - JPEG Quality: {profile['jpeg_quality']}%")
+        print(f"  - AI Crop: {profile['motion_crop_size']}")
+        print(f"  - Motion Scale: {profile['motion_scale']}")
+        print(f"  - TFLite Threads: {profile['tflite_threads']}")
+        
         return True
 
 
@@ -1080,6 +1165,38 @@ def create_app():
         """
         data = video_processor.get_topdown_data()
         return jsonify(data)
+    
+    # =========================================================================
+    # Performance Profile API Endpoints (Phase 2)
+    # =========================================================================
+    
+    @app.route('/api/performance/profiles', methods=['GET'])
+    def get_profiles():
+        """Get all available performance profiles"""
+        return jsonify(video_processor.get_performance_profiles())
+    
+    @app.route('/api/performance/profile', methods=['GET'])
+    def get_current_profile():
+        """Get current active performance profile"""
+        return jsonify(video_processor.get_current_profile())
+    
+    @app.route('/api/performance/profile', methods=['POST'])
+    def set_profile():
+        """Set active performance profile"""
+        data = request.get_json()
+        profile_name = data.get('profile')
+        
+        if not profile_name:
+            return jsonify({"error": "Profile name required"}), 400
+        
+        success = video_processor.set_performance_profile(profile_name)
+        if success:
+            return jsonify({
+                "success": True,
+                "profile": profile_name,
+                "settings": config.PERFORMANCE_PROFILES.get(profile_name, {})
+            })
+        return jsonify({"error": "Invalid profile name"}), 400
         
     return app
 

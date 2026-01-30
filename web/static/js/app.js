@@ -19,6 +19,7 @@ document.addEventListener('DOMContentLoaded', () => {
     initTopDownView();
     initThresholdSlider();
     initConfirmSlider();
+    initProfileSelector();
     loadCurrentState();
 });
 
@@ -308,6 +309,115 @@ function initConfirmSlider() {
             }
         });
     }
+}
+
+// ============================================================================
+// Performance Profile Selector (Phase 2)
+// ============================================================================
+function initProfileSelector() {
+    const profileRadios = document.querySelectorAll('input[name="profile"]');
+    
+    profileRadios.forEach(radio => {
+        radio.addEventListener('change', async (e) => {
+            const profile = e.target.value;
+            console.log(`Switching to profile: ${profile}`);
+            
+            try {
+                const response = await fetch('/api/performance/profile', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ profile })
+                });
+                
+                if (response.ok) {
+                    const data = await response.json();
+                    console.log(`Profile changed to: ${data.profile}`, data.settings);
+                    
+                    // Show brief success indicator
+                    showNotification(`✅ Switched to ${data.settings.name} profile`, 'success');
+                } else {
+                    console.error('Failed to change profile');
+                    showNotification('❌ Failed to change profile', 'error');
+                    // Revert radio selection
+                    await loadCurrentProfile();
+                }
+            } catch (error) {
+                console.error('Error changing profile:', error);
+                showNotification('❌ Error changing profile', 'error');
+                // Revert radio selection
+                await loadCurrentProfile();
+            }
+        });
+    });
+    
+    // Load current profile on startup
+    loadCurrentProfile();
+}
+
+async function loadCurrentProfile() {
+    try {
+        const response = await fetch('/api/performance/profile');
+        if (response.ok) {
+            const data = await response.json();
+            const profileName = data.profile;
+            
+            // Update radio button selection
+            const radio = document.querySelector(`input[name="profile"][value="${profileName}"]`);
+            if (radio) {
+                radio.checked = true;
+            }
+            
+            console.log(`Current profile: ${profileName}`);
+        }
+    } catch (error) {
+        console.error('Error loading current profile:', error);
+    }
+}
+
+function showNotification(message, type = 'info') {
+    // Simple notification - could be enhanced with a toast library
+    const notificationArea = document.createElement('div');
+    notificationArea.className = `notification notification-${type}`;
+    notificationArea.textContent = message;
+    notificationArea.style.cssText = `
+        position: fixed;
+        top: 20px;
+        right: 20px;
+        background: ${type === 'success' ? '#3fb950' : '#f85149'};
+        color: white;
+        padding: 15px 25px;
+        border-radius: 8px;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+        z-index: 10000;
+        font-weight: 500;
+        animation: slideIn 0.3s ease;
+    `;
+    
+    document.body.appendChild(notificationArea);
+    
+    setTimeout(() => {
+        notificationArea.style.animation = 'slideOut 0.3s ease';
+        setTimeout(() => {
+            notificationArea.remove();
+        }, 300);
+    }, 3000);
+}
+
+// Add animations to style
+if (!document.getElementById('notification-styles')) {
+    const style = document.createElement('style');
+    style.id = 'notification-styles';
+    style.textContent = `
+        @keyframes slideIn {
+            from { transform: translateX(400px); opacity: 0; }
+            to { transform: translateX(0); opacity: 1; }
+        }
+        @keyframes slideOut {
+            from { transform: translateX(0); opacity: 1; }
+            to { transform: translateX(400px); opacity: 0; }
+        }
+    `;
+    document.head.appendChild(style);
 }
 
 async function loadConfirmFrames() {
