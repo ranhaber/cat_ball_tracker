@@ -18,11 +18,12 @@ log.setLevel(logging.WARNING)  # Only show warnings and errors, not INFO
 
 
 def get_system_info():
-    """Get RAM usage and CPU temperature for Raspberry Pi"""
+    """Get RAM usage, CPU usage, and CPU temperature for Raspberry Pi"""
     info = {
         "ram_used_mb": None,
         "ram_total_mb": None,
         "ram_percent": None,
+        "cpu_percent": None,
         "cpu_temp": None
     }
     
@@ -45,6 +46,34 @@ def get_system_info():
             info["ram_used_mb"] = round(used_kb / 1024)
             if total_kb > 0:
                 info["ram_percent"] = round((used_kb / total_kb) * 100, 1)
+    except Exception:
+        pass
+    
+    try:
+        # Get CPU usage from /proc/stat (average across all cores)
+        with open('/proc/stat', 'r') as f:
+            line = f.readline()  # First line is total CPU
+            if line.startswith('cpu '):
+                parts = line.split()
+                # user, nice, system, idle, iowait, irq, softirq
+                if len(parts) >= 5:
+                    idle = int(parts[4])
+                    total = sum(int(x) for x in parts[1:8] if x.isdigit())
+                    
+                    # Store for delta calculation
+                    if not hasattr(get_system_info, '_last_cpu'):
+                        get_system_info._last_cpu = (idle, total)
+                        info["cpu_percent"] = 0
+                    else:
+                        last_idle, last_total = get_system_info._last_cpu
+                        idle_delta = idle - last_idle
+                        total_delta = total - last_total
+                        
+                        if total_delta > 0:
+                            cpu_used = 100.0 * (1.0 - idle_delta / total_delta)
+                            info["cpu_percent"] = round(cpu_used, 1)
+                        
+                        get_system_info._last_cpu = (idle, total)
     except Exception:
         pass
     
@@ -506,6 +535,7 @@ class VideoProcessor:
             "ram_used_mb": system_info["ram_used_mb"],
             "ram_total_mb": system_info["ram_total_mb"],
             "ram_percent": system_info["ram_percent"],
+            "cpu_percent": system_info["cpu_percent"],
             "cpu_temp": system_info["cpu_temp"],
             # Motion detection status
             "motion_first_enabled": self.motion_first_enabled,

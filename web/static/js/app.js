@@ -1135,6 +1135,12 @@ async function updateStatus() {
             ramDisplay.textContent = `RAM: ${status.ram_percent}%`;
         }
         
+        // Update overlay CPU display
+        const cpuDisplay = document.getElementById('cpu-display');
+        if (cpuDisplay && status.cpu_percent !== null) {
+            cpuDisplay.textContent = `CPU: ${status.cpu_percent}%`;
+        }
+        
         // Update overlay temp display
         const tempDisplay = document.getElementById('temp-display');
         if (tempDisplay && status.cpu_temp !== null) {
