@@ -16,12 +16,24 @@ build/
 .vscode/
 *.swp
 *.swo
+*.code-workspace
 
 # OS
 .DS_Store
 Thumbs.db
 
-# Project specific
+# Project specific - User settings (generated at runtime)
+settings.json
+perimeter.json
+
+# Models (downloaded at runtime)
+models/*.tflite
 models/*.pt
 models/*.onnx
+
+# Logs
 *.log
+
+# Temporary files
+*.tmp
+*.bak
