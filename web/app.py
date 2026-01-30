@@ -192,7 +192,24 @@ class VideoProcessor:
                     if self.motion_first_enabled:
                         # Motion-first mode: only run AI when motion detected
                         motion_result = self.motion_detector.detect(frame)
-                        self.motion_detected = motion_result["motion_detected"]
+                        
+                        # Filter motion regions to only those inside perimeter
+                        if motion_result["motion_detected"] and motion_result["regions"]:
+                            frame_res = (frame_w, frame_h)
+                            motion_inside = False
+                            
+                            for region in motion_result["regions"]:
+                                rx, ry, rw, rh = region
+                                # Check if center of motion region is inside perimeter
+                                center_x = rx + rw // 2
+                                center_y = ry + rh // 2
+                                if self.perimeter.is_inside((center_x, center_y), frame_res):
+                                    motion_inside = True
+                                    break
+                            
+                            self.motion_detected = motion_inside
+                        else:
+                            self.motion_detected = False
                         
                         if self.motion_detected:
                             # Get crop region for AI detection
