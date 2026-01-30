@@ -20,7 +20,10 @@ LABELS_FILENAME = "labelmap.txt"
 # DETECTION SETTINGS
 # ============================================================================
 # Confidence threshold for detections (0.0 - 1.0)
-DETECTION_THRESHOLD = 0.5
+# Lower = more detections but more false positives
+# Higher = fewer detections but more accurate
+# 0.3 recommended for small objects like tennis balls
+DETECTION_THRESHOLD = 0.3
 
 # Default detection mode: "cat" or "ball"
 DEFAULT_DETECTION_MODE = "cat"

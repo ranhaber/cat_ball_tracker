@@ -125,6 +125,21 @@ class TFLiteDetector:
     def get_detection_mode(self):
         """Get current detection mode"""
         return self.detection_mode
+    
+    def set_threshold(self, threshold):
+        """
+        Set the detection confidence threshold.
+        
+        Args:
+            threshold: Value between 0.0 and 1.0
+        """
+        threshold = max(0.1, min(0.9, float(threshold)))
+        self.threshold = threshold
+        print(f"Detection threshold set to: {threshold}")
+    
+    def get_threshold(self):
+        """Get current detection threshold"""
+        return self.threshold
         
     def detect(self, frame):
         """

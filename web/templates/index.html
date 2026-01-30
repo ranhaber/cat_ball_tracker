@@ -83,7 +83,15 @@
                             <option value="4">4 - Every 4th frame (faster)</option>
                             <option value="5">5 - Every 5th frame (fastest)</option>
                         </select>
-                        <p class="mode-status">Motion: <strong id="motion-status">--</strong> | AI runs: <strong id="ai-runs">0</strong></p>
+                        
+                        <p style="margin-top: 15px;">Detection threshold:</p>
+                        <div class="threshold-control">
+                            <input type="range" id="threshold-slider" min="10" max="90" value="30" step="5">
+                            <span id="threshold-value">30%</span>
+                        </div>
+                        <p class="hint">Lower = more detections (may include false positives)<br>Higher = fewer but more accurate detections</p>
+                        
+                        <p class="mode-status" style="margin-top: 10px;">Motion: <strong id="motion-status">--</strong> | AI runs: <strong id="ai-runs">0</strong></p>
                     </div>
 
                     <!-- System Status -->
@@ -165,7 +173,7 @@
         </main>
 
         <footer>
-            <p>Cat Dome - Detection & Tracking System</p>
+            <p>Cat Dome - Detection & Tracking System | <span id="version">v1.2.2</span></p>
         </footer>
     </div>
 

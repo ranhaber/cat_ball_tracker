@@ -110,8 +110,9 @@ class VideoProcessor:
         self.motion_first_enabled = saved.get("motion_first_enabled", True)
         self.show_motion_regions = saved.get("show_motion_regions", False)
         
-        # Detection mode will be set on detector after it's created
+        # Detection mode and threshold will be set on detector after it's created
         self._saved_detection_mode = saved.get("detection_mode", config.DEFAULT_DETECTION_MODE)
+        self._saved_threshold = saved.get("detection_threshold", config.DETECTION_THRESHOLD)
         
         # Motion detection stats
         self.motion_detected = False
@@ -145,9 +146,11 @@ class VideoProcessor:
         else:
             self.calibration = None
         
-        # Set saved detection mode
+        # Set saved detection mode and threshold
         if hasattr(self, '_saved_detection_mode'):
             self.detector.set_detection_mode(self._saved_detection_mode)
+        if hasattr(self, '_saved_threshold'):
+            self.detector.set_threshold(self._saved_threshold)
         
         # Start camera
         self.camera.start()
@@ -408,6 +411,18 @@ class VideoProcessor:
         if self.detector:
             return self.detector.get_detection_mode()
         return config.DEFAULT_DETECTION_MODE
+    
+    def set_detection_threshold(self, threshold):
+        """Set detection confidence threshold"""
+        if self.detector:
+            self.detector.set_threshold(threshold)
+            settings.update_setting("detection_threshold", threshold)
+    
+    def get_detection_threshold(self):
+        """Get current detection threshold"""
+        if self.detector:
+            return self.detector.get_threshold()
+        return config.DEFAULT_DETECTION_MODE
         
     def set_perimeter(self, points):
         """Set perimeter points"""
@@ -438,6 +453,7 @@ class VideoProcessor:
             "fps": round(self.fps, 1),
             "frame_count": self.frame_count,
             "detection_mode": self.get_detection_mode(),
+            "detection_threshold": self.get_detection_threshold(),
             "object_count": self.tracker.get_object_count() if self.tracker else 0,
             "perimeter_points": len(self.get_perimeter()),
             "resolution": list(self.current_resolution),
@@ -724,6 +740,29 @@ def create_app():
         if success:
             return jsonify({"success": True, "frame_skip": skip})
         return jsonify({"error": "Invalid frame skip value"}), 400
+    
+    @app.route('/api/performance/threshold', methods=['GET'])
+    def get_threshold():
+        """Get current detection threshold"""
+        return jsonify({
+            "threshold": video_processor.get_detection_threshold()
+        })
+    
+    @app.route('/api/performance/threshold', methods=['POST'])
+    def set_threshold():
+        """Set detection confidence threshold"""
+        data = request.get_json()
+        threshold = data.get('threshold')
+        
+        if threshold is None:
+            return jsonify({"error": "Threshold value required"}), 400
+        
+        threshold = float(threshold)
+        if threshold < 0.1 or threshold > 0.9:
+            return jsonify({"error": "Threshold must be between 0.1 and 0.9"}), 400
+        
+        video_processor.set_detection_threshold(threshold)
+        return jsonify({"success": True, "threshold": threshold})
     
     # =========================================================================
     # Motion Detection API Endpoints

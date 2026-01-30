@@ -16,6 +16,7 @@ document.addEventListener('DOMContentLoaded', () => {
     initResolutionSelector();
     initMotionControls();
     initCalibration();
+    initThresholdSlider();
     loadCurrentState();
 });
 
@@ -222,6 +223,56 @@ function initMotionControls() {
                 console.error('Error setting frame skip:', error);
             }
         });
+    }
+}
+
+// ============================================================================
+// Threshold Slider
+// ============================================================================
+function initThresholdSlider() {
+    const slider = document.getElementById('threshold-slider');
+    const valueDisplay = document.getElementById('threshold-value');
+    
+    if (slider) {
+        // Update display when slider moves
+        slider.addEventListener('input', (e) => {
+            valueDisplay.textContent = e.target.value + '%';
+        });
+        
+        // Save when slider is released
+        slider.addEventListener('change', async (e) => {
+            const threshold = parseInt(e.target.value) / 100;
+            try {
+                const response = await fetch('/api/performance/threshold', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ threshold })
+                });
+                if (response.ok) {
+                    console.log(`Threshold set to ${threshold}`);
+                }
+            } catch (error) {
+                console.error('Error setting threshold:', error);
+            }
+        });
+    }
+}
+
+async function loadThreshold() {
+    try {
+        const response = await fetch('/api/performance/threshold');
+        const data = await response.json();
+        
+        if (data.threshold !== undefined) {
+            const slider = document.getElementById('threshold-slider');
+            const valueDisplay = document.getElementById('threshold-value');
+            const percent = Math.round(data.threshold * 100);
+            
+            if (slider) slider.value = percent;
+            if (valueDisplay) valueDisplay.textContent = percent + '%';
+        }
+    } catch (error) {
+        console.error('Error loading threshold:', error);
     }
 }
 
@@ -862,6 +913,7 @@ async function loadCurrentState() {
         await loadPerimeter();
         await loadResolution();
         await loadMotionSettings();
+        await loadThreshold();
         await loadCalibrationStatus();
         await updateStatus();
         
