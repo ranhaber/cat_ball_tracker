@@ -58,17 +58,31 @@
                         <p>Select resolution (higher = slower but sharper):</p>
                         <select id="resolution-select" class="resolution-select">
                             <option value="320x240">320x240 (Fast)</option>
-                            <option value="640x480" selected>640x480 (Default)</option>
-                            <option value="800x600">800x600</option>
+                            <option value="640x480">640x480 (Low)</option>
+                            <option value="800x600">800x600 (Medium)</option>
                             <option value="1280x720">1280x720 (HD 720p)</option>
-                            <option value="1536x864">1536x864 (Native)</option>
-                            <option value="1920x1080">1920x1080 (Full HD)</option>
-                            <option value="2304x1296">2304x1296 (Native)</option>
-                            <option value="2592x1944">2592x1944 (5MP)</option>
-                            <option value="4056x3040">4056x3040 (12MP)</option>
-                            <option value="4608x2592">4608x2592 (Max Native)</option>
+                            <option value="1536x864" selected>1536x864 (Recommended)</option>
+                            <option value="1920x1080">1920x1080 (Full HD - may fail)</option>
                         </select>
-                        <p class="hint">⚠️ Higher resolutions reduce FPS significantly on RPi Zero 2W</p>
+                        <p class="hint">⚠️ Resolutions above 1536x864 may cause memory errors on RPi Zero 2W</p>
+                    </div>
+
+                    <!-- Motion Detection Settings -->
+                    <div class="control-section">
+                        <h2>Motion Detection</h2>
+                        <p>Motion-first mode saves memory and enables higher resolution:</p>
+                        <div class="toggle-container">
+                            <button id="motion-toggle" class="mode-btn active">
+                                <span class="icon">🎯</span>
+                                <span class="label">Motion-First</span>
+                            </button>
+                            <button id="motion-regions-toggle" class="mode-btn">
+                                <span class="icon">📦</span>
+                                <span class="label">Show Regions</span>
+                            </button>
+                        </div>
+                        <p class="mode-status">Motion: <strong id="motion-status">--</strong> | AI runs: <strong id="ai-runs">0</strong></p>
+                        <p class="hint">Motion-first: AI detection only runs when movement detected (saves ~30% memory)</p>
                     </div>
 
                     <!-- Perimeter Editor -->

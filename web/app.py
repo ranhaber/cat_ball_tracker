@@ -58,7 +58,15 @@ from camera.camera_handler import CameraHandler
 from detection.detector import TFLiteDetector
 from detection.tracker import CentroidTracker
 from detection.perimeter import PerimeterManager
-from detection.calibration import CameraCalibration
+from detection.motion_detector import MotionDetector
+
+# Try to import calibration, but it's optional
+try:
+    from detection.calibration import CameraCalibration
+    CALIBRATION_AVAILABLE = True
+except ImportError:
+    CALIBRATION_AVAILABLE = False
+    CameraCalibration = None
 
 
 class VideoProcessor:
@@ -73,6 +81,7 @@ class VideoProcessor:
         self.tracker = None
         self.perimeter = None
         self.calibration = None
+        self.motion_detector = None
         
         self.running = False
         self.frame_count = 0
@@ -88,6 +97,14 @@ class VideoProcessor:
         self.current_framerate = config.DEFAULT_FRAMERATE
         self.current_frame_skip = config.DEFAULT_FRAME_SKIP
         
+        # Motion-first detection mode (saves memory, better for distance)
+        self.motion_first_enabled = getattr(config, 'MOTION_FIRST_ENABLED', True)
+        self.show_motion_regions = getattr(config, 'SHOW_MOTION_REGIONS', False)
+        
+        # Motion detection stats
+        self.motion_detected = False
+        self.ai_detections_count = 0
+        
         # Store last detections with world coordinates for API
         self.last_detections_with_world = []
         
@@ -100,7 +117,18 @@ class VideoProcessor:
         self.detector = TFLiteDetector()
         self.tracker = CentroidTracker()
         self.perimeter = PerimeterManager()
-        self.calibration = CameraCalibration()
+        self.motion_detector = MotionDetector(
+            detection_scale=getattr(config, 'MOTION_DETECTION_SCALE', 0.25),
+            motion_threshold=getattr(config, 'MOTION_THRESHOLD', 25),
+            min_area=getattr(config, 'MOTION_MIN_AREA', 500),
+            history_frames=getattr(config, 'MOTION_HISTORY_FRAMES', 3)
+        )
+        
+        # Calibration is optional
+        if CALIBRATION_AVAILABLE:
+            self.calibration = CameraCalibration()
+        else:
+            self.calibration = None
         
         # Start camera
         self.camera.start()
@@ -110,7 +138,8 @@ class VideoProcessor:
         self.process_thread = threading.Thread(target=self._process_loop, daemon=True)
         self.process_thread.start()
         
-        print("Video processor started")
+        mode_str = "MOTION-FIRST" if self.motion_first_enabled else "ALWAYS-ON"
+        print(f"Video processor started (Detection mode: {mode_str})")
         
     def stop(self):
         """Stop all components"""
@@ -120,7 +149,7 @@ class VideoProcessor:
         print("Video processor stopped")
         
     def _process_loop(self):
-        """Main processing loop"""
+        """Main processing loop with motion-first detection"""
         skip_counter = 0
         last_detections = []
         
@@ -131,39 +160,94 @@ class VideoProcessor:
                 if frame is None:
                     time.sleep(0.01)
                     continue
-                    
+                
+                frame_h, frame_w = frame.shape[:2]
+                run_ai_detection = False
+                crop_region = None
+                
                 # Run detection periodically (skip frames for performance)
                 skip_counter += 1
                 if skip_counter >= self.current_frame_skip:
                     skip_counter = 0
                     
-                    # Detect objects
-                    detections = self.detector.detect(frame)
+                    if self.motion_first_enabled:
+                        # Motion-first mode: only run AI when motion detected
+                        motion_result = self.motion_detector.detect(frame)
+                        self.motion_detected = motion_result["motion_detected"]
+                        
+                        if self.motion_detected:
+                            # Get crop region for AI detection
+                            crop_region = self.motion_detector.get_crop_region(
+                                frame.shape, 
+                                min_size=(640, 480)
+                            )
+                            run_ai_detection = True
+                    else:
+                        # Always-on mode: run AI on every frame
+                        run_ai_detection = True
+                        self.motion_detected = True
                     
-                    # Filter by perimeter
-                    detections = self.perimeter.filter_detections(detections)
-                    
-                    last_detections = detections
-                    
-                    # Compute world coordinates for each detection
-                    self.last_detections_with_world = []
-                    for det in detections:
-                        x1, y1, x2, y2, conf, class_id = det
-                        world_pos = None
-                        if self.calibration and self.calibration.is_calibrated:
-                            world_pos = self.calibration.bbox_to_world(x1, y1, x2, y2)
-                        self.last_detections_with_world.append({
-                            "bbox": [x1, y1, x2, y2],
-                            "confidence": round(conf, 2),
-                            "class_id": class_id,
-                            "world_position": world_pos
-                        })
+                    if run_ai_detection:
+                        if crop_region and self.motion_first_enabled:
+                            # Crop frame to motion region for AI detection
+                            cx, cy, cw, ch = crop_region
+                            cropped_frame = frame[cy:cy+ch, cx:cx+cw]
+                            
+                            # Run detection on cropped frame
+                            crop_detections = self.detector.detect(cropped_frame)
+                            
+                            # Scale detection coordinates back to original frame
+                            detections = []
+                            for det in crop_detections:
+                                x1, y1, x2, y2, conf, class_id = det
+                                # Offset by crop position
+                                x1 += cx
+                                y1 += cy
+                                x2 += cx
+                                y2 += cy
+                                detections.append((x1, y1, x2, y2, conf, class_id))
+                        else:
+                            # Run detection on full frame
+                            detections = self.detector.detect(frame)
+                        
+                        # Filter by perimeter
+                        detections = self.perimeter.filter_detections(detections)
+                        last_detections = detections
+                        self.ai_detections_count += 1
+                        
+                        # Compute world coordinates for each detection
+                        self.last_detections_with_world = []
+                        for det in detections:
+                            x1, y1, x2, y2, conf, class_id = det
+                            world_pos = None
+                            if self.calibration and hasattr(self.calibration, 'is_calibrated') and self.calibration.is_calibrated:
+                                world_pos = self.calibration.bbox_to_world(x1, y1, x2, y2)
+                            self.last_detections_with_world.append({
+                                "bbox": [x1, y1, x2, y2],
+                                "confidence": round(conf, 2),
+                                "class_id": class_id,
+                                "world_position": world_pos
+                            })
+                    elif not self.motion_detected:
+                        # No motion - clear detections after a while
+                        if len(last_detections) > 0:
+                            # Keep last detections for a few frames
+                            pass
                     
                 # Update tracker with latest detections
                 tracked_objects = self.tracker.update(last_detections)
                 
                 # Draw annotations
                 annotated = frame.copy()
+                
+                # Draw motion regions if enabled (for debugging)
+                if self.show_motion_regions and self.motion_first_enabled:
+                    self.motion_detector.draw_motion(annotated)
+                
+                # Draw crop region if used
+                if crop_region and self.show_motion_regions:
+                    cx, cy, cw, ch = crop_region
+                    cv2.rectangle(annotated, (cx, cy), (cx+cw, cy+ch), (255, 0, 255), 2)
                 
                 # Draw perimeter
                 annotated = self.perimeter.draw(annotated)
@@ -188,11 +272,15 @@ class VideoProcessor:
                 
             except Exception as e:
                 print(f"Processing error: {e}")
+                import traceback
+                traceback.print_exc()
                 time.sleep(0.1)
                 
     def _draw_status(self, frame):
         """Draw status information on frame"""
-        status_text = f"Mode: {self.detector.get_detection_mode().upper()} | FPS: {self.fps:.1f}"
+        # Main status line
+        mode_text = self.detector.get_detection_mode().upper()
+        status_text = f"Mode: {mode_text} | FPS: {self.fps:.1f}"
         
         # Draw background
         (text_w, text_h), _ = cv2.getTextSize(
@@ -201,12 +289,12 @@ class VideoProcessor:
         cv2.rectangle(
             frame,
             (5, 5),
-            (text_w + 15, text_h + 15),
+            (max(text_w + 15, 250), text_h + 55),
             (0, 0, 0),
             -1
         )
         
-        # Draw text
+        # Draw main status text
         cv2.putText(
             frame,
             status_text,
@@ -222,12 +310,26 @@ class VideoProcessor:
         cv2.putText(
             frame,
             count_text,
-            (10, text_h + 35),
+            (10, text_h + 32),
             cv2.FONT_HERSHEY_SIMPLEX,
             0.5,
             (255, 255, 0),
             1
         )
+        
+        # Draw motion status if motion-first mode
+        if self.motion_first_enabled:
+            motion_status = "MOTION" if self.motion_detected else "IDLE"
+            motion_color = (0, 255, 255) if self.motion_detected else (128, 128, 128)
+            cv2.putText(
+                frame,
+                f"Motion: {motion_status}",
+                (10, text_h + 52),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.5,
+                motion_color,
+                1
+            )
         
     def _update_fps(self):
         """Update FPS calculation"""
@@ -289,6 +391,11 @@ class VideoProcessor:
     def get_status(self):
         """Get current system status"""
         system_info = get_system_info()
+        
+        is_calibrated = False
+        if self.calibration and hasattr(self.calibration, 'is_calibrated'):
+            is_calibrated = self.calibration.is_calibrated
+        
         return {
             "fps": round(self.fps, 1),
             "frame_count": self.frame_count,
@@ -298,12 +405,16 @@ class VideoProcessor:
             "resolution": list(self.current_resolution),
             "framerate": self.current_framerate,
             "frame_skip": self.current_frame_skip,
-            "is_calibrated": self.calibration.is_calibrated if self.calibration else False,
+            "is_calibrated": is_calibrated,
             "detections": self.last_detections_with_world,
             "ram_used_mb": system_info["ram_used_mb"],
             "ram_total_mb": system_info["ram_total_mb"],
             "ram_percent": system_info["ram_percent"],
-            "cpu_temp": system_info["cpu_temp"]
+            "cpu_temp": system_info["cpu_temp"],
+            # Motion detection status
+            "motion_first_enabled": self.motion_first_enabled,
+            "motion_detected": self.motion_detected,
+            "ai_detections_count": self.ai_detections_count
         }
     
     # =========================================================================
@@ -532,6 +643,57 @@ def create_app():
         if success:
             return jsonify({"success": True, "frame_skip": skip})
         return jsonify({"error": "Invalid frame skip value"}), 400
+    
+    # =========================================================================
+    # Motion Detection API Endpoints
+    # =========================================================================
+    
+    @app.route('/api/motion', methods=['GET'])
+    def get_motion_settings():
+        """Get motion detection settings"""
+        return jsonify({
+            "motion_first_enabled": video_processor.motion_first_enabled,
+            "show_motion_regions": video_processor.show_motion_regions,
+            "motion_detected": video_processor.motion_detected,
+            "ai_detections_count": video_processor.ai_detections_count
+        })
+    
+    @app.route('/api/motion/toggle', methods=['POST'])
+    def toggle_motion_first():
+        """Toggle motion-first detection mode"""
+        data = request.get_json() or {}
+        enabled = data.get('enabled')
+        
+        if enabled is None:
+            # Toggle if no value provided
+            video_processor.motion_first_enabled = not video_processor.motion_first_enabled
+        else:
+            video_processor.motion_first_enabled = bool(enabled)
+        
+        # Reset motion detector when toggling
+        if video_processor.motion_detector:
+            video_processor.motion_detector.reset()
+        
+        return jsonify({
+            "success": True,
+            "motion_first_enabled": video_processor.motion_first_enabled
+        })
+    
+    @app.route('/api/motion/show_regions', methods=['POST'])
+    def toggle_show_motion_regions():
+        """Toggle showing motion regions on video"""
+        data = request.get_json() or {}
+        show = data.get('show')
+        
+        if show is None:
+            video_processor.show_motion_regions = not video_processor.show_motion_regions
+        else:
+            video_processor.show_motion_regions = bool(show)
+        
+        return jsonify({
+            "success": True,
+            "show_motion_regions": video_processor.show_motion_regions
+        })
     
     # =========================================================================
     # Calibration API Endpoints

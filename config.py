@@ -137,9 +137,27 @@ FRAMERATE_OPTIONS = [5, 10, 15, 20, 30]
 FRAME_SKIP_OPTIONS = [1, 2, 3, 4, 5]
 
 # Default performance settings
-DEFAULT_RESOLUTION = (640, 480)
+DEFAULT_RESOLUTION = (1536, 864)  # Higher res for better distance detection
 DEFAULT_FRAMERATE = 15
 DEFAULT_FRAME_SKIP = 2
+
+# ============================================================================
+# MOTION-FIRST DETECTION (saves memory, better for distance detection)
+# ============================================================================
+# Enable motion-first mode: only run AI when motion detected
+MOTION_FIRST_ENABLED = True
+
+# Show motion detection regions on video (for debugging)
+SHOW_MOTION_REGIONS = False
+
+# Motion detection settings
+MOTION_DETECTION_SCALE = 0.25    # Scale for motion detection (0.25 = 1/4 resolution)
+MOTION_THRESHOLD = 25            # Pixel difference threshold
+MOTION_MIN_AREA = 500            # Minimum contour area for motion
+MOTION_HISTORY_FRAMES = 3        # Frames to average for background
+
+# Crop size for AI detection when motion detected
+MOTION_CROP_MIN_SIZE = (640, 480)  # Minimum crop size for AI detection
 
 # ============================================================================
 # CALIBRATION SETTINGS (for real-world coordinates)

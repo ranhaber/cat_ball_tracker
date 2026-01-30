@@ -14,6 +14,7 @@ document.addEventListener('DOMContentLoaded', () => {
     initStatusUpdates();
     initVideoReconnect();
     initResolutionSelector();
+    initMotionControls();
     loadCurrentState();
 });
 
@@ -179,6 +180,80 @@ async function loadResolution() {
         }
     } catch (error) {
         console.error('Error loading resolution:', error);
+    }
+}
+
+// ============================================================================
+// Motion Detection Controls
+// ============================================================================
+function initMotionControls() {
+    const motionToggle = document.getElementById('motion-toggle');
+    const regionsToggle = document.getElementById('motion-regions-toggle');
+    
+    if (motionToggle) {
+        motionToggle.addEventListener('click', toggleMotionFirst);
+    }
+    if (regionsToggle) {
+        regionsToggle.addEventListener('click', toggleShowRegions);
+    }
+}
+
+async function toggleMotionFirst() {
+    try {
+        const response = await fetch('/api/motion/toggle', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' }
+        });
+        
+        if (response.ok) {
+            const data = await response.json();
+            updateMotionUI(data.motion_first_enabled, null);
+        }
+    } catch (error) {
+        console.error('Error toggling motion-first:', error);
+    }
+}
+
+async function toggleShowRegions() {
+    try {
+        const response = await fetch('/api/motion/show_regions', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' }
+        });
+        
+        if (response.ok) {
+            const data = await response.json();
+            updateMotionRegionsUI(data.show_motion_regions);
+        }
+    } catch (error) {
+        console.error('Error toggling show regions:', error);
+    }
+}
+
+function updateMotionUI(enabled, showRegions) {
+    const motionToggle = document.getElementById('motion-toggle');
+    if (motionToggle) {
+        motionToggle.classList.toggle('active', enabled);
+    }
+    if (showRegions !== null) {
+        updateMotionRegionsUI(showRegions);
+    }
+}
+
+function updateMotionRegionsUI(show) {
+    const regionsToggle = document.getElementById('motion-regions-toggle');
+    if (regionsToggle) {
+        regionsToggle.classList.toggle('active', show);
+    }
+}
+
+async function loadMotionSettings() {
+    try {
+        const response = await fetch('/api/motion');
+        const data = await response.json();
+        updateMotionUI(data.motion_first_enabled, data.show_motion_regions);
+    } catch (error) {
+        console.error('Error loading motion settings:', error);
     }
 }
 
@@ -398,6 +473,24 @@ async function updateStatus() {
             }
         }
         
+        // Update motion detection status
+        const motionStatus = document.getElementById('motion-status');
+        if (motionStatus) {
+            motionStatus.textContent = status.motion_detected ? 'ACTIVE' : 'Idle';
+            motionStatus.style.color = status.motion_detected ? '#ffd700' : '#888';
+        }
+        
+        const aiRuns = document.getElementById('ai-runs');
+        if (aiRuns) {
+            aiRuns.textContent = formatNumber(status.ai_detections_count || 0);
+        }
+        
+        // Update motion toggle button state
+        const motionToggle = document.getElementById('motion-toggle');
+        if (motionToggle && status.motion_first_enabled !== undefined) {
+            motionToggle.classList.toggle('active', status.motion_first_enabled);
+        }
+        
     } catch (error) {
         console.error('Error fetching status:', error);
     }
@@ -420,6 +513,7 @@ async function loadCurrentState() {
         
         await loadPerimeter();
         await loadResolution();
+        await loadMotionSettings();
         await updateStatus();
         
     } catch (error) {
