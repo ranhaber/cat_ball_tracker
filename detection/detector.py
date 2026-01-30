@@ -177,11 +177,18 @@ class TFLiteDetector:
         
         # Filter detections
         detections = []
+        debug_found = []  # Track what we see for debugging
+        
         for i in range(len(scores)):
-            if scores[i] < self.threshold:
-                continue
-                
             class_id = int(classes[i]) + 1  # COCO classes are 1-indexed in labels
+            score = float(scores[i])
+            
+            # Log any detection with score > 0.1 for debugging
+            if score > 0.1:
+                debug_found.append((class_id, score))
+            
+            if score < self.threshold:
+                continue
             
             # Only keep detections of target class
             if class_id != self.target_class_id:
@@ -201,6 +208,10 @@ class TFLiteDetector:
             y2 = max(0, min(y2, frame_h))
             
             detections.append((x1, y1, x2, y2, float(scores[i]), class_id))
+        
+        # Debug output if anything was found
+        if debug_found:
+            print(f"[DEBUG] Detections found: {[(cid, f'{s:.0%}') for cid, s in debug_found[:5]]} (target={self.target_class_id}, thresh={self.threshold:.0%})")
             
         return detections
         

@@ -156,8 +156,8 @@ SHOW_MOTION_REGIONS = False
 
 # Motion detection settings
 MOTION_DETECTION_SCALE = 0.25    # Scale for motion detection (0.25 = 1/4 resolution)
-MOTION_THRESHOLD = 25            # Pixel difference threshold
-MOTION_MIN_AREA = 500            # Minimum contour area for motion
+MOTION_THRESHOLD = 15            # Pixel difference threshold (lower = more sensitive)
+MOTION_MIN_AREA = 100            # Minimum contour area for motion (lower = smaller objects)
 MOTION_HISTORY_FRAMES = 3        # Frames to average for background
 
 # Crop size for AI detection when motion detected

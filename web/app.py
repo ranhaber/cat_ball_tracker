@@ -197,19 +197,26 @@ class VideoProcessor:
                         # Motion-first mode: only run AI when motion detected
                         motion_result = self.motion_detector.detect(frame)
                         
+                        # Debug: log raw motion detection
+                        if motion_result["motion_detected"]:
+                            print(f"[DEBUG] Motion detected: {len(motion_result['regions'])} regions")
+                        
                         # Filter motion regions to only those inside perimeter
                         motion_regions_in_perimeter = []
                         if motion_result["motion_detected"] and motion_result["regions"]:
                             frame_res = (frame_w, frame_h)
+                            perimeter_points = len(self.perimeter.get_points()) if self.perimeter else 0
                             
                             for region in motion_result["regions"]:
                                 rx, ry, rw, rh = region
                                 # Check if center of motion region is inside perimeter
                                 center_x = rx + rw // 2
                                 center_y = ry + rh // 2
-                                if self.perimeter.is_inside((center_x, center_y), frame_res):
+                                inside = self.perimeter.is_inside((center_x, center_y), frame_res)
+                                if inside:
                                     motion_regions_in_perimeter.append(region)
                             
+                            print(f"[DEBUG] Perimeter has {perimeter_points} points, {len(motion_regions_in_perimeter)}/{len(motion_result['regions'])} regions inside")
                             self.motion_detected = len(motion_regions_in_perimeter) > 0
                         else:
                             self.motion_detected = False
@@ -251,9 +258,14 @@ class VideoProcessor:
                         
                         # Filter by perimeter (pass frame resolution for scaling)
                         frame_res = (frame_w, frame_h)
+                        raw_count = len(detections)
                         detections = self.perimeter.filter_detections(detections, frame_resolution=frame_res)
                         last_detections = detections
                         self.ai_detections_count += 1
+                        
+                        # Debug: log detections
+                        if raw_count > 0:
+                            print(f"[DEBUG] Raw detections: {raw_count}, After perimeter filter: {len(detections)}")
                         
                         # Compute world coordinates for each detection
                         self.last_detections_with_world = []
