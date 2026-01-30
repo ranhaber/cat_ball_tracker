@@ -603,19 +603,37 @@ def create_app():
         
     @app.route('/api/perimeter', methods=['GET'])
     def get_perimeter():
-        """Get current perimeter points"""
-        return jsonify({"points": video_processor.get_perimeter()})
+        """Get current perimeter points with resolution info"""
+        return jsonify({
+            "points": video_processor.get_perimeter(),
+            "resolution": list(video_processor.current_resolution)
+        })
         
     @app.route('/api/perimeter', methods=['POST'])
     def set_perimeter():
         """Set perimeter points"""
         data = request.get_json()
         points = data.get('points', [])
+        source_width = data.get('source_width', 640)
+        source_height = data.get('source_height', 480)
         
         if len(points) < 3:
             return jsonify({"error": "Need at least 3 points"}), 400
-            
-        success = video_processor.set_perimeter(points)
+        
+        # Scale points from source (canvas) resolution to camera resolution
+        cam_width, cam_height = video_processor.current_resolution
+        scale_x = cam_width / source_width
+        scale_y = cam_height / source_height
+        
+        scaled_points = []
+        for p in points:
+            x = int(p[0] * scale_x)
+            y = int(p[1] * scale_y)
+            scaled_points.append([x, y])
+        
+        print(f"Perimeter: scaling from {source_width}x{source_height} to {cam_width}x{cam_height}")
+        
+        success = video_processor.set_perimeter(scaled_points)
         return jsonify({"success": success, "points": video_processor.get_perimeter()})
         
     @app.route('/api/perimeter', methods=['DELETE'])

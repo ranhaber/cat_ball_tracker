@@ -374,9 +374,10 @@ header h1 {
 .canvas-container canvas {
     display: block;
     width: 100%;
-    max-width: 640px;
+    max-width: 800px;
     height: auto;
     cursor: crosshair;
+    /* Canvas internally at full resolution, but displayed scaled down */
 }
 
 .canvas-hint {

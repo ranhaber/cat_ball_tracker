@@ -279,6 +279,10 @@ function initCalibration() {
     loadCalibrationStatus();
 }
 
+// Store the actual calibration image resolution
+let calibrationImageWidth = 640;
+let calibrationImageHeight = 480;
+
 async function loadCalibrationSnapshot() {
     const btn = document.getElementById('load-snapshot-calibration');
     if (btn) btn.textContent = '⏳ Loading...';
@@ -289,16 +293,19 @@ async function loadCalibrationSnapshot() {
         
         calibrationImage = new Image();
         calibrationImage.onload = () => {
-            // Resize canvas to match image aspect ratio
-            const aspectRatio = calibrationImage.width / calibrationImage.height;
-            calibrationCanvas.width = 640;
-            calibrationCanvas.height = Math.round(640 / aspectRatio);
+            // Store actual image dimensions (camera resolution)
+            calibrationImageWidth = calibrationImage.width;
+            calibrationImageHeight = calibrationImage.height;
+            
+            // Set canvas to actual image size for full resolution
+            calibrationCanvas.width = calibrationImageWidth;
+            calibrationCanvas.height = calibrationImageHeight;
             
             // Mark container as having image
             calibrationCanvas.parentElement.classList.add('has-image');
             
             drawCalibration();
-            if (btn) btn.textContent = '📷 Refresh Frame';
+            if (btn) btn.textContent = `📷 Refresh (${calibrationImageWidth}x${calibrationImageHeight})`;
         };
         calibrationImage.src = URL.createObjectURL(blob);
     } catch (error) {
@@ -315,9 +322,11 @@ function handleCalibrationClick(e) {
     }
     
     const rect = calibrationCanvas.getBoundingClientRect();
+    // Scale from display size to actual canvas/image resolution
     const scaleX = calibrationCanvas.width / rect.width;
     const scaleY = calibrationCanvas.height / rect.height;
     
+    // Coordinates are at full camera resolution
     const x = Math.round((e.clientX - rect.left) * scaleX);
     const y = Math.round((e.clientY - rect.top) * scaleY);
     
@@ -542,7 +551,7 @@ function initPerimeterEditor() {
     // Load snapshot button
     document.getElementById('load-snapshot-perimeter')?.addEventListener('click', loadPerimeterSnapshot);
     
-    // Canvas click handler
+    // Canvas click handler - coordinates are at full camera resolution
     perimeterCanvas.addEventListener('click', (e) => {
         if (!perimeterImage) {
             alert('Please load a camera frame first');
@@ -550,12 +559,14 @@ function initPerimeterEditor() {
         }
         
         const rect = perimeterCanvas.getBoundingClientRect();
+        // Scale from display size to actual canvas/image resolution
         const scaleX = perimeterCanvas.width / rect.width;
         const scaleY = perimeterCanvas.height / rect.height;
         
         const x = Math.round((e.clientX - rect.left) * scaleX);
         const y = Math.round((e.clientY - rect.top) * scaleY);
         
+        // Points are stored at camera resolution
         perimeterPoints.push([x, y]);
         drawPerimeter();
         updatePointsCount();
@@ -570,6 +581,10 @@ function initPerimeterEditor() {
     document.getElementById('save-perimeter')?.addEventListener('click', savePerimeter);
 }
 
+// Store the actual image resolution for coordinate conversion
+let perimeterImageWidth = 640;
+let perimeterImageHeight = 480;
+
 async function loadPerimeterSnapshot() {
     const btn = document.getElementById('load-snapshot-perimeter');
     if (btn) btn.textContent = '⏳ Loading...';
@@ -580,16 +595,23 @@ async function loadPerimeterSnapshot() {
         
         perimeterImage = new Image();
         perimeterImage.onload = () => {
-            // Resize canvas to match image aspect ratio
-            const aspectRatio = perimeterImage.width / perimeterImage.height;
-            perimeterCanvas.width = 640;
-            perimeterCanvas.height = Math.round(640 / aspectRatio);
+            // Store actual image dimensions (camera resolution)
+            perimeterImageWidth = perimeterImage.width;
+            perimeterImageHeight = perimeterImage.height;
+            
+            // Set canvas to actual image size for full resolution
+            perimeterCanvas.width = perimeterImageWidth;
+            perimeterCanvas.height = perimeterImageHeight;
             
             // Mark container as having image
             perimeterCanvas.parentElement.classList.add('has-image');
             
+            // Clear existing points when loading new frame
+            perimeterPoints = [];
+            updatePointsCount();
+            
             drawPerimeter();
-            if (btn) btn.textContent = '📷 Refresh Frame';
+            if (btn) btn.textContent = `📷 Refresh (${perimeterImageWidth}x${perimeterImageHeight})`;
         };
         perimeterImage.src = URL.createObjectURL(blob);
     } catch (error) {
@@ -671,17 +693,26 @@ async function savePerimeter() {
     }
     
     try {
+        // Points are already at camera resolution (from the full-res snapshot)
         const response = await fetch('/api/perimeter', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ points: perimeterPoints })
+            body: JSON.stringify({ 
+                points: perimeterPoints,
+                source_width: perimeterImageWidth,
+                source_height: perimeterImageHeight
+            })
         });
         
         if (response.ok) {
-            alert('Perimeter saved!');
+            alert('Detection zone saved successfully!');
+        } else {
+            const err = await response.json();
+            alert('Error saving zone: ' + (err.error || 'Unknown error'));
         }
     } catch (error) {
         console.error('Error saving perimeter:', error);
+        alert('Error saving zone: ' + error.message);
     }
 }
 
@@ -691,7 +722,20 @@ async function loadPerimeter() {
         const data = await response.json();
         
         if (data.points && data.points.length > 0) {
-            perimeterPoints = data.points;
+            // Scale points from camera resolution to canvas resolution
+            const camWidth = data.resolution ? data.resolution[0] : 640;
+            const camHeight = data.resolution ? data.resolution[1] : 480;
+            const canvasWidth = perimeterCanvas ? perimeterCanvas.width : 640;
+            const canvasHeight = perimeterCanvas ? perimeterCanvas.height : 480;
+            
+            const scaleX = canvasWidth / camWidth;
+            const scaleY = canvasHeight / camHeight;
+            
+            perimeterPoints = data.points.map(p => [
+                Math.round(p[0] * scaleX),
+                Math.round(p[1] * scaleY)
+            ]);
+            
             drawPerimeter();
             updatePointsCount();
         }
