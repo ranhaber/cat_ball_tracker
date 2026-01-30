@@ -42,6 +42,7 @@ class MotionDetector:
         # Frame history for background averaging
         self.frame_history = deque(maxlen=history_frames)
         self.background = None
+        self.last_frame_size = None  # Track resolution changes
         
         # Motion state
         self.motion_detected = False
@@ -56,6 +57,7 @@ class MotionDetector:
         """Reset motion detector state"""
         self.frame_history.clear()
         self.background = None
+        self.last_frame_size = None
         self.motion_detected = False
         self.motion_regions = []
         self.motion_frame_count = 0
@@ -76,6 +78,14 @@ class MotionDetector:
                 - motion_mask: binary mask at detection scale (for debugging)
         """
         h, w = frame.shape[:2]
+        current_size = (w, h)
+        
+        # Reset history if resolution changed
+        if self.last_frame_size is not None and self.last_frame_size != current_size:
+            print(f"Motion detector: Resolution changed from {self.last_frame_size} to {current_size}, resetting history")
+            self.frame_history.clear()
+            self.background = None
+        self.last_frame_size = current_size
         
         # Downscale for motion detection (saves memory)
         small_w = int(w * self.detection_scale)
@@ -268,13 +278,23 @@ class MotionDetector:
         
         return (crop_x, crop_y, crop_w, crop_h)
     
-    def draw_motion(self, frame, color=(0, 255, 255), thickness=2):
-        """Draw motion regions on frame for debugging"""
-        for x, y, w, h in self.motion_regions:
+    def draw_motion(self, frame, regions=None, color=(0, 255, 255), thickness=2):
+        """
+        Draw motion regions on frame for debugging.
+        
+        Args:
+            frame: Image to draw on
+            regions: Optional list of regions to draw (if None, uses self.motion_regions)
+            color: BGR color for rectangles
+            thickness: Line thickness
+        """
+        regions_to_draw = regions if regions is not None else self.motion_regions
+        
+        for x, y, w, h in regions_to_draw:
             cv2.rectangle(frame, (x, y), (x+w, y+h), color, thickness)
             
-        # Draw "MOTION" indicator
-        if self.motion_detected:
+        # Draw "MOTION" indicator only if there are regions
+        if regions_to_draw:
             cv2.putText(
                 frame,
                 "MOTION",

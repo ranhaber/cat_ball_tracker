@@ -186,6 +186,7 @@ class VideoProcessor:
                 frame_h, frame_w = frame.shape[:2]
                 run_ai_detection = False
                 crop_region = None
+                motion_regions_in_perimeter = []
                 
                 # Run detection periodically (skip frames for performance)
                 skip_counter += 1
@@ -197,9 +198,9 @@ class VideoProcessor:
                         motion_result = self.motion_detector.detect(frame)
                         
                         # Filter motion regions to only those inside perimeter
+                        motion_regions_in_perimeter = []
                         if motion_result["motion_detected"] and motion_result["regions"]:
                             frame_res = (frame_w, frame_h)
-                            motion_inside = False
                             
                             for region in motion_result["regions"]:
                                 rx, ry, rw, rh = region
@@ -207,10 +208,9 @@ class VideoProcessor:
                                 center_x = rx + rw // 2
                                 center_y = ry + rh // 2
                                 if self.perimeter.is_inside((center_x, center_y), frame_res):
-                                    motion_inside = True
-                                    break
+                                    motion_regions_in_perimeter.append(region)
                             
-                            self.motion_detected = motion_inside
+                            self.motion_detected = len(motion_regions_in_perimeter) > 0
                         else:
                             self.motion_detected = False
                         
@@ -280,9 +280,9 @@ class VideoProcessor:
                 # Draw annotations
                 annotated = frame.copy()
                 
-                # Draw motion regions if enabled (for debugging)
+                # Draw motion regions if enabled (only those inside perimeter)
                 if self.show_motion_regions and self.motion_first_enabled:
-                    self.motion_detector.draw_motion(annotated)
+                    self.motion_detector.draw_motion(annotated, regions=motion_regions_in_perimeter)
                 
                 # Draw crop region if used
                 if crop_region and self.show_motion_regions:
@@ -405,6 +405,7 @@ class VideoProcessor:
             self.detector.set_detection_mode(mode)
             self.tracker.reset()  # Reset tracking when mode changes
             settings.update_setting("detection_mode", mode)
+            print(f"[SETTING] Detection mode changed to: {mode}")
             
     def get_detection_mode(self):
         """Get current detection mode"""
@@ -417,6 +418,7 @@ class VideoProcessor:
         if self.detector:
             self.detector.set_threshold(threshold)
             settings.update_setting("detection_threshold", threshold)
+            print(f"[SETTING] Detection threshold changed to: {threshold:.0%}")
     
     def get_detection_threshold(self):
         """Get current detection threshold"""
@@ -440,6 +442,7 @@ class VideoProcessor:
         """Reset perimeter to default"""
         if self.perimeter:
             self.perimeter.clear()
+            print("[SETTING] Perimeter cleared")
             
     def get_status(self):
         """Get current system status"""
@@ -522,6 +525,7 @@ class VideoProcessor:
         
         self.current_resolution = new_res
         settings.update_setting("resolution", list(new_res))
+        print(f"[SETTING] Resolution changed to: {width}x{height}")
         
         # Restart camera with new settings
         if self.camera:
@@ -555,7 +559,7 @@ class VideoProcessor:
             self.camera = CameraHandler(width=width, height=height, fps=fps)
             self.camera.start()
         
-        print(f"Framerate changed to: {fps} fps")
+        print(f"[SETTING] Framerate changed to: {fps} fps")
         return True
     
     def set_frame_skip(self, skip):
@@ -565,7 +569,7 @@ class VideoProcessor:
         
         self.current_frame_skip = skip
         settings.update_setting("frame_skip", skip)
-        print(f"Frame skip changed to: {skip}")
+        print(f"[SETTING] Frame skip changed to: {skip}")
         return True
 
 
@@ -679,6 +683,9 @@ def create_app():
         if video_processor.perimeter:
             video_processor.perimeter.set_saved_resolution(cam_width, cam_height)
         success = video_processor.set_perimeter(scaled_points)
+        
+        if success:
+            print(f"[SETTING] Perimeter updated: {len(scaled_points)} points at {cam_width}x{cam_height}")
         
         return jsonify({
             "success": success, 
@@ -815,6 +822,7 @@ def create_app():
         
         # Save setting
         settings.update_setting("show_motion_regions", video_processor.show_motion_regions)
+        print(f"[SETTING] Show motion regions: {video_processor.show_motion_regions}")
         
         return jsonify({
             "success": True,
@@ -862,6 +870,7 @@ def create_app():
         video_processor.clear_calibration()
         # Also clear saved calibration lines
         settings.update_setting("calibration_lines", [])
+        print("[SETTING] Calibration cleared")
         return jsonify({"success": True, "calibration": video_processor.get_calibration()})
     
     @app.route('/api/calibration/lines', methods=['GET'])
@@ -877,6 +886,7 @@ def create_app():
         data = request.get_json()
         lines = data.get('lines', [])
         settings.update_setting("calibration_lines", lines)
+        print(f"[SETTING] Calibration lines updated: {len(lines)} lines defined")
         return jsonify({"success": True, "lines": lines, "is_calibrated": len(lines) > 0})
     
     @app.route('/api/calibration/convert', methods=['POST'])
