@@ -266,6 +266,10 @@ class CameraHandler:
         """Get current capture FPS"""
         return self._current_fps
     
+    def get_resolution(self):
+        """Get current camera resolution"""
+        return (self.width, self.height)
+    
     def stop(self):
         """Stop the camera and release resources"""
         self.running = False

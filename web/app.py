@@ -618,7 +618,7 @@ class VideoProcessor:
         if perimeter_points:
             # Get current frame resolution for scaling
             frame_res = None
-            if self.camera and self.camera.is_running:
+            if self.camera and self.camera.running:
                 frame_res = self.camera.get_resolution()
             
             for point in perimeter_points:
