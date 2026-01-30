@@ -125,32 +125,39 @@
                     <!-- Perimeter Editor -->
                     <div class="control-section">
                         <h2>Detection Zone</h2>
-                        <p>Click on the image to define the detection area (polygon):</p>
+                        <p>Define the area where detection should occur:</p>
                         <div class="perimeter-editor">
-                            <canvas id="perimeter-canvas" width="640" height="480"></canvas>
-                            <div class="perimeter-controls">
-                                <button id="clear-perimeter" class="btn btn-secondary">🗑️ Clear</button>
-                                <button id="save-perimeter" class="btn btn-primary">💾 Save</button>
+                            <div class="editor-toolbar">
+                                <button id="load-snapshot-perimeter" class="btn btn-primary">📷 Load Camera Frame</button>
+                                <button id="clear-perimeter" class="btn btn-secondary">🗑️ Clear Points</button>
+                                <button id="save-perimeter" class="btn btn-success">💾 Save Zone</button>
                             </div>
-                            <p id="points-count">Points: 0</p>
+                            <div class="canvas-container">
+                                <canvas id="perimeter-canvas" width="640" height="480"></canvas>
+                                <p class="canvas-hint" id="perimeter-hint">Click "Load Camera Frame" to start</p>
+                            </div>
+                            <p id="points-count">Points: 0 (minimum 3 required)</p>
                         </div>
                     </div>
 
                     <!-- Calibration -->
                     <div class="control-section">
                         <h2>Distance Calibration</h2>
-                        <p>Calibrate real-world distances for accurate tracking:</p>
-                        <div class="calibration-controls">
-                            <div class="calibration-input">
-                                <label>Reference distance (meters):</label>
-                                <input type="number" id="calibration-distance" value="10" min="1" max="100" step="0.5">
-                            </div>
-                            <div class="calibration-buttons">
-                                <button id="start-calibration" class="btn btn-primary">📏 Start Calibration</button>
+                        <p>Define reference distances for real-world measurements:</p>
+                        <div class="calibration-editor">
+                            <div class="editor-toolbar">
+                                <button id="load-snapshot-calibration" class="btn btn-primary">📷 Load Camera Frame</button>
                                 <button id="clear-calibration" class="btn btn-secondary">🗑️ Clear</button>
                             </div>
-                            <p class="calibration-status">Status: <strong id="calibration-status">Not calibrated</strong></p>
-                            <p class="hint">Click two points on the video to set a known distance</p>
+                            <div class="canvas-container">
+                                <canvas id="calibration-canvas" width="640" height="480"></canvas>
+                                <p class="canvas-hint" id="calibration-hint">Click "Load Camera Frame" to start</p>
+                            </div>
+                            <div class="calibration-info">
+                                <p>Status: <strong id="calibration-status">Not calibrated</strong></p>
+                                <p id="calibration-lines">Lines defined: 0</p>
+                            </div>
+                            <p class="hint">Click two points to define a line, then enter the distance in meters</p>
                         </div>
                     </div>
                 </div>

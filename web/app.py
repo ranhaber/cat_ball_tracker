@@ -736,7 +736,11 @@ def create_app():
     @app.route('/api/calibration', methods=['GET'])
     def get_calibration():
         """Get current calibration status and points"""
-        return jsonify(video_processor.get_calibration())
+        calib = video_processor.get_calibration()
+        # Also include saved lines
+        saved = settings.load_settings()
+        calib["lines"] = saved.get("calibration_lines", [])
+        return jsonify(calib)
     
     @app.route('/api/calibration', methods=['POST'])
     def set_calibration():
@@ -764,7 +768,24 @@ def create_app():
     def clear_calibration():
         """Clear calibration"""
         video_processor.clear_calibration()
+        # Also clear saved calibration lines
+        settings.update_setting("calibration_lines", [])
         return jsonify({"success": True, "calibration": video_processor.get_calibration()})
+    
+    @app.route('/api/calibration/lines', methods=['GET'])
+    def get_calibration_lines():
+        """Get saved calibration lines"""
+        saved = settings.load_settings()
+        lines = saved.get("calibration_lines", [])
+        return jsonify({"lines": lines, "is_calibrated": len(lines) > 0})
+    
+    @app.route('/api/calibration/lines', methods=['POST'])
+    def save_calibration_lines():
+        """Save calibration lines"""
+        data = request.get_json()
+        lines = data.get('lines', [])
+        settings.update_setting("calibration_lines", lines)
+        return jsonify({"success": True, "lines": lines, "is_calibrated": len(lines) > 0})
     
     @app.route('/api/calibration/convert', methods=['POST'])
     def convert_coordinates():

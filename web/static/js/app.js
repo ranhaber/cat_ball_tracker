@@ -255,36 +255,191 @@ async function loadMotionSettings() {
 // ============================================================================
 // Calibration Controls
 // ============================================================================
+let calibrationCanvas, calibrationCtx;
+let calibrationImage = null;
+let calibrationLines = [];  // Array of { p1: [x,y], p2: [x,y], distance: number }
+let calibrationTempPoint = null;  // First point of current line being drawn
+
 function initCalibration() {
-    const startBtn = document.getElementById('start-calibration');
-    const clearBtn = document.getElementById('clear-calibration');
+    calibrationCanvas = document.getElementById('calibration-canvas');
+    if (!calibrationCanvas) return;
     
-    if (startBtn) {
-        startBtn.addEventListener('click', startCalibration);
-    }
-    if (clearBtn) {
-        clearBtn.addEventListener('click', clearCalibration);
-    }
+    calibrationCtx = calibrationCanvas.getContext('2d');
     
-    // Load initial calibration status
+    // Load snapshot button
+    document.getElementById('load-snapshot-calibration')?.addEventListener('click', loadCalibrationSnapshot);
+    
+    // Clear button
+    document.getElementById('clear-calibration')?.addEventListener('click', clearCalibration);
+    
+    // Canvas click handler
+    calibrationCanvas.addEventListener('click', handleCalibrationClick);
+    
+    // Load saved calibration
     loadCalibrationStatus();
+}
+
+async function loadCalibrationSnapshot() {
+    const btn = document.getElementById('load-snapshot-calibration');
+    if (btn) btn.textContent = '⏳ Loading...';
+    
+    try {
+        const response = await fetch('/video_feed?snapshot=1');
+        const blob = await response.blob();
+        
+        calibrationImage = new Image();
+        calibrationImage.onload = () => {
+            // Resize canvas to match image aspect ratio
+            const aspectRatio = calibrationImage.width / calibrationImage.height;
+            calibrationCanvas.width = 640;
+            calibrationCanvas.height = Math.round(640 / aspectRatio);
+            
+            // Mark container as having image
+            calibrationCanvas.parentElement.classList.add('has-image');
+            
+            drawCalibration();
+            if (btn) btn.textContent = '📷 Refresh Frame';
+        };
+        calibrationImage.src = URL.createObjectURL(blob);
+    } catch (error) {
+        console.error('Error loading snapshot:', error);
+        alert('Failed to load camera frame');
+        if (btn) btn.textContent = '📷 Load Camera Frame';
+    }
+}
+
+function handleCalibrationClick(e) {
+    if (!calibrationImage) {
+        alert('Please load a camera frame first');
+        return;
+    }
+    
+    const rect = calibrationCanvas.getBoundingClientRect();
+    const scaleX = calibrationCanvas.width / rect.width;
+    const scaleY = calibrationCanvas.height / rect.height;
+    
+    const x = Math.round((e.clientX - rect.left) * scaleX);
+    const y = Math.round((e.clientY - rect.top) * scaleY);
+    
+    if (calibrationTempPoint === null) {
+        // First point of a line
+        calibrationTempPoint = [x, y];
+        drawCalibration();
+    } else {
+        // Second point - complete the line
+        const p1 = calibrationTempPoint;
+        const p2 = [x, y];
+        calibrationTempPoint = null;
+        
+        // Ask for distance
+        const distance = prompt('Enter the distance between these two points (in meters):');
+        if (distance && !isNaN(parseFloat(distance))) {
+            calibrationLines.push({
+                p1: p1,
+                p2: p2,
+                distance: parseFloat(distance)
+            });
+            updateCalibrationLinesCount();
+            saveCalibrationToServer();
+        }
+        
+        drawCalibration();
+    }
+}
+
+function drawCalibration() {
+    if (!calibrationCtx) return;
+    
+    // Draw background image or black
+    if (calibrationImage) {
+        calibrationCtx.drawImage(calibrationImage, 0, 0, calibrationCanvas.width, calibrationCanvas.height);
+    } else {
+        calibrationCtx.fillStyle = '#000';
+        calibrationCtx.fillRect(0, 0, calibrationCanvas.width, calibrationCanvas.height);
+    }
+    
+    // Draw existing lines
+    calibrationLines.forEach((line, index) => {
+        drawCalibrationLine(line.p1, line.p2, line.distance, index + 1);
+    });
+    
+    // Draw temp point if exists
+    if (calibrationTempPoint) {
+        calibrationCtx.fillStyle = '#ffff00';
+        calibrationCtx.beginPath();
+        calibrationCtx.arc(calibrationTempPoint[0], calibrationTempPoint[1], 8, 0, Math.PI * 2);
+        calibrationCtx.fill();
+        
+        calibrationCtx.fillStyle = '#000';
+        calibrationCtx.font = 'bold 12px sans-serif';
+        calibrationCtx.textAlign = 'center';
+        calibrationCtx.fillText('Click 2nd point', calibrationTempPoint[0], calibrationTempPoint[1] - 15);
+    }
+}
+
+function drawCalibrationLine(p1, p2, distance, lineNum) {
+    // Draw line
+    calibrationCtx.strokeStyle = '#ff00ff';
+    calibrationCtx.lineWidth = 3;
+    calibrationCtx.beginPath();
+    calibrationCtx.moveTo(p1[0], p1[1]);
+    calibrationCtx.lineTo(p2[0], p2[1]);
+    calibrationCtx.stroke();
+    
+    // Draw endpoints
+    [p1, p2].forEach(point => {
+        calibrationCtx.fillStyle = '#ff00ff';
+        calibrationCtx.beginPath();
+        calibrationCtx.arc(point[0], point[1], 6, 0, Math.PI * 2);
+        calibrationCtx.fill();
+    });
+    
+    // Draw distance label at midpoint
+    const midX = (p1[0] + p2[0]) / 2;
+    const midY = (p1[1] + p2[1]) / 2;
+    
+    const label = `${distance}m`;
+    calibrationCtx.font = 'bold 14px sans-serif';
+    calibrationCtx.textAlign = 'center';
+    
+    // Background for label
+    const metrics = calibrationCtx.measureText(label);
+    calibrationCtx.fillStyle = 'rgba(0,0,0,0.7)';
+    calibrationCtx.fillRect(midX - metrics.width/2 - 5, midY - 10, metrics.width + 10, 20);
+    
+    calibrationCtx.fillStyle = '#fff';
+    calibrationCtx.fillText(label, midX, midY + 5);
+}
+
+function updateCalibrationLinesCount() {
+    const el = document.getElementById('calibration-lines');
+    if (el) {
+        el.textContent = `Lines defined: ${calibrationLines.length}`;
+    }
 }
 
 async function loadCalibrationStatus() {
     try {
         const response = await fetch('/api/calibration');
         const data = await response.json();
-        updateCalibrationUI(data);
+        
+        // Load saved lines if any
+        if (data.lines && Array.isArray(data.lines)) {
+            calibrationLines = data.lines;
+            updateCalibrationLinesCount();
+        }
+        
+        updateCalibrationStatusUI(data);
     } catch (error) {
         console.error('Error loading calibration:', error);
     }
 }
 
-function updateCalibrationUI(data) {
+function updateCalibrationStatusUI(data) {
     const statusEl = document.getElementById('calibration-status');
     if (statusEl) {
-        if (data.is_calibrated) {
-            statusEl.textContent = 'Calibrated';
+        if (data.is_calibrated || calibrationLines.length > 0) {
+            statusEl.textContent = `Calibrated (${calibrationLines.length} line${calibrationLines.length !== 1 ? 's' : ''})`;
             statusEl.style.color = '#3fb950';
         } else {
             statusEl.textContent = 'Not calibrated';
@@ -293,21 +448,36 @@ function updateCalibrationUI(data) {
     }
 }
 
-function startCalibration() {
-    const distanceInput = document.getElementById('calibration-distance');
-    const distance = distanceInput ? parseFloat(distanceInput.value) : 10;
-    
-    alert(`Calibration feature:\n\nTo calibrate, you would click two points on the video that are ${distance} meters apart.\n\nThis feature is available via the API but the full UI is not yet implemented.`);
+async function saveCalibrationToServer() {
+    try {
+        const response = await fetch('/api/calibration/lines', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ lines: calibrationLines })
+        });
+        if (response.ok) {
+            const data = await response.json();
+            updateCalibrationStatusUI(data);
+            console.log('Calibration saved');
+        }
+    } catch (error) {
+        console.error('Error saving calibration:', error);
+    }
 }
 
 async function clearCalibration() {
+    calibrationLines = [];
+    calibrationTempPoint = null;
+    updateCalibrationLinesCount();
+    drawCalibration();
+    
     try {
         const response = await fetch('/api/calibration', {
             method: 'DELETE'
         });
         if (response.ok) {
             const data = await response.json();
-            updateCalibrationUI(data.calibration);
+            updateCalibrationStatusUI(data.calibration || {});
             console.log('Calibration cleared');
         }
     } catch (error) {
@@ -361,6 +531,7 @@ function updateModeUI(mode) {
 // ============================================================================
 let perimeterPoints = [];
 let perimeterCanvas, perimeterCtx;
+let perimeterImage = null;
 
 function initPerimeterEditor() {
     perimeterCanvas = document.getElementById('perimeter-canvas');
@@ -368,7 +539,16 @@ function initPerimeterEditor() {
     
     perimeterCtx = perimeterCanvas.getContext('2d');
     
+    // Load snapshot button
+    document.getElementById('load-snapshot-perimeter')?.addEventListener('click', loadPerimeterSnapshot);
+    
+    // Canvas click handler
     perimeterCanvas.addEventListener('click', (e) => {
+        if (!perimeterImage) {
+            alert('Please load a camera frame first');
+            return;
+        }
+        
         const rect = perimeterCanvas.getBoundingClientRect();
         const scaleX = perimeterCanvas.width / rect.width;
         const scaleY = perimeterCanvas.height / rect.height;
@@ -390,40 +570,54 @@ function initPerimeterEditor() {
     document.getElementById('save-perimeter')?.addEventListener('click', savePerimeter);
 }
 
+async function loadPerimeterSnapshot() {
+    const btn = document.getElementById('load-snapshot-perimeter');
+    if (btn) btn.textContent = '⏳ Loading...';
+    
+    try {
+        const response = await fetch('/video_feed?snapshot=1');
+        const blob = await response.blob();
+        
+        perimeterImage = new Image();
+        perimeterImage.onload = () => {
+            // Resize canvas to match image aspect ratio
+            const aspectRatio = perimeterImage.width / perimeterImage.height;
+            perimeterCanvas.width = 640;
+            perimeterCanvas.height = Math.round(640 / aspectRatio);
+            
+            // Mark container as having image
+            perimeterCanvas.parentElement.classList.add('has-image');
+            
+            drawPerimeter();
+            if (btn) btn.textContent = '📷 Refresh Frame';
+        };
+        perimeterImage.src = URL.createObjectURL(blob);
+    } catch (error) {
+        console.error('Error loading snapshot:', error);
+        alert('Failed to load camera frame');
+        if (btn) btn.textContent = '📷 Load Camera Frame';
+    }
+}
+
 function drawPerimeter() {
     if (!perimeterCtx) return;
     
-    perimeterCtx.fillStyle = '#000';
-    perimeterCtx.fillRect(0, 0, perimeterCanvas.width, perimeterCanvas.height);
-    
-    // Draw grid
-    perimeterCtx.strokeStyle = '#333';
-    perimeterCtx.lineWidth = 0.5;
-    for (let x = 0; x < perimeterCanvas.width; x += 50) {
-        perimeterCtx.beginPath();
-        perimeterCtx.moveTo(x, 0);
-        perimeterCtx.lineTo(x, perimeterCanvas.height);
-        perimeterCtx.stroke();
-    }
-    for (let y = 0; y < perimeterCanvas.height; y += 50) {
-        perimeterCtx.beginPath();
-        perimeterCtx.moveTo(0, y);
-        perimeterCtx.lineTo(perimeterCanvas.width, y);
-        perimeterCtx.stroke();
+    // Draw background image or black
+    if (perimeterImage) {
+        perimeterCtx.drawImage(perimeterImage, 0, 0, perimeterCanvas.width, perimeterCanvas.height);
+    } else {
+        perimeterCtx.fillStyle = '#000';
+        perimeterCtx.fillRect(0, 0, perimeterCanvas.width, perimeterCanvas.height);
     }
     
     if (perimeterPoints.length === 0) {
-        perimeterCtx.fillStyle = '#666';
-        perimeterCtx.font = '16px sans-serif';
-        perimeterCtx.textAlign = 'center';
-        perimeterCtx.fillText('Click to add perimeter points', perimeterCanvas.width / 2, perimeterCanvas.height / 2);
         return;
     }
     
     // Draw polygon
     if (perimeterPoints.length >= 2) {
-        perimeterCtx.strokeStyle = '#58a6ff';
-        perimeterCtx.lineWidth = 2;
+        perimeterCtx.strokeStyle = '#00ff00';
+        perimeterCtx.lineWidth = 3;
         perimeterCtx.beginPath();
         perimeterCtx.moveTo(perimeterPoints[0][0], perimeterPoints[0][1]);
         
@@ -433,7 +627,7 @@ function drawPerimeter() {
         
         if (perimeterPoints.length >= 3) {
             perimeterCtx.closePath();
-            perimeterCtx.fillStyle = 'rgba(88, 166, 255, 0.1)';
+            perimeterCtx.fillStyle = 'rgba(0, 255, 0, 0.2)';
             perimeterCtx.fill();
         }
         
@@ -442,15 +636,26 @@ function drawPerimeter() {
     
     // Draw points
     perimeterPoints.forEach((point, index) => {
-        perimeterCtx.fillStyle = '#58a6ff';
+        // Outer circle
+        perimeterCtx.fillStyle = '#00ff00';
         perimeterCtx.beginPath();
-        perimeterCtx.arc(point[0], point[1], 6, 0, Math.PI * 2);
+        perimeterCtx.arc(point[0], point[1], 8, 0, Math.PI * 2);
         perimeterCtx.fill();
         
+        // Inner circle
+        perimeterCtx.fillStyle = '#000';
+        perimeterCtx.beginPath();
+        perimeterCtx.arc(point[0], point[1], 4, 0, Math.PI * 2);
+        perimeterCtx.fill();
+        
+        // Label
         perimeterCtx.fillStyle = '#fff';
-        perimeterCtx.font = '12px sans-serif';
+        perimeterCtx.font = 'bold 14px sans-serif';
         perimeterCtx.textAlign = 'center';
-        perimeterCtx.fillText(String(index + 1), point[0], point[1] - 12);
+        perimeterCtx.strokeStyle = '#000';
+        perimeterCtx.lineWidth = 3;
+        perimeterCtx.strokeText(String(index + 1), point[0], point[1] - 15);
+        perimeterCtx.fillText(String(index + 1), point[0], point[1] - 15);
     });
 }
 
