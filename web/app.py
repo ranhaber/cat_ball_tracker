@@ -6,10 +6,15 @@ Provides web interface for cat/ball detection and tracking
 import time
 import threading
 import os
+import logging
 import cv2
 from flask import Flask, Response, render_template, jsonify, request
 
 import config
+
+# Suppress Flask/Werkzeug access logs (the GET /api/status messages)
+log = logging.getLogger('werkzeug')
+log.setLevel(logging.WARNING)  # Only show warnings and errors, not INFO
 
 
 def get_system_info():
