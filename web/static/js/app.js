@@ -1,5 +1,5 @@
 /**
- * Cat/Ball Tracker - Frontend JavaScript
+ * Cat Dome - Frontend JavaScript
  * Handles tab switching, mode toggle, perimeter drawing, and status updates
  * With auto-reconnect on connection loss
  */
@@ -184,66 +184,43 @@ async function loadResolution() {
 }
 
 // ============================================================================
-// Motion Detection Controls
+// Motion & Performance Controls
 // ============================================================================
 function initMotionControls() {
-    const motionToggle = document.getElementById('motion-toggle');
-    const regionsToggle = document.getElementById('motion-regions-toggle');
+    // Show motion regions checkbox (in video tab)
+    const showMotionCheckbox = document.getElementById('show-motion-checkbox');
+    if (showMotionCheckbox) {
+        showMotionCheckbox.addEventListener('change', async (e) => {
+            try {
+                await fetch('/api/motion/show_regions', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ show: e.target.checked })
+                });
+            } catch (error) {
+                console.error('Error toggling show regions:', error);
+            }
+        });
+    }
     
-    if (motionToggle) {
-        motionToggle.addEventListener('click', toggleMotionFirst);
-    }
-    if (regionsToggle) {
-        regionsToggle.addEventListener('click', toggleShowRegions);
-    }
-}
-
-async function toggleMotionFirst() {
-    try {
-        const response = await fetch('/api/motion/toggle', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' }
+    // Frame skip selector
+    const frameskipSelect = document.getElementById('frameskip-select');
+    if (frameskipSelect) {
+        frameskipSelect.addEventListener('change', async (e) => {
+            const skip = parseInt(e.target.value);
+            try {
+                const response = await fetch('/api/performance/frameskip', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ skip })
+                });
+                if (response.ok) {
+                    console.log(`Frame skip changed to ${skip}`);
+                }
+            } catch (error) {
+                console.error('Error setting frame skip:', error);
+            }
         });
-        
-        if (response.ok) {
-            const data = await response.json();
-            updateMotionUI(data.motion_first_enabled, null);
-        }
-    } catch (error) {
-        console.error('Error toggling motion-first:', error);
-    }
-}
-
-async function toggleShowRegions() {
-    try {
-        const response = await fetch('/api/motion/show_regions', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' }
-        });
-        
-        if (response.ok) {
-            const data = await response.json();
-            updateMotionRegionsUI(data.show_motion_regions);
-        }
-    } catch (error) {
-        console.error('Error toggling show regions:', error);
-    }
-}
-
-function updateMotionUI(enabled, showRegions) {
-    const motionToggle = document.getElementById('motion-toggle');
-    if (motionToggle) {
-        motionToggle.classList.toggle('active', enabled);
-    }
-    if (showRegions !== null) {
-        updateMotionRegionsUI(showRegions);
-    }
-}
-
-function updateMotionRegionsUI(show) {
-    const regionsToggle = document.getElementById('motion-regions-toggle');
-    if (regionsToggle) {
-        regionsToggle.classList.toggle('active', show);
     }
 }
 
@@ -251,9 +228,26 @@ async function loadMotionSettings() {
     try {
         const response = await fetch('/api/motion');
         const data = await response.json();
-        updateMotionUI(data.motion_first_enabled, data.show_motion_regions);
+        
+        // Update checkbox
+        const showMotionCheckbox = document.getElementById('show-motion-checkbox');
+        if (showMotionCheckbox) {
+            showMotionCheckbox.checked = data.show_motion_regions || false;
+        }
     } catch (error) {
         console.error('Error loading motion settings:', error);
+    }
+    
+    // Load frame skip
+    try {
+        const response = await fetch('/api/performance');
+        const data = await response.json();
+        const frameskipSelect = document.getElementById('frameskip-select');
+        if (frameskipSelect && data.current && data.current.frame_skip) {
+            frameskipSelect.value = data.current.frame_skip;
+        }
+    } catch (error) {
+        console.error('Error loading frame skip:', error);
     }
 }
 
@@ -452,6 +446,18 @@ async function updateStatus() {
         const fpsDisplay = document.getElementById('fps-display');
         if (fpsDisplay) fpsDisplay.textContent = `FPS: ${status.fps}`;
         
+        // Update overlay RAM display
+        const ramDisplay = document.getElementById('ram-display');
+        if (ramDisplay && status.ram_percent !== null) {
+            ramDisplay.textContent = `RAM: ${status.ram_percent}%`;
+        }
+        
+        // Update overlay temp display
+        const tempDisplay = document.getElementById('temp-display');
+        if (tempDisplay && status.cpu_temp !== null) {
+            tempDisplay.textContent = `Temp: ${status.cpu_temp}°C`;
+        }
+        
         const statusFps = document.getElementById('status-fps');
         if (statusFps) statusFps.textContent = status.fps;
         
@@ -485,10 +491,39 @@ async function updateStatus() {
             aiRuns.textContent = formatNumber(status.ai_detections_count || 0);
         }
         
-        // Update motion toggle button state
-        const motionToggle = document.getElementById('motion-toggle');
-        if (motionToggle && status.motion_first_enabled !== undefined) {
-            motionToggle.classList.toggle('active', status.motion_first_enabled);
+        // Update show motion checkbox
+        const showMotionCheckbox = document.getElementById('show-motion-checkbox');
+        if (showMotionCheckbox && status.show_motion_regions !== undefined) {
+            showMotionCheckbox.checked = status.show_motion_regions;
+        }
+        
+        // Update RAM usage
+        const statusRam = document.getElementById('status-ram');
+        if (statusRam && status.ram_used_mb !== null) {
+            const ramPercent = status.ram_percent || 0;
+            statusRam.textContent = `${status.ram_used_mb}/${status.ram_total_mb}MB (${ramPercent}%)`;
+            // Color code based on usage
+            if (ramPercent > 85) {
+                statusRam.style.color = '#ff4444';  // Red - critical
+            } else if (ramPercent > 70) {
+                statusRam.style.color = '#ffaa00';  // Orange - warning
+            } else {
+                statusRam.style.color = '#44ff44';  // Green - good
+            }
+        }
+        
+        // Update CPU temperature
+        const statusTemp = document.getElementById('status-temp');
+        if (statusTemp && status.cpu_temp !== null) {
+            statusTemp.textContent = `${status.cpu_temp}°C`;
+            // Color code based on temperature
+            if (status.cpu_temp > 70) {
+                statusTemp.style.color = '#ff4444';  // Red - hot
+            } else if (status.cpu_temp > 55) {
+                statusTemp.style.color = '#ffaa00';  // Orange - warm
+            } else {
+                statusTemp.style.color = '#44ff44';  // Green - cool
+            }
         }
         
     } catch (error) {

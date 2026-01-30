@@ -1,4 +1,4 @@
-# Cat/Ball Detection & Tracking System
+# Cat Dome - Detection & Tracking System
 # Requirements for Raspberry Pi Zero 2W
 #
 # INSTALLATION ON RASPBERRY PI:

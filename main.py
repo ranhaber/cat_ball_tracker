@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Cat/Ball Detection & Tracking System
-Main entry point for Raspberry Pi Zero 2W
+Cat Dome - Detection & Tracking System
+Main entry point
 
 Usage:
     python main.py [--host HOST] [--port PORT] [--debug]
@@ -20,7 +20,7 @@ from web.app import run_server, video_processor
 def parse_args():
     """Parse command line arguments"""
     parser = argparse.ArgumentParser(
-        description="Cat/Ball Detection & Tracking System for RPi Zero 2W"
+        description="Cat Dome - Detection & Tracking System"
     )
     parser.add_argument(
         '--version',
@@ -67,10 +67,7 @@ def print_banner():
     banner = f"""
 ╔═══════════════════════════════════════════════════════════════╗
 ║                                                               ║
-║     🐱 Cat/Ball Detection & Tracking System 🏀  v{__version__:<9}║
-║                                                               ║
-║     Raspberry Pi Zero 2W + Camera Module 3                    ║
-║     TensorFlow Lite + OpenCV + Flask                          ║
+║                    🐱 Cat Dome 🏀  v{__version__:<9}                 ║
 ║                                                               ║
 ╚═══════════════════════════════════════════════════════════════╝
 """

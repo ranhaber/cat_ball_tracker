@@ -1,6 +1,6 @@
 """
-Flask Web Server with MJPEG Streaming
-Provides web interface for cat/ball detection and tracking
+Cat Dome - Flask Web Server with MJPEG Streaming
+Provides web interface for detection and tracking
 """
 
 import time
@@ -64,6 +64,7 @@ from detection.detector import TFLiteDetector
 from detection.tracker import CentroidTracker
 from detection.perimeter import PerimeterManager
 from detection.motion_detector import MotionDetector
+import settings
 
 # Try to import calibration, but it's optional
 try:
@@ -97,14 +98,20 @@ class VideoProcessor:
         self.current_frame = None
         self.frame_lock = threading.Lock()
         
+        # Load saved settings (or defaults)
+        saved = settings.load_settings()
+        
         # Performance settings (user-adjustable)
-        self.current_resolution = config.DEFAULT_RESOLUTION
-        self.current_framerate = config.DEFAULT_FRAMERATE
-        self.current_frame_skip = config.DEFAULT_FRAME_SKIP
+        self.current_resolution = tuple(saved.get("resolution", config.DEFAULT_RESOLUTION))
+        self.current_framerate = saved.get("framerate", config.DEFAULT_FRAMERATE)
+        self.current_frame_skip = saved.get("frame_skip", config.DEFAULT_FRAME_SKIP)
         
         # Motion-first detection mode (saves memory, better for distance)
-        self.motion_first_enabled = getattr(config, 'MOTION_FIRST_ENABLED', True)
-        self.show_motion_regions = getattr(config, 'SHOW_MOTION_REGIONS', False)
+        self.motion_first_enabled = saved.get("motion_first_enabled", True)
+        self.show_motion_regions = saved.get("show_motion_regions", False)
+        
+        # Detection mode will be set on detector after it's created
+        self._saved_detection_mode = saved.get("detection_mode", config.DEFAULT_DETECTION_MODE)
         
         # Motion detection stats
         self.motion_detected = False
@@ -113,12 +120,15 @@ class VideoProcessor:
         # Store last detections with world coordinates for API
         self.last_detections_with_world = []
         
+        print(f"Loaded settings: {self.current_resolution[0]}x{self.current_resolution[1]}, motion-first={self.motion_first_enabled}")
+        
     def start(self):
         """Initialize and start all components"""
         print("Initializing video processor...")
         
-        # Initialize components
-        self.camera = CameraHandler()
+        # Initialize components with saved resolution
+        width, height = self.current_resolution
+        self.camera = CameraHandler(width=width, height=height, fps=self.current_framerate)
         self.detector = TFLiteDetector()
         self.tracker = CentroidTracker()
         self.perimeter = PerimeterManager()
@@ -134,6 +144,10 @@ class VideoProcessor:
             self.calibration = CameraCalibration()
         else:
             self.calibration = None
+        
+        # Set saved detection mode
+        if hasattr(self, '_saved_detection_mode'):
+            self.detector.set_detection_mode(self._saved_detection_mode)
         
         # Start camera
         self.camera.start()
@@ -369,6 +383,7 @@ class VideoProcessor:
         if self.detector:
             self.detector.set_detection_mode(mode)
             self.tracker.reset()  # Reset tracking when mode changes
+            settings.update_setting("detection_mode", mode)
             
     def get_detection_mode(self):
         """Get current detection mode"""
@@ -419,6 +434,7 @@ class VideoProcessor:
             # Motion detection status
             "motion_first_enabled": self.motion_first_enabled,
             "motion_detected": self.motion_detected,
+            "show_motion_regions": self.show_motion_regions,
             "ai_detections_count": self.ai_detections_count
         }
     
@@ -471,6 +487,7 @@ class VideoProcessor:
             return False
         
         self.current_resolution = new_res
+        settings.update_setting("resolution", list(new_res))
         
         # Restart camera with new settings
         if self.camera:
@@ -481,6 +498,10 @@ class VideoProcessor:
             # Update perimeter to new resolution
             if self.perimeter:
                 self.perimeter.set_resolution(width, height)
+            
+            # Reset motion detector for new resolution
+            if self.motion_detector:
+                self.motion_detector.reset()
         
         print(f"Resolution changed to: {width}x{height}")
         return True
@@ -491,6 +512,7 @@ class VideoProcessor:
             return False
         
         self.current_framerate = fps
+        settings.update_setting("framerate", fps)
         
         # Restart camera with new settings
         if self.camera:
@@ -508,6 +530,7 @@ class VideoProcessor:
             return False
         
         self.current_frame_skip = skip
+        settings.update_setting("frame_skip", skip)
         print(f"Frame skip changed to: {skip}")
         return True
 
@@ -675,6 +698,9 @@ def create_app():
         else:
             video_processor.motion_first_enabled = bool(enabled)
         
+        # Save setting
+        settings.update_setting("motion_first_enabled", video_processor.motion_first_enabled)
+        
         # Reset motion detector when toggling
         if video_processor.motion_detector:
             video_processor.motion_detector.reset()
@@ -694,6 +720,9 @@ def create_app():
             video_processor.show_motion_regions = not video_processor.show_motion_regions
         else:
             video_processor.show_motion_regions = bool(show)
+        
+        # Save setting
+        settings.update_setting("show_motion_regions", video_processor.show_motion_regions)
         
         return jsonify({
             "success": True,

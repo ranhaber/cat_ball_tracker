@@ -3,14 +3,13 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Cat/Ball Tracker - RPi Zero 2W</title>
+    <title>Cat Dome</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
 </head>
 <body>
     <div class="container">
         <header>
-            <h1>🐱 Cat/Ball Tracker 🏀</h1>
-            <p class="subtitle">Raspberry Pi Zero 2W Detection System</p>
+            <h1>🐱 Cat Dome 🏀</h1>
         </header>
 
         <nav class="tabs">
@@ -26,10 +25,15 @@
                     <div class="video-overlay">
                         <span id="fps-display">FPS: --</span>
                         <span id="mode-display">Mode: --</span>
+                        <span id="ram-display">RAM: --</span>
+                        <span id="temp-display">Temp: --</span>
                     </div>
                 </div>
-                <div class="video-info">
-                    <p>Live video stream with detection and tracking overlays.</p>
+                <div class="video-controls">
+                    <label class="checkbox-label">
+                        <input type="checkbox" id="show-motion-checkbox">
+                        <span>Show Motion Regions</span>
+                    </label>
                 </div>
             </section>
 
@@ -67,22 +71,18 @@
                         <p class="hint">⚠️ Resolutions above 1536x864 may cause memory errors on RPi Zero 2W</p>
                     </div>
 
-                    <!-- Motion Detection Settings -->
+                    <!-- Performance Settings -->
                     <div class="control-section">
-                        <h2>Motion Detection</h2>
-                        <p>Motion-first mode saves memory and enables higher resolution:</p>
-                        <div class="toggle-container">
-                            <button id="motion-toggle" class="mode-btn active">
-                                <span class="icon">🎯</span>
-                                <span class="label">Motion-First</span>
-                            </button>
-                            <button id="motion-regions-toggle" class="mode-btn">
-                                <span class="icon">📦</span>
-                                <span class="label">Show Regions</span>
-                            </button>
-                        </div>
+                        <h2>Performance</h2>
+                        <p>Frame skip (higher = faster, less accurate):</p>
+                        <select id="frameskip-select" class="resolution-select">
+                            <option value="1">1 - Every frame (slow)</option>
+                            <option value="2" selected>2 - Every 2nd frame (balanced)</option>
+                            <option value="3">3 - Every 3rd frame (fast)</option>
+                            <option value="4">4 - Every 4th frame (faster)</option>
+                            <option value="5">5 - Every 5th frame (fastest)</option>
+                        </select>
                         <p class="mode-status">Motion: <strong id="motion-status">--</strong> | AI runs: <strong id="ai-runs">0</strong></p>
-                        <p class="hint">Motion-first: AI detection only runs when movement detected (saves ~30% memory)</p>
                     </div>
 
                     <!-- Perimeter Editor -->
@@ -119,6 +119,14 @@
                                 <span class="status-label">Frames</span>
                                 <span class="status-value" id="status-frames">--</span>
                             </div>
+                            <div class="status-item">
+                                <span class="status-label">RAM</span>
+                                <span class="status-value" id="status-ram">--</span>
+                            </div>
+                            <div class="status-item">
+                                <span class="status-label">CPU Temp</span>
+                                <span class="status-value" id="status-temp">--</span>
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -126,7 +134,7 @@
         </main>
 
         <footer>
-            <p>Powered by TensorFlow Lite + OpenCV on Raspberry Pi Zero 2W</p>
+            <p>Cat Dome - Detection & Tracking System</p>
         </footer>
     </div>
 

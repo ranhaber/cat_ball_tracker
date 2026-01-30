@@ -1,5 +1,5 @@
 """
-Configuration settings for Cat/Ball Detection & Tracking System
+Configuration settings for Cat Dome
 Optimized for Raspberry Pi Zero 2W
 """
 
@@ -41,9 +41,10 @@ CLASS_NAMES = {
 # ============================================================================
 # CAMERA SETTINGS
 # ============================================================================
-# Frame dimensions (lower = faster processing on RPi Zero 2W)
-FRAME_WIDTH = 640
-FRAME_HEIGHT = 480
+# Frame dimensions - derived from DEFAULT_RESOLUTION (set below)
+# These are updated after DEFAULT_RESOLUTION is defined
+FRAME_WIDTH = 1536  # Updated below
+FRAME_HEIGHT = 864  # Updated below
 
 # Target FPS (actual FPS limited by detection speed)
 TARGET_FPS = 15
@@ -180,3 +181,9 @@ MINIMAP_BG_COLOR = (30, 30, 30)
 MINIMAP_GRID_COLOR = (60, 60, 60)
 MINIMAP_POINT_COLOR_CAT = (0, 255, 0)    # Green
 MINIMAP_POINT_COLOR_BALL = (0, 165, 255)  # Orange
+
+# ============================================================================
+# Sync FRAME_WIDTH/HEIGHT with DEFAULT_RESOLUTION
+# ============================================================================
+FRAME_WIDTH = DEFAULT_RESOLUTION[0]
+FRAME_HEIGHT = DEFAULT_RESOLUTION[1]
