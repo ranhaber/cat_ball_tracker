@@ -236,11 +236,13 @@ class VideoProcessor:
                     
                     if self.motion_first_enabled:
                         # Motion-first mode: only run AI when motion detected
+                        motion_start = time.time()
                         motion_result = self.motion_detector.detect(frame)
+                        motion_time_ms = (time.time() - motion_start) * 1000
                         
                         # Debug: log raw motion detection (only if config.DEBUG enabled)
                         if motion_result["motion_detected"] and config.DEBUG:
-                            print(f"[DEBUG] Motion detected: {len(motion_result['regions'])} regions")
+                            print(f"[DEBUG] Motion detected: {len(motion_result['regions'])} regions (took {motion_time_ms:.1f}ms)")
                         
                         # Filter motion regions to only those inside perimeter
                         motion_regions_in_perimeter = []
@@ -279,6 +281,7 @@ class VideoProcessor:
                         self.motion_detected = True
                     
                     if run_ai_detection:
+                        ai_start = time.time()
                         if crop_region and self.motion_first_enabled:
                             # Crop frame to motion region for AI detection
                             cx, cy, cw, ch = crop_region
@@ -301,6 +304,8 @@ class VideoProcessor:
                             # Run detection on full frame
                             detections = self.detector.detect(frame)
                         
+                        ai_time_ms = (time.time() - ai_start) * 1000
+                        
                         # Filter by perimeter (pass frame resolution for scaling)
                         frame_res = (frame_w, frame_h)
                         raw_count = len(detections)
@@ -320,10 +325,10 @@ class VideoProcessor:
                         
                         last_detections = detections
                         
-                        # Debug: log detections
-                        if raw_count > 0:
+                        # Debug: log detections with timing
+                        if config.DEBUG or raw_count > 0:
                             confirmed_str = f", Confirmed: {len(detections) > 0}" if self.confirm_frames > 1 else ""
-                            print(f"[DEBUG] Raw detections: {raw_count}, After perimeter filter: {len(detections)}{confirmed_str}")
+                            print(f"[PERF] AI inference: {ai_time_ms:.1f}ms | Raw detections: {raw_count}, After perimeter: {len(detections)}{confirmed_str}")
                         
                         # Compute world coordinates for each detection
                         self.last_detections_with_world = []
@@ -473,12 +478,29 @@ class VideoProcessor:
         # OPTIMIZATION B: Use profile-specific JPEG quality
         jpeg_quality = self.current_jpeg_quality
         
-        # Encode as JPEG
-        ret, jpeg = cv2.imencode(
-            '.jpg', 
-            frame,
-            [cv2.IMWRITE_JPEG_QUALITY, jpeg_quality]
-        )
+        # Encode as JPEG with timing
+        if config.DEBUG:
+            encode_start = time.time()
+            ret, jpeg = cv2.imencode(
+                '.jpg', 
+                frame,
+                [cv2.IMWRITE_JPEG_QUALITY, jpeg_quality]
+            )
+            encode_time_ms = (time.time() - encode_start) * 1000
+            
+            # Log encoding time periodically (every 50 frames)
+            if not hasattr(self, '_encode_log_counter'):
+                self._encode_log_counter = 0
+            self._encode_log_counter += 1
+            if self._encode_log_counter >= 50:
+                print(f"[PERF] JPEG encoding: {encode_time_ms:.1f}ms @ Q{jpeg_quality}")
+                self._encode_log_counter = 0
+        else:
+            ret, jpeg = cv2.imencode(
+                '.jpg', 
+                frame,
+                [cv2.IMWRITE_JPEG_QUALITY, jpeg_quality]
+            )
         
         if ret:
             return jpeg.tobytes()

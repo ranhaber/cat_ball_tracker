@@ -99,7 +99,7 @@ TEXT_BG_COLOR = (0, 0, 0)        # Black background
 # ============================================================================
 HOST = "0.0.0.0"    # Listen on all interfaces
 PORT = 5000
-DEBUG = False       # Set True only for development (not on RPi)
+DEBUG = True        # Enable detailed performance logging
 
 # MJPEG streaming quality (0-100)
 JPEG_QUALITY = 70

@@ -1351,9 +1351,29 @@ async function loadCurrentState() {
         await loadThreshold();
         await loadConfirmFrames();
         await loadCalibrationStatus();
+        await loadCurrentProfile();
         await updateStatus();
         
     } catch (error) {
         console.error('Error loading initial state:', error);
+    }
+}
+
+async function loadCurrentProfile() {
+    try {
+        const response = await fetch('/api/performance/profile');
+        if (response.ok) {
+            const data = await response.json();
+            const profileValue = data.profile;
+            
+            // Update the UI to show the current profile
+            const profileRadio = document.querySelector(`input[name="profile"][value="${profileValue}"]`);
+            if (profileRadio) {
+                profileRadio.checked = true;
+                console.log(`Current profile loaded: ${profileValue}`);
+            }
+        }
+    } catch (error) {
+        console.error('Error loading current profile:', error);
     }
 }
