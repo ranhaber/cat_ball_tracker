@@ -133,6 +133,7 @@ class VideoProcessor:
         
         # Performance settings (user-adjustable)
         self.current_resolution = tuple(saved.get("resolution", config.DEFAULT_RESOLUTION))
+        self.current_stream_resolution = tuple(saved.get("stream_resolution", config.DEFAULT_STREAM_RESOLUTION))
         self.current_framerate = saved.get("framerate", config.DEFAULT_FRAMERATE)
         self.current_frame_skip = saved.get("frame_skip", config.DEFAULT_FRAME_SKIP)
         
@@ -159,7 +160,7 @@ class VideoProcessor:
         # Store last detections with world coordinates for API
         self.last_detections_with_world = []
         
-        print(f"Loaded settings: {self.current_resolution[0]}x{self.current_resolution[1]}, motion-first={self.motion_first_enabled}, profile={self.current_profile}")
+        print(f"Loaded settings: Capture={self.current_resolution[0]}x{self.current_resolution[1]}, Stream={self.current_stream_resolution[0]}x{self.current_stream_resolution[1]}, motion-first={self.motion_first_enabled}, profile={self.current_profile}")
         
     def start(self):
         """Initialize and start all components"""
@@ -478,6 +479,14 @@ class VideoProcessor:
         # OPTIMIZATION B: Use profile-specific JPEG quality
         jpeg_quality = self.current_jpeg_quality
         
+        # Scale down to stream resolution before encoding (saves bandwidth)
+        stream_w, stream_h = self.current_stream_resolution
+        capture_h, capture_w = frame.shape[:2]
+        
+        # Only scale if stream resolution is different from capture
+        if stream_w != capture_w or stream_h != capture_h:
+            frame = cv2.resize(frame, (stream_w, stream_h), interpolation=cv2.INTER_AREA)
+        
         # Encode as JPEG with timing
         if config.DEBUG:
             encode_start = time.time()
@@ -493,7 +502,7 @@ class VideoProcessor:
                 self._encode_log_counter = 0
             self._encode_log_counter += 1
             if self._encode_log_counter >= 50:
-                print(f"[PERF] JPEG encoding: {encode_time_ms:.1f}ms @ Q{jpeg_quality}")
+                print(f"[PERF] JPEG encoding: {encode_time_ms:.1f}ms @ Q{jpeg_quality} ({stream_w}x{stream_h})")
                 self._encode_log_counter = 0
         else:
             ret, jpeg = cv2.imencode(
@@ -680,41 +689,34 @@ class VideoProcessor:
         return {
             "current": {
                 "resolution": list(self.current_resolution),
+                "stream_resolution": list(self.current_stream_resolution),
                 "framerate": self.current_framerate,
                 "frame_skip": self.current_frame_skip
             },
             "options": {
-                "resolutions": [list(r) for r in config.RESOLUTION_OPTIONS],
+                "resolutions": [list(config.CAPTURE_RESOLUTION)],  # Fixed capture resolution
+                "stream_resolutions": [list(r) for r in config.STREAM_RESOLUTION_OPTIONS],
                 "framerates": config.FRAMERATE_OPTIONS,
                 "frame_skips": config.FRAME_SKIP_OPTIONS
             }
         }
     
     def set_resolution(self, width, height):
-        """Set camera resolution (requires camera restart)"""
+        """Set camera resolution (now fixed at 2304x1296 for optimal 13m detection)"""
+        # Capture resolution is fixed - use set_stream_resolution() instead
+        print(f"[WARNING] Capture resolution is fixed at 2304x1296")
+        return False
+    
+    def set_stream_resolution(self, width, height):
+        """Set streaming resolution (no camera restart needed)"""
         new_res = (width, height)
-        if new_res not in config.RESOLUTION_OPTIONS:
+        if new_res not in config.STREAM_RESOLUTION_OPTIONS:
             return False
         
-        self.current_resolution = new_res
-        settings.update_setting("resolution", list(new_res))
-        print(f"[SETTING] Resolution changed to: {width}x{height}")
+        self.current_stream_resolution = new_res
+        settings.update_setting("stream_resolution", list(new_res))
+        print(f"[SETTING] Stream resolution changed to: {width}x{height}")
         
-        # Restart camera with new settings
-        if self.camera:
-            self.camera.stop()
-            self.camera = CameraHandler(width=width, height=height, fps=self.current_framerate)
-            self.camera.start()
-            
-            # Update perimeter to new resolution
-            if self.perimeter:
-                self.perimeter.set_resolution(width, height)
-            
-            # Reset motion detector for new resolution
-            if self.motion_detector:
-                self.motion_detector.reset()
-        
-        print(f"Resolution changed to: {width}x{height}")
         return True
     
     def set_framerate(self, fps):
@@ -954,7 +956,13 @@ def create_app():
     
     @app.route('/api/performance/resolution', methods=['POST'])
     def set_resolution():
-        """Set camera resolution"""
+        """Set camera resolution (capture resolution - fixed at 2304x1296)"""
+        # Note: Capture resolution is now fixed at 2304x1296 for optimal 13m detection
+        return jsonify({"error": "Capture resolution is fixed at 2304x1296"}), 400
+    
+    @app.route('/api/performance/stream_resolution', methods=['POST'])
+    def set_stream_resolution():
+        """Set streaming resolution (for web viewing)"""
         data = request.get_json()
         width = data.get('width')
         height = data.get('height')
@@ -962,10 +970,10 @@ def create_app():
         if not width or not height:
             return jsonify({"error": "Width and height required"}), 400
         
-        success = video_processor.set_resolution(int(width), int(height))
+        success = video_processor.set_stream_resolution(int(width), int(height))
         if success:
-            return jsonify({"success": True, "resolution": [width, height]})
-        return jsonify({"error": "Invalid resolution"}), 400
+            return jsonify({"success": True, "stream_resolution": [width, height]})
+        return jsonify({"error": "Invalid stream resolution"}), 400
     
     @app.route('/api/performance/framerate', methods=['POST'])
     def set_framerate():

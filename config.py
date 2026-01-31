@@ -46,8 +46,13 @@ CLASS_NAMES = {
 # ============================================================================
 # Frame dimensions - derived from DEFAULT_RESOLUTION (set below)
 # These are updated after DEFAULT_RESOLUTION is defined
-FRAME_WIDTH = 1536  # Updated below
-FRAME_HEIGHT = 864  # Updated below
+FRAME_WIDTH = 2304  # Updated below
+FRAME_HEIGHT = 1296  # Updated below
+
+# Streaming dimensions (for MJPEG web stream only)
+# Capture resolution can be higher for better detection
+STREAM_WIDTH = 960  # Updated below
+STREAM_HEIGHT = 540  # Updated below
 
 # Target FPS (actual FPS limited by detection speed)
 TARGET_FPS = 15
@@ -122,86 +127,72 @@ TFLITE_NUM_THREADS = 4  # Use all 4 cores of RPi Zero 2W
 USE_GPU_ACCELERATION = True
 
 # ============================================================================
-# PERFORMANCE PROFILES (Phase 2 - User-selectable optimization levels)
+# PERFORMANCE PROFILES - 3 Hard-coded profiles for 2304×1296 capture
+# Optimized for Raspberry Pi Camera Module 3 WIDE (120° FOV)
 # ============================================================================
 PERFORMANCE_PROFILES = {
-    "default": {
-        "name": "Default (Original)",
-        "description": "Original settings before Phase 1/2 optimizations",
-        "jpeg_quality": 70,
-        "motion_crop_size": (300, 300),
-        "motion_scale": 0.25,
-        "motion_threshold": 15,
-        "motion_min_area": 100,
-        "tflite_threads": 4,
-        "estimated_fps": "5-6 FPS",
-        "estimated_ram": "220MB",
-        "estimated_cpu": "85%",
-        "accuracy_impact": "Baseline"
-    },
     "balanced": {
         "name": "Balanced",
         "description": "Recommended: Best trade-off between speed and quality",
         "jpeg_quality": 65,
-        "motion_crop_size": (280, 280),
-        "motion_scale": 0.22,
-        "motion_threshold": 18,
-        "motion_min_area": 150,
-        "tflite_threads": 3,
-        "estimated_fps": "7-9 FPS",
-        "estimated_ram": "185MB",
-        "estimated_cpu": "65%",
-        "accuracy_impact": "-2%"
-    },
-    "performance": {
-        "name": "Performance",
-        "description": "Optimized for 120° wide FOV: 0-8m reliable detection",
-        "jpeg_quality": 60,
-        "motion_crop_size": (280, 280),
-        "motion_scale": 0.25,
+        "motion_crop_size": (400, 400),
+        "motion_scale": 0.30,
         "motion_threshold": 18,
         "motion_min_area": 80,
         "tflite_threads": 3,
-        "estimated_fps": "8-12 FPS",
-        "estimated_ram": "180MB",
+        "estimated_fps": "5-7 FPS",
+        "estimated_ram": "220MB",
+        "estimated_cpu": "65%",
+        "detection_range": "0-10m"
+    },
+    "performance": {
+        "name": "Performance (13m)",
+        "description": "Optimized for 13m max distance detection",
+        "jpeg_quality": 60,
+        "motion_crop_size": (420, 420),
+        "motion_scale": 0.35,
+        "motion_threshold": 18,
+        "motion_min_area": 50,
+        "tflite_threads": 3,
+        "estimated_fps": "4-6 FPS",
+        "estimated_ram": "220MB",
         "estimated_cpu": "60%",
-        "accuracy_impact": "-3%"
+        "detection_range": "0-13m"
     },
     "quality": {
         "name": "Quality",
-        "description": "Best accuracy: Ideal for security/surveillance",
+        "description": "Best accuracy for close-range detailed detection",
         "jpeg_quality": 75,
-        "motion_crop_size": (320, 320),
-        "motion_scale": 0.25,
+        "motion_crop_size": (480, 480),
+        "motion_scale": 0.35,
         "motion_threshold": 15,
-        "motion_min_area": 100,
+        "motion_min_area": 80,
         "tflite_threads": 4,
-        "estimated_fps": "4-5 FPS",
-        "estimated_ram": "210MB",
-        "estimated_cpu": "80%",
-        "accuracy_impact": "+2%"
+        "estimated_fps": "3-5 FPS",
+        "estimated_ram": "240MB",
+        "estimated_cpu": "75%",
+        "detection_range": "0-8m (high detail)"
     }
 }
 
 # Default active profile
-DEFAULT_PERFORMANCE_PROFILE = "balanced"
+DEFAULT_PERFORMANCE_PROFILE = "performance"
 
 # ============================================================================
 # PERFORMANCE OPTIONS (user-selectable via web UI)
 # ============================================================================
-# Available resolution options (width, height)
-# Matches IMX708 (Camera Module 3) capabilities: 4608x2592 max
-RESOLUTION_OPTIONS = [
-    (320, 240),     # Fastest - for testing/low bandwidth
-    (640, 480),     # Default - good balance for RPi Zero 2W
-    (800, 600),     # Medium
-    (1280, 720),    # HD 720p
-    (1536, 864),    # Native mode 1
-    (1920, 1080),   # Full HD 1080p
-    (2304, 1296),   # Native mode 2
-    (2592, 1944),   # 5MP equivalent
-    (4056, 3040),   # 12MP
-    (4608, 2592),   # Max resolution (native)
+# Available capture resolution options (width, height) - for detection
+# Fixed to 2304×1296 (2x binned mode) - optimal for 13m cat detection
+CAPTURE_RESOLUTION = (2304, 1296)  # Native 2x mode, best balance
+
+# Available streaming resolution options (width, height) - for web viewing
+# Users can select this to balance bandwidth vs quality
+STREAM_RESOLUTION_OPTIONS = [
+    (480, 270),     # Ultra Low - for slow connections
+    (640, 360),     # Low - mobile-friendly
+    (960, 540),     # Medium (default) - good balance
+    (1280, 720),    # High - HD quality
+    (1920, 1080),   # Ultra High - maximum quality
 ]
 
 # Available frame rate options
@@ -211,7 +202,8 @@ FRAMERATE_OPTIONS = [5, 10, 15, 20, 30]
 FRAME_SKIP_OPTIONS = [1, 2, 3, 4, 5]
 
 # Default performance settings
-DEFAULT_RESOLUTION = (1536, 864)  # Higher res for better distance detection
+DEFAULT_RESOLUTION = (2304, 1296)   # 2x binned mode for 13m detection
+DEFAULT_STREAM_RESOLUTION = (960, 540)  # Medium stream quality
 DEFAULT_FRAMERATE = 15
 DEFAULT_FRAME_SKIP = 2
 
@@ -266,3 +258,5 @@ MINIMAP_POINT_COLOR_BALL = (0, 165, 255)  # Orange
 # ============================================================================
 FRAME_WIDTH = DEFAULT_RESOLUTION[0]
 FRAME_HEIGHT = DEFAULT_RESOLUTION[1]
+STREAM_WIDTH = DEFAULT_STREAM_RESOLUTION[0]
+STREAM_HEIGHT = DEFAULT_STREAM_RESOLUTION[1]

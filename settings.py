@@ -16,6 +16,7 @@ def get_default_settings():
     """Get default settings from config"""
     return {
         "resolution": list(config.DEFAULT_RESOLUTION),
+        "stream_resolution": list(config.DEFAULT_STREAM_RESOLUTION),
         "framerate": config.DEFAULT_FRAMERATE,
         "frame_skip": config.DEFAULT_FRAME_SKIP,
         "detection_mode": config.DEFAULT_DETECTION_MODE,
@@ -23,7 +24,7 @@ def get_default_settings():
         "confirm_frames": getattr(config, 'DETECTION_CONFIRM_FRAMES', 1),
         "motion_first_enabled": getattr(config, 'MOTION_FIRST_ENABLED', True),
         "show_motion_regions": getattr(config, 'SHOW_MOTION_REGIONS', False),
-        "performance_profile": getattr(config, 'DEFAULT_PERFORMANCE_PROFILE', 'balanced')
+        "performance_profile": getattr(config, 'DEFAULT_PERFORMANCE_PROFILE', 'performance')
     }
 
 

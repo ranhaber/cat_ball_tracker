@@ -135,41 +135,40 @@ function showConnectionStatus(status) {
 }
 
 // ============================================================================
-// Resolution Selector
+// Stream Resolution Selector (v1.8.0 - capture resolution is now fixed)
 // ============================================================================
 function initResolutionSelector() {
-    const selector = document.getElementById('resolution-select');
-    if (selector) {
-        selector.addEventListener('change', (e) => {
-            setResolution(e.target.value);
+    // Capture resolution is fixed at 2304x1296
+    // Only stream resolution can be changed
+    const streamSelector = document.getElementById('stream-resolution-select');
+    if (streamSelector) {
+        streamSelector.addEventListener('change', (e) => {
+            setStreamResolution(e.target.value);
         });
     }
 }
 
-async function setResolution(resolutionStr) {
+async function setStreamResolution(resolutionStr) {
     try {
-        // Parse "640x480" into width and height
+        // Parse "960x540" into width and height
         const [width, height] = resolutionStr.split('x').map(Number);
         
-        showConnectionStatus('connecting');
-        
-        const response = await fetch('/api/performance/resolution', {
+        const response = await fetch('/api/performance/stream_resolution', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ width, height })
         });
         
         if (response.ok) {
-            console.log(`Resolution changed to ${width}x${height}`);
-            // Wait for camera to restart, then reconnect video
-            setTimeout(reconnectVideo, 2000);
+            console.log(`Stream resolution changed to ${width}x${height}`);
+            // No need to reconnect video - change applies immediately
         } else {
             const err = await response.json();
-            alert('Failed to change resolution: ' + (err.error || 'Unknown error'));
+            alert('Failed to change stream resolution: ' + (err.error || 'Unknown error'));
         }
     } catch (error) {
-        console.error('Error setting resolution:', error);
-        alert('Error setting resolution: ' + error.message);
+        console.error('Error setting stream resolution:', error);
+        alert('Error setting stream resolution: ' + error.message);
     }
 }
 
@@ -177,11 +176,12 @@ async function loadResolution() {
     try {
         const response = await fetch('/api/performance');
         const data = await response.json();
-        const selector = document.getElementById('resolution-select');
         
-        if (selector && data.current && data.current.resolution) {
-            const [width, height] = data.current.resolution;
-            selector.value = `${width}x${height}`;
+        // Load stream resolution
+        const streamSelector = document.getElementById('stream-resolution-select');
+        if (streamSelector && data.current && data.current.stream_resolution) {
+            const [width, height] = data.current.stream_resolution;
+            streamSelector.value = `${width}x${height}`;
         }
     } catch (error) {
         console.error('Error loading resolution:', error);
