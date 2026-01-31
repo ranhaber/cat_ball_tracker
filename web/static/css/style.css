@@ -420,6 +420,19 @@ header h1 {
     border-radius: var(--radius-sm);
 }
 
+.profile-parameters {
+    margin-top: 10px;
+    padding-top: 10px;
+    border-top: 1px solid var(--border-color);
+}
+
+.profile-parameters small {
+    font-size: 0.75rem;
+    color: var(--text-muted);
+    font-family: var(--font-mono);
+    line-height: 1.6;
+}
+
 /* Perimeter Editor */
 .perimeter-editor {
     background: var(--bg-tertiary);
