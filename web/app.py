@@ -132,7 +132,12 @@ class VideoProcessor:
         saved = settings.load_settings()
         
         # Performance settings (user-adjustable)
-        self.current_resolution = tuple(saved.get("resolution", config.DEFAULT_RESOLUTION))
+        # Force capture resolution to 2304x1296 (v1.8.0+)
+        self.current_resolution = config.DEFAULT_RESOLUTION  # Always use 2304x1296
+        if tuple(saved.get("resolution", config.DEFAULT_RESOLUTION)) != config.DEFAULT_RESOLUTION:
+            print(f"[INFO] Upgrading capture resolution from {saved.get('resolution')} to {config.DEFAULT_RESOLUTION}")
+            settings.update_setting("resolution", list(config.DEFAULT_RESOLUTION))
+        
         self.current_stream_resolution = tuple(saved.get("stream_resolution", config.DEFAULT_STREAM_RESOLUTION))
         self.current_framerate = saved.get("framerate", config.DEFAULT_FRAMERATE)
         self.current_frame_skip = saved.get("frame_skip", config.DEFAULT_FRAME_SKIP)
@@ -142,7 +147,12 @@ class VideoProcessor:
         self.show_motion_regions = saved.get("show_motion_regions", False)
         
         # Performance profile (Phase 2)
-        self.current_profile = saved.get("performance_profile", config.DEFAULT_PERFORMANCE_PROFILE)
+        saved_profile = saved.get("performance_profile", config.DEFAULT_PERFORMANCE_PROFILE)
+        # Handle legacy profiles (e.g., "default" from v1.7.0)
+        if saved_profile not in config.PERFORMANCE_PROFILES:
+            print(f"[WARNING] Saved profile '{saved_profile}' not found. Using '{config.DEFAULT_PERFORMANCE_PROFILE}'")
+            saved_profile = config.DEFAULT_PERFORMANCE_PROFILE
+        self.current_profile = saved_profile
         self.current_jpeg_quality = config.JPEG_QUALITY  # Will be updated by profile
         
         # Detection mode and threshold will be set on detector after it's created
@@ -784,6 +794,14 @@ class VideoProcessor:
     
     def _apply_performance_profile(self, profile_name, save=True):
         """Internal method to apply profile settings"""
+        # Handle legacy/invalid profile names (e.g., "default" from v1.7.0)
+        if profile_name not in config.PERFORMANCE_PROFILES:
+            print(f"[WARNING] Profile '{profile_name}' not found. Using default: '{config.DEFAULT_PERFORMANCE_PROFILE}'")
+            profile_name = config.DEFAULT_PERFORMANCE_PROFILE
+            # Update saved settings to valid profile
+            if save:
+                settings.update_setting("performance_profile", profile_name)
+        
         profile = config.PERFORMANCE_PROFILES[profile_name]
         
         # Update JPEG quality
