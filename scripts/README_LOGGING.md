@@ -1,43 +1,32 @@
-# Automatic Journal Logging Setup
+# Automatic Journal Logging
 
-This directory contains scripts for automatically logging systemd journals to dated files.
+The Cat Ball Tracker automatically logs all output to dated files on each service start.
 
 ## How It Works
 
 - Each time the service starts, a new log file is created: `logs/journal_YYYYMMDD_HHMMSS.log`
 - A symlink `logs/latest.log` always points to the most recent log
 - Logs older than 7 days are automatically deleted
-- Journal logging runs in the background and captures all service output
+- Logs go to BOTH journald AND dated files simultaneously
 
 ## Installation
 
-### Option 1: Systemd Service (Recommended)
+Logging is built into the main service! Just deploy the updated service file:
 
-1. Copy the service files:
 ```bash
 cd ~/cat_ball_tracker
-sudo cp scripts/cat_ball_tracker_logging.service /etc/systemd/system/
+git pull
+
+# Make the wrapper script executable
+chmod +x start_with_logging.sh
+
+# Install/update the service file
+sudo cp cat_ball_tracker.service /etc/systemd/system/
 sudo systemctl daemon-reload
-```
-
-2. Enable the logging service:
-```bash
-sudo systemctl enable cat_ball_tracker_logging.service
-sudo systemctl start cat_ball_tracker_logging.service
-```
-
-3. Restart the main service to start logging:
-```bash
 sudo systemctl restart cat_ball_tracker
 ```
 
-### Option 2: Manual Script Execution
-
-Run the logging script manually after service starts:
-```bash
-cd ~/cat_ball_tracker
-./scripts/start_with_logging.sh &
-```
+That's it! Logs will be automatically created in `~/cat_ball_tracker/logs/`
 
 ## Viewing Logs
 

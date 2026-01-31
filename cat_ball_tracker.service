@@ -7,11 +7,11 @@ Type=simple
 User=ranhaber
 WorkingDirectory=/home/ranhaber/cat_ball_tracker
 Environment=PATH=/home/ranhaber/cat_ball_tracker/venv/bin:/usr/bin
-ExecStart=/home/ranhaber/cat_ball_tracker/venv/bin/python main.py
+ExecStart=/home/ranhaber/cat_ball_tracker/start_with_logging.sh
 Restart=on-failure
 RestartSec=10
 
-# Logging
+# Logging (goes to both journald AND dated log files via wrapper script)
 StandardOutput=journal
 StandardError=journal
 
