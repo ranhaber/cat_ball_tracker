@@ -2,7 +2,7 @@
 
 A real-time cat and ball detection system for Raspberry Pi Zero 2W with Camera Module 3. Features motion-first detection for efficiency, a web interface for live streaming, and zone-based tracking.
 
-**Version:** 1.6.5
+**Version:** 1.6.6
 
 ---
 
@@ -361,6 +361,7 @@ sudo journalctl -u cat_ball_tracker -n 50
 
 ## 📝 Version History
 
+- **v1.6.6** - Rename systemd service from cat_ball_tracker to cat_dome for consistent branding
 - **v1.6.5** - UI improvements: Refresh all settings after profile change, clarify profile-controlled vs independent settings
 - **v1.6.4** - Add performance debugging (motion/AI/JPEG timing), profile persistence, show profile parameters in UI
 - **v1.6.3** - Bugfix: Add thread safety to motion detector (prevents race condition crashes)
