@@ -138,8 +138,11 @@ cat_ball_tracker/
 ```bash
 # Clone or copy the project
 cd ~
-git clone <your-repo-url> cat_ball_tracker
+git clone https://github.com/ranhaber/cat_ball_tracker.git cat_ball_tracker
 cd cat_ball_tracker
+
+# IMPORTANT: Set executable permissions for shell scripts
+chmod +x start_with_logging.sh
 
 # Install system dependencies
 sudo apt update
@@ -163,6 +166,9 @@ Open browser: `http://<raspberry-pi-ip>:5000`
 ### Auto-Start on Boot
 
 ```bash
+# Ensure start_with_logging.sh is executable
+chmod +x start_with_logging.sh
+
 # Copy service file
 sudo cp cat_ball_tracker.service /etc/systemd/system/
 
@@ -333,6 +339,11 @@ sudo journalctl -u cat_ball_tracker -n 50
 ### TFLite not available
 - System works in mock mode (random detections)
 - Install from piwheels if Python version supported
+
+### Service fails with "exit code 203/EXEC"
+- The `start_with_logging.sh` script is not executable
+- Fix: `chmod +x ~/cat_ball_tracker/start_with_logging.sh`
+- Then restart: `sudo systemctl restart cat_ball_tracker`
 
 ---
 
