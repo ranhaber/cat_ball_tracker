@@ -7,6 +7,7 @@ Optimized for low memory usage on RPi Zero 2W.
 import cv2
 import numpy as np
 from collections import deque
+import threading
 
 import config
 
@@ -44,6 +45,9 @@ class MotionDetector:
         self.background = None
         self.last_frame_size = None  # Track resolution changes
         
+        # Thread safety for parameter updates
+        self._lock = threading.Lock()
+        
         # OPTIMIZATION J: Check if GPU acceleration available
         self.use_gpu = getattr(config, 'USE_GPU_ACCELERATION', False) and self._check_gpu_available()
         
@@ -78,30 +82,32 @@ class MotionDetector:
     def update_parameters(self, detection_scale=None, motion_threshold=None, min_area=None):
         """
         Update detection parameters and reset history if scale changes.
+        Thread-safe parameter updates.
         
         Args:
             detection_scale: New scale factor (will reset history)
             motion_threshold: New threshold value
             min_area: New minimum area
         """
-        scale_changed = False
-        
-        if detection_scale is not None and detection_scale != self.detection_scale:
-            self.detection_scale = detection_scale
-            scale_changed = True
-        
-        if motion_threshold is not None:
-            self.motion_threshold = motion_threshold
-        
-        if min_area is not None:
-            self.min_area = min_area
-        
-        # Clear history if scale changed (frame sizes will be different)
-        if scale_changed:
-            print(f"Motion detector: Scale changed to {self.detection_scale}, clearing history")
-            self.frame_history.clear()
-            self.background = None
-            self.last_frame_size = None
+        with self._lock:
+            scale_changed = False
+            
+            if detection_scale is not None and detection_scale != self.detection_scale:
+                self.detection_scale = detection_scale
+                scale_changed = True
+            
+            if motion_threshold is not None:
+                self.motion_threshold = motion_threshold
+            
+            if min_area is not None:
+                self.min_area = min_area
+            
+            # Clear history if scale changed (frame sizes will be different)
+            if scale_changed:
+                print(f"Motion detector: Scale changed to {self.detection_scale}, clearing history")
+                self.frame_history.clear()
+                self.background = None
+                self.last_frame_size = None
         
     def detect(self, frame):
         """
@@ -117,120 +123,121 @@ class MotionDetector:
                 - combined_region: single (x, y, w, h) encompassing all motion, or None
                 - motion_mask: binary mask at detection scale (for debugging)
         """
-        h, w = frame.shape[:2]
-        
-        # Downscale for motion detection (saves memory)
-        small_w = int(w * self.detection_scale)
-        small_h = int(h * self.detection_scale)
-        current_scaled_size = (small_w, small_h)
-        
-        # Reset history if scaled resolution changed (e.g., detection_scale changed)
-        if self.last_frame_size is not None and self.last_frame_size != current_scaled_size:
-            print(f"Motion detector: Scaled size changed from {self.last_frame_size} to {current_scaled_size}, resetting history")
-            self.frame_history.clear()
-            self.background = None
-        self.last_frame_size = current_scaled_size
-        
-        # OPTIMIZATION J: Use GPU acceleration if available
-        if self.use_gpu:
-            # Upload to GPU
-            frame_gpu = cv2.UMat(frame)
-            small_frame_gpu = cv2.resize(frame_gpu, (small_w, small_h), interpolation=cv2.INTER_AREA)
-            gray_gpu = cv2.cvtColor(small_frame_gpu, cv2.COLOR_BGR2GRAY)
-            gray = cv2.GaussianBlur(gray_gpu, (self.blur_size, self.blur_size), 0).get()
-        else:
-            # CPU path (original)
-            small_frame = cv2.resize(frame, (small_w, small_h), interpolation=cv2.INTER_AREA)
-            gray = cv2.cvtColor(small_frame, cv2.COLOR_BGR2GRAY)
-            gray = cv2.GaussianBlur(gray, (self.blur_size, self.blur_size), 0)
-        
-        # Build background model
-        self.frame_history.append(gray.astype(np.float32))
-        
-        if len(self.frame_history) < self.history_frames:
-            # Not enough history yet
-            return {
-                "motion_detected": False,
-                "regions": [],
-                "combined_region": None,
-                "motion_mask": None
-            }
-        
-        # Average background
-        self.background = np.mean(list(self.frame_history), axis=0).astype(np.uint8)
-        
-        # Compute absolute difference
-        frame_delta = cv2.absdiff(self.background, gray)
-        
-        # Threshold to binary
-        _, thresh = cv2.threshold(frame_delta, self.motion_threshold, 255, cv2.THRESH_BINARY)
-        
-        # Dilate to fill gaps
-        thresh = cv2.dilate(thresh, None, iterations=2)
-        
-        # Find contours
-        contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        
-        # Filter by area and get bounding boxes
-        motion_regions = []
-        scale_x = w / small_w
-        scale_y = h / small_h
-        
-        for contour in contours:
-            area = cv2.contourArea(contour)
-            if area < self.min_area * (self.detection_scale ** 2):
-                continue
-                
-            # Get bounding box and scale to original resolution
-            x, y, cw, ch = cv2.boundingRect(contour)
-            x = int(x * scale_x)
-            y = int(y * scale_y)
-            cw = int(cw * scale_x)
-            ch = int(ch * scale_y)
+        with self._lock:
+            h, w = frame.shape[:2]
             
-            # Add padding (20%)
-            pad_x = int(cw * 0.2)
-            pad_y = int(ch * 0.2)
-            x = max(0, x - pad_x)
-            y = max(0, y - pad_y)
-            cw = min(w - x, cw + 2 * pad_x)
-            ch = min(h - y, ch + 2 * pad_y)
+            # Downscale for motion detection (saves memory)
+            small_w = int(w * self.detection_scale)
+            small_h = int(h * self.detection_scale)
+            current_scaled_size = (small_w, small_h)
             
-            motion_regions.append((x, y, cw, ch))
-        
-        # Combine overlapping regions
-        motion_regions = self._merge_overlapping_regions(motion_regions)
-        
-        # Update motion state
-        if motion_regions:
-            self.motion_detected = True
-            self.motion_regions = motion_regions
-            self.motion_frame_count += 1
-            self.cooldown_frames = self.cooldown_after_motion
-        else:
-            if self.cooldown_frames > 0:
-                self.cooldown_frames -= 1
-                # Keep previous regions during cooldown
+            # Reset history if scaled resolution changed (e.g., detection_scale changed)
+            if self.last_frame_size is not None and self.last_frame_size != current_scaled_size:
+                print(f"Motion detector: Scaled size changed from {self.last_frame_size} to {current_scaled_size}, resetting history")
+                self.frame_history.clear()
+                self.background = None
+            self.last_frame_size = current_scaled_size
+            
+            # OPTIMIZATION J: Use GPU acceleration if available
+            if self.use_gpu:
+                # Upload to GPU
+                frame_gpu = cv2.UMat(frame)
+                small_frame_gpu = cv2.resize(frame_gpu, (small_w, small_h), interpolation=cv2.INTER_AREA)
+                gray_gpu = cv2.cvtColor(small_frame_gpu, cv2.COLOR_BGR2GRAY)
+                gray = cv2.GaussianBlur(gray_gpu, (self.blur_size, self.blur_size), 0).get()
             else:
-                self.motion_detected = False
-                self.motion_regions = []
-                self.motion_frame_count = 0
-        
-        # Compute combined region
-        combined_region = None
-        if self.motion_regions:
-            min_x = min(r[0] for r in self.motion_regions)
-            min_y = min(r[1] for r in self.motion_regions)
-            max_x = max(r[0] + r[2] for r in self.motion_regions)
-            max_y = max(r[1] + r[3] for r in self.motion_regions)
-            combined_region = (min_x, min_y, max_x - min_x, max_y - min_y)
-        
-        return {
-            "motion_detected": self.motion_detected or self.cooldown_frames > 0,
-            "regions": self.motion_regions,
-            "combined_region": combined_region,
-            "motion_mask": thresh
-        }
+                # CPU path (original)
+                small_frame = cv2.resize(frame, (small_w, small_h), interpolation=cv2.INTER_AREA)
+                gray = cv2.cvtColor(small_frame, cv2.COLOR_BGR2GRAY)
+                gray = cv2.GaussianBlur(gray, (self.blur_size, self.blur_size), 0)
+            
+            # Build background model
+            self.frame_history.append(gray.astype(np.float32))
+            
+            if len(self.frame_history) < self.history_frames:
+                # Not enough history yet
+                return {
+                    "motion_detected": False,
+                    "regions": [],
+                    "combined_region": None,
+                    "motion_mask": None
+                }
+            
+            # Average background
+            self.background = np.mean(list(self.frame_history), axis=0).astype(np.uint8)
+            
+            # Compute absolute difference
+            frame_delta = cv2.absdiff(self.background, gray)
+            
+            # Threshold to binary
+            _, thresh = cv2.threshold(frame_delta, self.motion_threshold, 255, cv2.THRESH_BINARY)
+            
+            # Dilate to fill gaps
+            thresh = cv2.dilate(thresh, None, iterations=2)
+            
+            # Find contours
+            contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            
+            # Filter by area and get bounding boxes
+            motion_regions = []
+            scale_x = w / small_w
+            scale_y = h / small_h
+            
+            for contour in contours:
+                area = cv2.contourArea(contour)
+                if area < self.min_area * (self.detection_scale ** 2):
+                    continue
+                    
+                # Get bounding box and scale to original resolution
+                x, y, cw, ch = cv2.boundingRect(contour)
+                x = int(x * scale_x)
+                y = int(y * scale_y)
+                cw = int(cw * scale_x)
+                ch = int(ch * scale_y)
+                
+                # Add padding (20%)
+                pad_x = int(cw * 0.2)
+                pad_y = int(ch * 0.2)
+                x = max(0, x - pad_x)
+                y = max(0, y - pad_y)
+                cw = min(w - x, cw + 2 * pad_x)
+                ch = min(h - y, ch + 2 * pad_y)
+                
+                motion_regions.append((x, y, cw, ch))
+            
+            # Combine overlapping regions
+            motion_regions = self._merge_overlapping_regions(motion_regions)
+            
+            # Update motion state
+            if motion_regions:
+                self.motion_detected = True
+                self.motion_regions = motion_regions
+                self.motion_frame_count += 1
+                self.cooldown_frames = self.cooldown_after_motion
+            else:
+                if self.cooldown_frames > 0:
+                    self.cooldown_frames -= 1
+                    # Keep previous regions during cooldown
+                else:
+                    self.motion_detected = False
+                    self.motion_regions = []
+                    self.motion_frame_count = 0
+            
+            # Compute combined region
+            combined_region = None
+            if self.motion_regions:
+                min_x = min(r[0] for r in self.motion_regions)
+                min_y = min(r[1] for r in self.motion_regions)
+                max_x = max(r[0] + r[2] for r in self.motion_regions)
+                max_y = max(r[1] + r[3] for r in self.motion_regions)
+                combined_region = (min_x, min_y, max_x - min_x, max_y - min_y)
+            
+            return {
+                "motion_detected": self.motion_detected or self.cooldown_frames > 0,
+                "regions": self.motion_regions,
+                "combined_region": combined_region,
+                "motion_mask": thresh
+            }
     
     def _merge_overlapping_regions(self, regions, overlap_thresh=0.3):
         """Merge overlapping bounding boxes"""
