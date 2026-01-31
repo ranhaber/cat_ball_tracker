@@ -259,7 +259,7 @@ echo "━━━━━━━━━━━━━━━━━━━━━━━━�
 echo "Step 10: Creating systemd service for auto-start..."
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
-SERVICE_FILE="/etc/systemd/system/cat-tracker.service"
+SERVICE_FILE="/etc/systemd/system/cat-dome.service"
 
 sudo tee "$SERVICE_FILE" > /dev/null << EOF
 [Unit]
@@ -287,15 +287,15 @@ EOF
 chmod +x "$PROJECT_DIR/start_Cat_Dome.sh" 2>/dev/null || print_warning "start_Cat_Dome.sh not found yet"
 
 sudo systemctl daemon-reload
-print_status "Systemd service created: cat-tracker.service"
+print_status "Systemd service created: cat-dome.service"
 echo ""
 echo "  To enable auto-start on boot:"
-echo "    sudo systemctl enable cat-tracker"
+echo "    sudo systemctl enable cat-dome"
 echo ""
 echo "  To start/stop/status:"
-echo "    sudo systemctl start cat-tracker"
-echo "    sudo systemctl stop cat-tracker"
-echo "    sudo systemctl status cat-tracker"
+echo "    sudo systemctl start cat-dome"
+echo "    sudo systemctl stop cat-dome"
+echo "    sudo systemctl status cat-dome"
 
 # ============================================================================
 # Summary

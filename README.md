@@ -96,7 +96,7 @@ cat_ball_tracker/
 ├── config.py                    # Configuration settings
 ├── main.py                      # Application entry point (v1.5.0)
 ├── settings.py                  # Settings persistence
-├── cat_ball_tracker.service     # Systemd service file
+├── cat_dome.service             # Systemd service file
 │
 ├── camera/
 │   ├── __init__.py
@@ -170,15 +170,15 @@ Open browser: `http://<raspberry-pi-ip>:5000`
 chmod +x start_Cat_Dome.sh
 
 # Copy service file
-sudo cp cat_ball_tracker.service /etc/systemd/system/
+sudo cp cat_dome.service /etc/systemd/system/
 
 # Enable and start
 sudo systemctl daemon-reload
-sudo systemctl enable cat_ball_tracker
-sudo systemctl start cat_ball_tracker
+sudo systemctl enable cat_dome
+sudo systemctl start cat_dome
 
 # Check status
-sudo systemctl status cat_ball_tracker
+sudo systemctl status cat_dome
 
 # View logs
 sudo journalctl -u cat_ball_tracker -f
@@ -343,7 +343,7 @@ sudo journalctl -u cat_ball_tracker -n 50
 ### Service fails with "exit code 203/EXEC"
 - The `start_Cat_Dome.sh` script is not executable
 - Fix: `chmod +x ~/cat_ball_tracker/start_Cat_Dome.sh`
-- Then restart: `sudo systemctl restart cat_ball_tracker`
+- Then restart: `sudo systemctl restart cat_dome`
 
 ---
 

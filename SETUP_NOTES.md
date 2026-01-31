@@ -43,7 +43,7 @@ If you just cloned the repo and the service won't start:
 ```bash
 cd ~/cat_ball_tracker
 chmod +x start_Cat_Dome.sh
-sudo systemctl restart cat_ball_tracker
+sudo systemctl restart cat_dome
 ```
 
 ---

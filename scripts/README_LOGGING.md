@@ -21,9 +21,9 @@ git pull
 chmod +x start_Cat_Dome.sh
 
 # Install/update the service file
-sudo cp cat_ball_tracker.service /etc/systemd/system/
+sudo cp cat_dome.service /etc/systemd/system/
 sudo systemctl daemon-reload
-sudo systemctl restart cat_ball_tracker
+sudo systemctl restart cat_dome
 ```
 
 That's it! Logs will be automatically created in `~/cat_ball_tracker/logs/`
