@@ -333,6 +333,12 @@ function initProfileSelector() {
                     const data = await response.json();
                     console.log(`Profile changed to: ${data.profile}`, data.settings);
                     
+                    // Reload all UI settings to reflect profile changes
+                    await loadThreshold();
+                    await loadMotionSettings();
+                    await loadConfirmFrames();
+                    await updateStatus();
+                    
                     // Show brief success indicator
                     showNotification(`✅ Switched to ${data.settings.name} profile`, 'success');
                 } else {

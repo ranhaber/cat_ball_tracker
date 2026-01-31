@@ -131,6 +131,7 @@
                             </label>
                         </div>
                         <p class="hint">ℹ️ Changes apply immediately. Settings are saved.</p>
+                        <p class="hint" style="margin-top: 10px;"><strong>Profile Controls:</strong> JPEG Quality, AI Crop Size, Motion Scale, Motion Threshold, Min Area, TFLite Threads</p>
                     </div>
                     
                     <!-- Detection Mode Toggle -->
@@ -151,7 +152,7 @@
 
                     <!-- Resolution Selector -->
                     <div class="control-section">
-                        <h2>Camera Resolution</h2>
+                        <h2>Camera Resolution <small style="color: #888;">(Profile-independent)</small></h2>
                         <p>Select resolution (higher = slower but sharper):</p>
                         <select id="resolution-select" class="resolution-select">
                             <option value="320x240">320x240 (Fast)</option>
@@ -166,7 +167,7 @@
 
                     <!-- Performance Settings -->
                     <div class="control-section">
-                        <h2>Performance</h2>
+                        <h2>Performance <small style="color: #888;">(Profile-independent settings)</small></h2>
                         <p>Frame skip (higher = faster, less accurate):</p>
                         <select id="frameskip-select" class="resolution-select">
                             <option value="1">1 - Every frame (slow)</option>
@@ -176,14 +177,14 @@
                             <option value="5">5 - Every 5th frame (fastest)</option>
                         </select>
                         
-                        <p style="margin-top: 15px;">Detection threshold:</p>
+                        <p style="margin-top: 15px;">Detection threshold: <small style="color: #888;">(Profile-independent)</small></p>
                         <div class="threshold-control">
                             <input type="range" id="threshold-slider" min="10" max="90" value="30" step="5">
                             <span id="threshold-value">30%</span>
                         </div>
                         <p class="hint">Lower = more detections (may include false positives)<br>Higher = fewer but more accurate detections</p>
                         
-                        <p style="margin-top: 15px;">Confirmation frames:</p>
+                        <p style="margin-top: 15px;">Confirmation frames: <small style="color: #888;">(Profile-independent)</small></p>
                         <div class="threshold-control">
                             <input type="range" id="confirm-slider" min="1" max="5" value="1" step="1">
                             <span id="confirm-value">1</span>
@@ -279,7 +280,7 @@
         </main>
 
         <footer>
-            <p>Cat Dome - Detection & Tracking System | <span id="version">v1.6.4</span></p>
+            <p>Cat Dome - Detection & Tracking System | <span id="version">v1.6.5</span></p>
         </footer>
     </div>
 
