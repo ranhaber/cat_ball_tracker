@@ -74,6 +74,34 @@ class MotionDetector:
         self.motion_regions = []
         self.motion_frame_count = 0
         self.cooldown_frames = 0
+    
+    def update_parameters(self, detection_scale=None, motion_threshold=None, min_area=None):
+        """
+        Update detection parameters and reset history if scale changes.
+        
+        Args:
+            detection_scale: New scale factor (will reset history)
+            motion_threshold: New threshold value
+            min_area: New minimum area
+        """
+        scale_changed = False
+        
+        if detection_scale is not None and detection_scale != self.detection_scale:
+            self.detection_scale = detection_scale
+            scale_changed = True
+        
+        if motion_threshold is not None:
+            self.motion_threshold = motion_threshold
+        
+        if min_area is not None:
+            self.min_area = min_area
+        
+        # Clear history if scale changed (frame sizes will be different)
+        if scale_changed:
+            print(f"Motion detector: Scale changed to {self.detection_scale}, clearing history")
+            self.frame_history.clear()
+            self.background = None
+            self.last_frame_size = None
         
     def detect(self, frame):
         """
@@ -90,18 +118,18 @@ class MotionDetector:
                 - motion_mask: binary mask at detection scale (for debugging)
         """
         h, w = frame.shape[:2]
-        current_size = (w, h)
-        
-        # Reset history if resolution changed
-        if self.last_frame_size is not None and self.last_frame_size != current_size:
-            print(f"Motion detector: Resolution changed from {self.last_frame_size} to {current_size}, resetting history")
-            self.frame_history.clear()
-            self.background = None
-        self.last_frame_size = current_size
         
         # Downscale for motion detection (saves memory)
         small_w = int(w * self.detection_scale)
         small_h = int(h * self.detection_scale)
+        current_scaled_size = (small_w, small_h)
+        
+        # Reset history if scaled resolution changed (e.g., detection_scale changed)
+        if self.last_frame_size is not None and self.last_frame_size != current_scaled_size:
+            print(f"Motion detector: Scaled size changed from {self.last_frame_size} to {current_scaled_size}, resetting history")
+            self.frame_history.clear()
+            self.background = None
+        self.last_frame_size = current_scaled_size
         
         # OPTIMIZATION J: Use GPU acceleration if available
         if self.use_gpu:

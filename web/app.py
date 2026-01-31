@@ -765,12 +765,13 @@ class VideoProcessor:
         # Update JPEG quality
         self.current_jpeg_quality = profile["jpeg_quality"]
         
-        # Update motion detection settings
+        # Update motion detection settings (safely handles history reset)
         if self.motion_detector:
-            self.motion_detector.detection_scale = profile["motion_scale"]
-            self.motion_detector.motion_threshold = profile["motion_threshold"]
-            self.motion_detector.min_area = profile["motion_min_area"]
-            self.motion_detector.reset()  # Clear history with new settings
+            self.motion_detector.update_parameters(
+                detection_scale=profile["motion_scale"],
+                motion_threshold=profile["motion_threshold"],
+                min_area=profile["motion_min_area"]
+            )
         
         # Update TFLite thread count (requires model reload if changed)
         if self.detector and profile["tflite_threads"] != self.detector.num_threads:
