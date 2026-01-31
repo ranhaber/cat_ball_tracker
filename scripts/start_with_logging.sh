@@ -29,8 +29,16 @@ echo "" >> "$LOG_FILE"
 # Create symlink to latest log
 ln -sf "$LOG_FILE" "$LOG_DIR/latest.log"
 
-# Start journalctl logging in background (follows service logs)
-journalctl -u cat_ball_tracker -f --no-pager >> "$LOG_FILE" 2>&1 &
+# First, dump all logs from current boot for this service
+echo "Capturing existing session logs..." >> "$LOG_FILE"
+journalctl -u cat_ball_tracker --boot --no-pager >> "$LOG_FILE" 2>&1
+
+echo "" >> "$LOG_FILE"
+echo "========== Live Logging Started at $(date '+%Y-%m-%d %H:%M:%S') ==========" >> "$LOG_FILE"
+echo "" >> "$LOG_FILE"
+
+# Now start following new logs in background
+journalctl -u cat_ball_tracker -f --no-pager --since "$(date '+%Y-%m-%d %H:%M:%S')" >> "$LOG_FILE" 2>&1 &
 JOURNAL_PID=$!
 
 # Save PID for cleanup
