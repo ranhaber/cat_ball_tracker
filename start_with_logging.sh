@@ -36,9 +36,8 @@ find "$LOG_DIR" -name "journal_*.log" -type f -mtime +7 -delete 2>/dev/null || t
 
 # Start the application with output redirected to log file AND stdout (for systemd journal)
 # Use -u flag to force unbuffered output so logs appear immediately
-# Add timestamp to each line
+# Add timestamp to each line using awk with line buffering
 cd /home/ranhaber/cat_ball_tracker
 exec /home/ranhaber/cat_ball_tracker/venv/bin/python -u main.py 2>&1 | \
-  while IFS= read -r line; do
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $line"
-  done | tee -a "$LOG_FILE"
+  awk '{ print strftime("[%Y-%m-%d %H:%M:%S]"), $0; fflush(); }' | \
+  tee -a "$LOG_FILE"
