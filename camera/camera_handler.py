@@ -198,10 +198,14 @@ class CameraHandler:
             )
             
             self.camera.configure(camera_config)
-            self.camera.start()
             
-            # FOV Verification: RAW stream at 2304×1296 confirms 2×2 binning (120° FOV preserved)
-            print(f"✅ Camera configured: {self.width}×{self.height} (2×2 binned, full 120° FOV)")
+            print(f"📷 Starting camera at {self.width}×{self.height}...")
+            try:
+                self.camera.start()
+                print(f"✅ Camera started successfully (2×2 binned, full 120° FOV)")
+            except Exception as e:
+                print(f"❌ Camera start failed: {e}")
+                raise
             
         except Exception as e:
             print(f"⚠️  Camera initialization failed: {e}")
