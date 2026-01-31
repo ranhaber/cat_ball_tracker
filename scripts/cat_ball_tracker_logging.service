@@ -1,0 +1,20 @@
+[Unit]
+Description=Cat Ball Tracker - Journal Logging Service
+After=cat_ball_tracker.service
+BindsTo=cat_ball_tracker.service
+
+[Service]
+Type=forking
+User=ranhaber
+WorkingDirectory=/home/ranhaber/cat_ball_tracker
+ExecStart=/home/ranhaber/cat_ball_tracker/scripts/start_with_logging.sh
+ExecStop=/home/ranhaber/cat_ball_tracker/scripts/stop_logging.sh
+Restart=no
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=cat_ball_tracker_logging
+
+[Install]
+WantedBy=multi-user.target

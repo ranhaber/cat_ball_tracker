@@ -33,6 +33,7 @@ models/*.onnx
 
 # Logs
 *.log
+logs/
 
 # Temporary files
 *.tmp
