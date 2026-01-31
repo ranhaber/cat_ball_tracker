@@ -238,8 +238,8 @@ class VideoProcessor:
                         # Motion-first mode: only run AI when motion detected
                         motion_result = self.motion_detector.detect(frame)
                         
-                        # Debug: log raw motion detection
-                        if motion_result["motion_detected"]:
+                        # Debug: log raw motion detection (only if config.DEBUG enabled)
+                        if motion_result["motion_detected"] and config.DEBUG:
                             print(f"[DEBUG] Motion detected: {len(motion_result['regions'])} regions")
                         
                         # Filter motion regions to only those inside perimeter
@@ -257,7 +257,9 @@ class VideoProcessor:
                                 if inside:
                                     motion_regions_in_perimeter.append(region)
                             
-                            print(f"[DEBUG] Perimeter has {perimeter_points} points, {len(motion_regions_in_perimeter)}/{len(motion_result['regions'])} regions inside")
+                            # Only log if config.DEBUG or if motion inside perimeter (interesting event)
+                            if config.DEBUG or len(motion_regions_in_perimeter) > 0:
+                                print(f"[DEBUG] Perimeter has {perimeter_points} points, {len(motion_regions_in_perimeter)}/{len(motion_result['regions'])} regions inside")
                             self.motion_detected = len(motion_regions_in_perimeter) > 0
                         else:
                             self.motion_detected = False
