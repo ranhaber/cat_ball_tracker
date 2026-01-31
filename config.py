@@ -143,7 +143,7 @@ PERFORMANCE_PROFILES = {
         "estimated_fps": "5-7 FPS",
         "estimated_ram": "220MB",
         "estimated_cpu": "65%",
-        "detection_range": "0-10m"
+        "detection_range": "0-12m"
     },
     "performance": {
         "name": "Performance (13m)",
@@ -171,7 +171,7 @@ PERFORMANCE_PROFILES = {
         "estimated_fps": "3-5 FPS",
         "estimated_ram": "240MB",
         "estimated_cpu": "75%",
-        "detection_range": "0-8m (high detail)"
+        "detection_range": "0-12m (high detail)"
     }
 }
 
