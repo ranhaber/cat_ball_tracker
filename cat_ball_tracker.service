@@ -7,7 +7,7 @@ Type=simple
 User=ranhaber
 WorkingDirectory=/home/ranhaber/cat_ball_tracker
 Environment=PATH=/home/ranhaber/cat_ball_tracker/venv/bin:/usr/bin
-ExecStart=/home/ranhaber/cat_ball_tracker/start_with_logging.sh
+ExecStart=/home/ranhaber/cat_ball_tracker/start_Cat_Dome.sh
 Restart=on-failure
 RestartSec=10
 

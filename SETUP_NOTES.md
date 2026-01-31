@@ -2,7 +2,7 @@
 
 ## Git Executable Permission Issue
 
-**Problem**: When cloning this repository on Linux/Raspberry Pi, the `start_with_logging.sh` script may not have execute permissions, causing the systemd service to fail with "exit code 203/EXEC".
+**Problem**: When cloning this repository on Linux/Raspberry Pi, the `start_Cat_Dome.sh` script may not have execute permissions, causing the systemd service to fail with "exit code 203/EXEC".
 
 **Root Cause**: The repository is maintained from Windows, which doesn't properly track Unix executable bits in git.
 
@@ -16,17 +16,17 @@ If you're the repository maintainer and want to fix this for all future clones:
 cd ~/cat_ball_tracker
 
 # Set executable permission locally
-chmod +x start_with_logging.sh
+chmod +x start_Cat_Dome.sh
 
 # Update git index to track the executable bit
-git update-index --chmod=+x start_with_logging.sh
+git update-index --chmod=+x start_Cat_Dome.sh
 
 # Check that it's marked as executable (should show 100755)
-git ls-files --stage start_with_logging.sh
+git ls-files --stage start_Cat_Dome.sh
 
 # Commit the change
-git add start_with_logging.sh
-git commit -m "Set executable bit for start_with_logging.sh"
+git add start_Cat_Dome.sh
+git commit -m "Set executable bit for start_Cat_Dome.sh"
 
 # Push to remote
 git push
@@ -42,7 +42,7 @@ If you just cloned the repo and the service won't start:
 
 ```bash
 cd ~/cat_ball_tracker
-chmod +x start_with_logging.sh
+chmod +x start_Cat_Dome.sh
 sudo systemctl restart cat_ball_tracker
 ```
 
@@ -53,12 +53,12 @@ sudo systemctl restart cat_ball_tracker
 Check if the file is executable:
 
 ```bash
-ls -la start_with_logging.sh
+ls -la start_Cat_Dome.sh
 ```
 
 Should show: `-rwxr-xr-x` (with 'x' for execute permission)
 
-If it shows: `-rw-r--r--` (no 'x'), run `chmod +x start_with_logging.sh`
+If it shows: `-rw-r--r--` (no 'x'), run `chmod +x start_Cat_Dome.sh`
 
 ---
 

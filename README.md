@@ -142,7 +142,7 @@ git clone https://github.com/ranhaber/cat_ball_tracker.git cat_ball_tracker
 cd cat_ball_tracker
 
 # IMPORTANT: Set executable permissions for shell scripts
-chmod +x start_with_logging.sh
+chmod +x start_Cat_Dome.sh
 
 # Install system dependencies
 sudo apt update
@@ -166,8 +166,8 @@ Open browser: `http://<raspberry-pi-ip>:5000`
 ### Auto-Start on Boot
 
 ```bash
-# Ensure start_with_logging.sh is executable
-chmod +x start_with_logging.sh
+# Ensure start_Cat_Dome.sh is executable
+chmod +x start_Cat_Dome.sh
 
 # Copy service file
 sudo cp cat_ball_tracker.service /etc/systemd/system/
@@ -341,8 +341,8 @@ sudo journalctl -u cat_ball_tracker -n 50
 - Install from piwheels if Python version supported
 
 ### Service fails with "exit code 203/EXEC"
-- The `start_with_logging.sh` script is not executable
-- Fix: `chmod +x ~/cat_ball_tracker/start_with_logging.sh`
+- The `start_Cat_Dome.sh` script is not executable
+- Fix: `chmod +x ~/cat_ball_tracker/start_Cat_Dome.sh`
 - Then restart: `sudo systemctl restart cat_ball_tracker`
 
 ---

@@ -18,7 +18,7 @@ cd ~/cat_ball_tracker
 git pull
 
 # Make the wrapper script executable
-chmod +x start_with_logging.sh
+chmod +x start_Cat_Dome.sh
 
 # Install/update the service file
 sudo cp cat_ball_tracker.service /etc/systemd/system/
@@ -55,7 +55,7 @@ grep "Profile" ~/cat_ball_tracker/logs/*.log
 
 ### Change retention period:
 
-Edit `start_with_logging.sh` and change:
+Edit `start_Cat_Dome.sh` and change:
 ```bash
 find "$LOG_DIR" -name "journal_*.log" -type f -mtime +7 -delete
 ```
