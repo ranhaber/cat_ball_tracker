@@ -271,13 +271,20 @@ Type=simple
 User=$USER
 WorkingDirectory=$PROJECT_DIR
 Environment="PATH=$PROJECT_DIR/venv/bin:/usr/local/bin:/usr/bin:/bin"
-ExecStart=$PROJECT_DIR/venv/bin/python main.py
+ExecStart=$PROJECT_DIR/start_Cat_Dome.sh
 Restart=on-failure
-RestartSec=5
+RestartSec=10
+
+# Logging (goes to both journald AND dated log files via wrapper script)
+StandardOutput=journal
+StandardError=journal
 
 [Install]
 WantedBy=multi-user.target
 EOF
+
+# Make the startup script executable
+chmod +x "$PROJECT_DIR/start_Cat_Dome.sh" 2>/dev/null || print_warning "start_Cat_Dome.sh not found yet"
 
 sudo systemctl daemon-reload
 print_status "Systemd service created: cat-tracker.service"
