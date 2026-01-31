@@ -200,6 +200,38 @@ class CameraHandler:
             self.camera.configure(camera_config)
             self.camera.start()
             
+            # DIAGNOSTIC: Verify sensor mode and FOV after start (v1.8.1)
+            print(f"🔍 Camera Configuration Verification:")
+            print(f"   Requested: {self.width}×{self.height}")
+            
+            # Check ScalerCrop to verify no cropping
+            try:
+                # Capture one frame to get metadata
+                time.sleep(0.1)  # Brief wait for camera to stabilize
+                metadata = self.camera.capture_metadata()
+                scaler_crop = metadata.get("ScalerCrop", None)
+                sensor_mode = metadata.get("SensorMode", None)
+                
+                if sensor_mode:
+                    print(f"   Sensor Mode: {sensor_mode}")
+                
+                if scaler_crop:
+                    crop_x, crop_y, crop_w, crop_h = scaler_crop
+                    print(f"   ScalerCrop: ({crop_x}, {crop_y}, {crop_w}, {crop_h})")
+                    
+                    # For IMX708 WIDE, full sensor is 4608×2592
+                    # 2×2 binned should be 2304×1296 with full width
+                    if crop_w == 4608 and crop_h == 2592:
+                        print(f"   ✅ Using FULL SENSOR: 4608×2592 (120° FOV)")
+                    elif crop_w == 2304 and crop_h == 1296:
+                        print(f"   ✅ Using 2×2 BINNED MODE: 2304×1296 (120° FOV)")
+                    else:
+                        print(f"   ⚠️  WARNING: Unexpected sensor crop! May have reduced FOV!")
+                        print(f"   ⚠️  Expected 4608×2592 or 2304×1296, got {crop_w}×{crop_h}")
+            except Exception as e:
+                print(f"   ⚠️  Could not verify sensor mode: {e}")
+                print(f"   (Assuming correct configuration)")
+            
         except Exception as e:
             print(f"⚠️  Camera initialization failed: {e}")
             print("   Falling back to mock camera for testing...")
