@@ -25,11 +25,13 @@ Thumbs.db
 # Project specific - User settings (generated at runtime)
 settings.json
 perimeter.json
+calibration.json
 
 # Models (downloaded at runtime)
 models/*.tflite
 models/*.pt
 models/*.onnx
+models/labelmap.txt
 
 # Logs
 *.log
