@@ -36,4 +36,4 @@ find "$LOG_DIR" -name "journal_*.log" -type f -mtime +7 -delete 2>/dev/null || t
 
 # Start the application with output redirected to log file AND stdout (for systemd journal)
 cd /home/ranhaber/cat_ball_tracker
-exec python3 main.py 2>&1 | tee -a "$LOG_FILE"
+exec /home/ranhaber/cat_ball_tracker/venv/bin/python main.py 2>&1 | tee -a "$LOG_FILE"
