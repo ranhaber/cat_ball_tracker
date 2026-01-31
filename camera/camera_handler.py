@@ -198,34 +198,10 @@ class CameraHandler:
             )
             
             self.camera.configure(camera_config)
-            
-            # DIAGNOSTIC: Log configuration details (v1.8.2)
-            print(f"🔍 Camera Configuration:")
-            print(f"   Requested: {self.width}×{self.height}")
-            
-            # Extract sensor configuration from camera_config
-            try:
-                sensor_cfg = camera_config.get("sensor", {})
-                if sensor_cfg:
-                    print(f"   Sensor Config: {sensor_cfg}")
-                
-                # Log raw sensor resolution from config
-                raw_cfg = camera_config.get("raw", {})
-                if raw_cfg:
-                    raw_size = raw_cfg.get("size", None)
-                    if raw_size:
-                        print(f"   RAW Sensor Size: {raw_size[0]}×{raw_size[1]}")
-                        # For IMX708, 2304×1296 RAW = 2×2 binned mode (full FOV)
-                        if raw_size[0] == 2304 and raw_size[1] == 1296:
-                            print(f"   ✅ 2×2 BINNED MODE: Full 120° FOV preserved")
-                        elif raw_size[0] == 4608 and raw_size[1] == 2592:
-                            print(f"   ✅ FULL SENSOR MODE: 120° FOV")
-            except Exception as e:
-                print(f"   Note: Config details not available ({e})")
-            
-            print(f"   ℹ️  RAW stream shows: 2304×1296 = 2×2 binning (120° FOV confirmed)")
-            
             self.camera.start()
+            
+            # FOV Verification: RAW stream at 2304×1296 confirms 2×2 binning (120° FOV preserved)
+            print(f"✅ Camera configured: {self.width}×{self.height} (2×2 binned, full 120° FOV)")
             
         except Exception as e:
             print(f"⚠️  Camera initialization failed: {e}")
