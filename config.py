@@ -155,17 +155,17 @@ PERFORMANCE_PROFILES = {
     },
     "performance": {
         "name": "Performance",
-        "description": "Maximum speed: Best for real-time tracking",
-        "jpeg_quality": 55,
-        "motion_crop_size": (250, 250),
-        "motion_scale": 0.2,
-        "motion_threshold": 22,
-        "motion_min_area": 200,
+        "description": "Optimized for 120° wide FOV: 0-8m reliable detection",
+        "jpeg_quality": 60,
+        "motion_crop_size": (280, 280),
+        "motion_scale": 0.25,
+        "motion_threshold": 18,
+        "motion_min_area": 80,
         "tflite_threads": 3,
-        "estimated_fps": "10-14 FPS",
-        "estimated_ram": "175MB",
-        "estimated_cpu": "55%",
-        "accuracy_impact": "-5%"
+        "estimated_fps": "8-12 FPS",
+        "estimated_ram": "180MB",
+        "estimated_cpu": "60%",
+        "accuracy_impact": "-3%"
     },
     "quality": {
         "name": "Quality",
