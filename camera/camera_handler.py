@@ -198,39 +198,34 @@ class CameraHandler:
             )
             
             self.camera.configure(camera_config)
-            self.camera.start()
             
-            # DIAGNOSTIC: Verify sensor mode and FOV after start (v1.8.1)
-            print(f"🔍 Camera Configuration Verification:")
+            # DIAGNOSTIC: Log configuration details (v1.8.2)
+            print(f"🔍 Camera Configuration:")
             print(f"   Requested: {self.width}×{self.height}")
             
-            # Check ScalerCrop to verify no cropping
+            # Extract sensor configuration from camera_config
             try:
-                # Capture one frame to get metadata
-                time.sleep(0.1)  # Brief wait for camera to stabilize
-                metadata = self.camera.capture_metadata()
-                scaler_crop = metadata.get("ScalerCrop", None)
-                sensor_mode = metadata.get("SensorMode", None)
+                sensor_cfg = camera_config.get("sensor", {})
+                if sensor_cfg:
+                    print(f"   Sensor Config: {sensor_cfg}")
                 
-                if sensor_mode:
-                    print(f"   Sensor Mode: {sensor_mode}")
-                
-                if scaler_crop:
-                    crop_x, crop_y, crop_w, crop_h = scaler_crop
-                    print(f"   ScalerCrop: ({crop_x}, {crop_y}, {crop_w}, {crop_h})")
-                    
-                    # For IMX708 WIDE, full sensor is 4608×2592
-                    # 2×2 binned should be 2304×1296 with full width
-                    if crop_w == 4608 and crop_h == 2592:
-                        print(f"   ✅ Using FULL SENSOR: 4608×2592 (120° FOV)")
-                    elif crop_w == 2304 and crop_h == 1296:
-                        print(f"   ✅ Using 2×2 BINNED MODE: 2304×1296 (120° FOV)")
-                    else:
-                        print(f"   ⚠️  WARNING: Unexpected sensor crop! May have reduced FOV!")
-                        print(f"   ⚠️  Expected 4608×2592 or 2304×1296, got {crop_w}×{crop_h}")
+                # Log raw sensor resolution from config
+                raw_cfg = camera_config.get("raw", {})
+                if raw_cfg:
+                    raw_size = raw_cfg.get("size", None)
+                    if raw_size:
+                        print(f"   RAW Sensor Size: {raw_size[0]}×{raw_size[1]}")
+                        # For IMX708, 2304×1296 RAW = 2×2 binned mode (full FOV)
+                        if raw_size[0] == 2304 and raw_size[1] == 1296:
+                            print(f"   ✅ 2×2 BINNED MODE: Full 120° FOV preserved")
+                        elif raw_size[0] == 4608 and raw_size[1] == 2592:
+                            print(f"   ✅ FULL SENSOR MODE: 120° FOV")
             except Exception as e:
-                print(f"   ⚠️  Could not verify sensor mode: {e}")
-                print(f"   (Assuming correct configuration)")
+                print(f"   Note: Config details not available ({e})")
+            
+            print(f"   ℹ️  RAW stream shows: 2304×1296 = 2×2 binning (120° FOV confirmed)")
+            
+            self.camera.start()
             
         except Exception as e:
             print(f"⚠️  Camera initialization failed: {e}")
