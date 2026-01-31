@@ -35,5 +35,6 @@ ln -sf "$LOG_FILE" "$LOG_DIR/latest.log"
 find "$LOG_DIR" -name "journal_*.log" -type f -mtime +7 -delete 2>/dev/null || true
 
 # Start the application with output redirected to log file AND stdout (for systemd journal)
+# Use -u flag to force unbuffered output so logs appear immediately
 cd /home/ranhaber/cat_ball_tracker
-exec /home/ranhaber/cat_ball_tracker/venv/bin/python main.py 2>&1 | tee -a "$LOG_FILE"
+exec /home/ranhaber/cat_ball_tracker/venv/bin/python -u main.py 2>&1 | tee -a "$LOG_FILE"
