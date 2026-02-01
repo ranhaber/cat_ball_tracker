@@ -119,7 +119,9 @@ DETECTION_FRAME_SKIP = 2
 USE_THREADED_CAPTURE = True
 
 # Number of threads for TFLite inference
-TFLITE_NUM_THREADS = 4  # Use all 4 cores of RPi Zero 2W
+# Reduced from 4 to 3 to leave one core for system tasks
+# This improves overall responsiveness and reduces memory pressure
+TFLITE_NUM_THREADS = 3  # Use 3 of 4 cores (leave 1 for system)
 
 # OPTIMIZATION J: Enable GPU acceleration (OpenCL/UMat) if available
 # Set to True to attempt GPU-accelerated operations
@@ -134,43 +136,43 @@ PERFORMANCE_PROFILES = {
     "balanced": {
         "name": "Balanced",
         "description": "Recommended: Best trade-off between speed and quality",
-        "jpeg_quality": 65,
-        "motion_crop_size": (400, 400),
+        "jpeg_quality": 60,  # Reduced from 65 to save memory
+        "motion_crop_size": (380, 380),  # Reduced from 400 to save RAM
         "motion_scale": 0.30,
         "motion_threshold": 18,
         "motion_min_area": 80,
         "tflite_threads": 3,
         "estimated_fps": "5-7 FPS",
-        "estimated_ram": "220MB",
-        "estimated_cpu": "65%",
+        "estimated_ram": "190MB",  # Updated estimate
+        "estimated_cpu": "55-60%",  # Updated estimate
         "detection_range": "0-12m"
     },
     "performance": {
         "name": "Performance (13m)",
         "description": "Optimized for 13m max distance detection",
-        "jpeg_quality": 60,
-        "motion_crop_size": (420, 420),
+        "jpeg_quality": 55,  # Reduced from 60 to save memory
+        "motion_crop_size": (400, 400),  # Reduced from 420 to save RAM
         "motion_scale": 0.35,
         "motion_threshold": 18,
         "motion_min_area": 50,
         "tflite_threads": 3,
         "estimated_fps": "4-6 FPS",
-        "estimated_ram": "220MB",
-        "estimated_cpu": "60%",
+        "estimated_ram": "200MB",  # Updated estimate
+        "estimated_cpu": "55-65%",  # Updated estimate
         "detection_range": "0-13m"
     },
     "quality": {
         "name": "Quality",
         "description": "Best accuracy for close-range detailed detection",
-        "jpeg_quality": 75,
-        "motion_crop_size": (480, 480),
+        "jpeg_quality": 70,  # Reduced from 75 to save memory
+        "motion_crop_size": (450, 450),  # Reduced from 480 to save RAM
         "motion_scale": 0.35,
         "motion_threshold": 15,
         "motion_min_area": 80,
-        "tflite_threads": 4,
+        "tflite_threads": 3,  # Reduced from 4 to leave headroom
         "estimated_fps": "3-5 FPS",
-        "estimated_ram": "240MB",
-        "estimated_cpu": "75%",
+        "estimated_ram": "210MB",  # Updated estimate
+        "estimated_cpu": "65-70%",  # Updated estimate
         "detection_range": "0-12m (high detail)"
     }
 }
@@ -189,10 +191,10 @@ CAPTURE_RESOLUTION = (2304, 1296)  # Native 2x mode, best balance
 # Users can select this to balance bandwidth vs quality
 STREAM_RESOLUTION_OPTIONS = [
     (480, 270),     # Ultra Low - for slow connections
-    (640, 360),     # Low - mobile-friendly
-    (960, 540),     # Medium (default) - good balance
-    (1280, 720),    # High - HD quality
-    (1920, 1080),   # Ultra High - maximum quality
+    (640, 360),     # Low - mobile-friendly (RECOMMENDED for RPi Zero 2W)
+    (960, 540),     # Medium - good balance
+    (1280, 720),    # High - HD quality (may cause lag on RPi Zero 2W)
+    (1920, 1080),   # Ultra High - maximum quality (not recommended)
 ]
 
 # Available frame rate options
@@ -203,7 +205,8 @@ FRAME_SKIP_OPTIONS = [1, 2, 3, 4, 5]
 
 # Default performance settings
 DEFAULT_RESOLUTION = (2304, 1296)   # 2x binned mode for 13m detection
-DEFAULT_STREAM_RESOLUTION = (960, 540)  # Medium stream quality
+# Changed to 640x360 to reduce memory pressure on RPi Zero 2W
+DEFAULT_STREAM_RESOLUTION = (640, 360)  # Low stream quality - saves RAM
 DEFAULT_FRAMERATE = 15
 DEFAULT_FRAME_SKIP = 2
 
