@@ -232,7 +232,8 @@ class VideoProcessor:
                 # Get frame from camera
                 frame = self.camera.get_frame()
                 if frame is None:
-                    time.sleep(0.01)
+                    # Wait for next frame based on camera FPS (reduces CPU spinning)
+                    time.sleep(1.0 / (self.current_framerate * 2))
                     continue
                 
                 frame_h, frame_w = frame.shape[:2]

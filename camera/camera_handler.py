@@ -222,11 +222,15 @@ class CameraHandler:
         """Threaded capture loop for continuous frame updates"""
         while self.running:
             try:
-                new_frame = self.camera.capture_array()
-                
-                # Add delay for mock camera to simulate real frame rate
                 if self.use_mock:
+                    # Mock camera: use old capture_array method with delay
+                    new_frame = self.camera.capture_array()
                     time.sleep(1.0 / self.fps)
+                else:
+                    # Real camera: use blocking capture_request (event-driven, no CPU waste)
+                    request = self.camera.capture_request()
+                    new_frame = request.make_array("main")
+                    request.release()
                 
                 # OPTIMIZATION A: Reuse frame buffer instead of creating new one
                 with self.frame_lock:
