@@ -7,7 +7,7 @@ Usage:
     python main.py [--host HOST] [--port PORT] [--debug]
 """
 
-__version__ = "1.8.7"
+__version__ = "1.8.8"
 
 import sys
 import argparse

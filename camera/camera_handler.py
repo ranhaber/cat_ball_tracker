@@ -200,9 +200,11 @@ class CameraHandler:
             self.camera.configure(camera_config)
             
             print(f"📷 Starting camera at {self.width}×{self.height}...")
+            print(f"📷 Camera config: {self.width}x{self.height} @ {self.fps} FPS")
             try:
                 self.camera.start()
                 print(f"✅ Camera started successfully (2×2 binned, full 120° FOV)")
+                print(f"✅ Camera REAL settings: {self.width}x{self.height} @ {self.fps} FPS, buffer_count=4")
             except Exception as e:
                 print(f"❌ Camera start failed: {e}")
                 raise
