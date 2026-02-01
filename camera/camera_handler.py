@@ -114,7 +114,7 @@ class MockCamera:
 class CameraHandler:
     """
     Handles camera capture from RPi Camera Module 3.
-    Uses threaded capture for better performance on RPi Zero 2W.
+    Uses event-driven callbacks for zero-CPU polling on RPi Zero 2W.
     """
     
     def __init__(self, width=None, height=None, fps=None):
@@ -134,7 +134,7 @@ class CameraHandler:
         self.frame = None
         self.frame_lock = threading.Lock()
         self.running = False
-        self.capture_thread = None
+        self.capture_thread = None  # Only used for mock camera
         self.use_mock = False  # Will be set in start()
         
         self._frame_count = 0
@@ -162,14 +162,15 @@ class CameraHandler:
         self._start_time = time.time()
         self.running = True
         
-        if config.USE_THREADED_CAPTURE:
-            self.capture_thread = threading.Thread(target=self._capture_loop, daemon=True)
+        # Only use threaded capture for mock camera (real camera uses callbacks)
+        if config.USE_THREADED_CAPTURE and self.use_mock:
+            self.capture_thread = threading.Thread(target=self._capture_loop_mock, daemon=True)
             self.capture_thread.start()
         
         # Camera warmup
         time.sleep(config.CAMERA_WARMUP)
         
-        camera_type = "MOCK" if self.use_mock else "REAL"
+        camera_type = "MOCK" if self.use_mock else "REAL (callback-driven)"
         print(f"Camera started ({camera_type}): {self.width}x{self.height} @ {self.fps}fps")
         
     def _init_picamera(self):
@@ -199,10 +200,14 @@ class CameraHandler:
             
             self.camera.configure(camera_config)
             
+            # Set up event-driven callback (called when frames are ready)
+            # This eliminates CPU-wasting polling loops!
+            self.camera.post_callback = self._frame_callback
+            
             print(f"📷 Starting camera at {self.width}×{self.height}...")
             try:
                 self.camera.start()
-                print(f"✅ Camera started successfully (2×2 binned, full 120° FOV)")
+                print(f"✅ Camera started successfully (2×2 binned, full 120° FOV, callback-driven)")
             except Exception as e:
                 print(f"❌ Camera start failed: {e}")
                 raise
@@ -217,20 +222,40 @@ class CameraHandler:
         """Initialize mock camera for testing"""
         self.camera = MockCamera(self.width, self.height)
         self.camera.start()
+    
+    def _frame_callback(self, request):
+        """
+        Event-driven callback called by picamera2 when a frame is ready.
+        This is called automatically by the camera - NO POLLING!
+        Runs in camera's thread, so keep it fast and thread-safe.
+        """
+        try:
+            # Extract frame from camera request (zero-copy operation)
+            new_frame = request.make_array("main")
+            
+            # OPTIMIZATION A: Store frame reference (thread-safe)
+            with self.frame_lock:
+                self.frame = new_frame
+                self._frame_count += 1
+                
+            # Update FPS calculation every second
+            elapsed = time.time() - self._start_time
+            if elapsed >= 1.0:
+                self._current_fps = self._frame_count / elapsed
+                self._frame_count = 0
+                self._start_time = time.time()
+                
+        except Exception as e:
+            print(f"Camera callback error: {e}")
         
-    def _capture_loop(self):
-        """Threaded capture loop for continuous frame updates"""
+        # CRITICAL: Request is auto-released by picamera2 after callback returns
+        
+    def _capture_loop_mock(self):
+        """Threaded capture loop ONLY for mock camera (no callbacks available)"""
         while self.running:
             try:
-                if self.use_mock:
-                    # Mock camera: use old capture_array method with delay
-                    new_frame = self.camera.capture_array()
-                    time.sleep(1.0 / self.fps)
-                else:
-                    # Real camera: use blocking capture_request (event-driven, no CPU waste)
-                    request = self.camera.capture_request()
-                    new_frame = request.make_array("main")
-                    request.release()
+                new_frame = self.camera.capture_array()
+                time.sleep(1.0 / self.fps)
                 
                 # OPTIMIZATION A: Reuse frame buffer instead of creating new one
                 with self.frame_lock:
@@ -245,7 +270,7 @@ class CameraHandler:
                     self._start_time = time.time()
                     
             except Exception as e:
-                print(f"Camera capture error: {e}")
+                print(f"Mock camera capture error: {e}")
                 time.sleep(0.1)
                 
     def get_frame(self):
