@@ -114,7 +114,7 @@ class MockCamera:
 class CameraHandler:
     """
     Handles camera capture from RPi Camera Module 3.
-    Uses event-driven callbacks for zero-CPU polling on RPi Zero 2W.
+    Uses captured_request() context manager for blocking/interrupt-driven capture.
     """
     
     def __init__(self, width=None, height=None, fps=None):
@@ -200,14 +200,10 @@ class CameraHandler:
             
             self.camera.configure(camera_config)
             
-            # Set up event-driven callback (called when frames are ready)
-            # This eliminates CPU-wasting polling loops!
-            self.camera.post_callback = self._frame_callback
-            
             print(f"📷 Starting camera at {self.width}×{self.height}...")
             try:
                 self.camera.start()
-                print(f"✅ Camera started successfully (2×2 binned, full 120° FOV, callback-driven)")
+                print(f"✅ Camera started successfully (2×2 binned, full 120° FOV)")
             except Exception as e:
                 print(f"❌ Camera start failed: {e}")
                 raise
@@ -223,33 +219,6 @@ class CameraHandler:
         self.camera = MockCamera(self.width, self.height)
         self.camera.start()
     
-    def _frame_callback(self, request):
-        """
-        Event-driven callback called by picamera2 when a frame is ready.
-        This is called automatically by the camera - NO POLLING!
-        Runs in camera's thread, so keep it fast and thread-safe.
-        """
-        try:
-            # Extract frame from camera request (zero-copy operation)
-            new_frame = request.make_array("main")
-            
-            # OPTIMIZATION A: Store frame reference (thread-safe)
-            with self.frame_lock:
-                self.frame = new_frame
-                self._frame_count += 1
-                
-            # Update FPS calculation every second
-            elapsed = time.time() - self._start_time
-            if elapsed >= 1.0:
-                self._current_fps = self._frame_count / elapsed
-                self._frame_count = 0
-                self._start_time = time.time()
-                
-        except Exception as e:
-            print(f"Camera callback error: {e}")
-        
-        # CRITICAL: Request is auto-released by picamera2 after callback returns
-        
     def _capture_loop_mock(self):
         """Threaded capture loop ONLY for mock camera (no callbacks available)"""
         while self.running:
@@ -272,6 +241,21 @@ class CameraHandler:
             except Exception as e:
                 print(f"Mock camera capture error: {e}")
                 time.sleep(0.1)
+    
+    def get_request(self):
+        """
+        Get a camera request (BLOCKING - waits for frame ready).
+        Use with context manager for auto-release.
+        
+        For real camera: Returns captured_request() context manager
+        For mock camera: Returns None (falls back to get_frame())
+        
+        Returns:
+            Context manager for captured_request, or None for mock camera
+        """
+        if self.use_mock:
+            return None
+        return self.camera.captured_request()
                 
     def get_frame(self):
         """

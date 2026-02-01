@@ -229,12 +229,20 @@ class VideoProcessor:
         
         while self.running:
             try:
-                # Get frame from camera
-                frame = self.camera.get_frame()
-                if frame is None:
-                    # Wait for next frame based on camera FPS (reduces CPU spinning)
-                    time.sleep(1.0 / (self.current_framerate * 2))
-                    continue
+                # Get frame from camera (BLOCKING - waits for frame ready, zero CPU!)
+                request = self.camera.get_request()
+                
+                if request is None:
+                    # Mock camera fallback (uses threaded capture)
+                    frame = self.camera.get_frame()
+                    if frame is None:
+                        time.sleep(0.01)
+                        continue
+                else:
+                    # Real camera: use captured_request (blocking, interrupt-driven)
+                    with request as req:
+                        frame = req.make_array("main")
+                        # Auto-releases when exiting context
                 
                 frame_h, frame_w = frame.shape[:2]
                 run_ai_detection = False
