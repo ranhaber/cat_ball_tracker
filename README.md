@@ -2,7 +2,7 @@
 
 A real-time cat and ball detection system for Raspberry Pi Zero 2W with Camera Module 3. Features motion-first detection for efficiency, a web interface for live streaming, and zone-based tracking.
 
-**Version:** 1.9.0
+**Version:** 1.9.1
 
 ---
 
@@ -361,6 +361,7 @@ sudo journalctl -u cat_ball_tracker -n 50
 
 ## 📝 Version History
 
+- **v1.9.1** - Clean up: Remove verbose diagnostic logging (keep FPS fix from v1.9.0)
 - **v1.9.0** - CRITICAL FIX: Fix FPS calculation bug (was counting loop iterations instead of actual processed frames)
 - **v1.8.9** - Fix diagnostic logging output buffering (add flush=True to all diagnostic prints)
 - **v1.8.8** - Add extensive diagnostic logging for FPS calculation, camera initialization, and settings changes

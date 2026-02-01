@@ -226,9 +226,6 @@ class VideoProcessor:
         """Main processing loop with motion-first detection"""
         skip_counter = 0
         last_detections = []
-        loop_count = 0
-        
-        print(f"[LOOP] Starting process loop - Framerate: {self.current_framerate} FPS, Frame skip: {self.current_frame_skip}", flush=True)
         
         while self.running:
             try:
@@ -237,11 +234,6 @@ class VideoProcessor:
                 if frame is None:
                     time.sleep(0.01)
                     continue
-                
-                loop_count += 1
-                # Log every 100 loops to show we're processing
-                if loop_count % 100 == 0:
-                    print(f"[LOOP] Processed {loop_count} loops, skip_counter: {skip_counter}/{self.current_frame_skip}", flush=True)
                 
                 frame_h, frame_w = frame.shape[:2]
                 run_ai_detection = False
@@ -485,9 +477,6 @@ class VideoProcessor:
         
         if elapsed >= 1.0:
             self.fps = self._fps_count / elapsed
-            # Log FPS calculation every 10 seconds
-            if int(time.time()) % 10 == 0 and self._fps_count > 0:
-                print(f"[FPS] Calculated: {self.fps:.1f} FPS ({self._fps_count} frames in {elapsed:.2f}s) | Camera: {self.current_framerate} FPS, Skip: {self.current_frame_skip}", flush=True)
             self._fps_count = 0
             self._fps_start = time.time()
             
@@ -767,10 +756,8 @@ class VideoProcessor:
             print(f"[SETTING] Invalid frame skip: {skip}, must be one of {config.FRAME_SKIP_OPTIONS}")
             return False
         
-        print(f"[SETTING] Changing frame skip from {self.current_frame_skip} to {skip}", flush=True)
         self.current_frame_skip = skip
         settings.update_setting("frame_skip", skip)
-        print(f"[SETTING] Frame skip changed to: {skip} (APPLIED)", flush=True)
         return True
     
     # =========================================================================
