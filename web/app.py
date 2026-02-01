@@ -253,6 +253,10 @@ class VideoProcessor:
                 if skip_counter >= self.current_frame_skip:
                     skip_counter = 0
                     
+                    # Update FPS only when we actually process a frame (not every loop iteration)
+                    self._update_fps()
+                    self.frame_count += 1
+                    
                     if self.motion_first_enabled:
                         # Motion-first mode: only run AI when motion detected
                         motion_start = time.time()
@@ -399,10 +403,9 @@ class VideoProcessor:
                 # OPTIMIZATION A: Store reference, copy only when encoding to JPEG
                 with self.frame_lock:
                     self.current_frame = annotated
-                    
-                # Update FPS
-                self._update_fps()
-                self.frame_count += 1
+                
+                # MOVED: Update FPS only when we actually process a frame (not every loop)
+                # This was causing FPS to be 35+ instead of 5-7
                 
             except Exception as e:
                 print(f"Processing error: {e}")
