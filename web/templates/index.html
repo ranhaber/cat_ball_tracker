@@ -21,15 +21,17 @@
         <main>
             <!-- Video Tab -->
             <section id="video-tab" class="tab-content active">
+                <!-- Status Bar Above Video -->
+                <div class="video-status-bar">
+                    <span id="fps-display">FPS: --</span>
+                    <span id="mode-display">Mode: --</span>
+                    <span id="ram-display">RAM: --</span>
+                    <span id="cpu-display">CPU: --</span>
+                    <span id="temp-display">Temp: --</span>
+                </div>
+                
                 <div class="video-container">
                     <img id="video-stream" src="/video_feed" alt="Video Stream">
-                    <div class="video-overlay">
-                        <span id="fps-display">FPS: --</span>
-                        <span id="mode-display">Mode: --</span>
-                        <span id="ram-display">RAM: --</span>
-                        <span id="cpu-display">CPU: --</span>
-                        <span id="temp-display">Temp: --</span>
-                    </div>
                 </div>
                 
                 <!-- Top-Down View (Bird's Eye) -->
@@ -272,7 +274,7 @@
         </main>
 
         <footer>
-            <p>Cat Dome - Detection & Tracking System | <span id="version">v1.8.4</span></p>
+            <p>Cat Dome - Detection & Tracking System | <span id="version">v1.8.5</span></p>
         </footer>
     </div>
 
