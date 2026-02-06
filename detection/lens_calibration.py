@@ -368,6 +368,26 @@ class LensCalibration:
         print(f"[LENS] {len(self.lines)} lines remaining.")
         return len(self.lines)
 
+    def recover_lines_from_calibration(self):
+        """Recover lines from lens_calibration.json if lines file was accidentally deleted.
+        Reads directly from the file on disk, not from memory."""
+        if not os.path.exists(self.calibration_file):
+            return 0
+        try:
+            with open(self.calibration_file, 'r') as f:
+                data = json.load(f)
+            lines = data.get("lines", [])
+            if lines and len(lines) > 0:
+                self.lines = lines
+                self.image_width = data.get("image_width", self.image_width)
+                self.image_height = data.get("image_height", self.image_height)
+                self._save_lines_file()
+                print(f"[LENS] Recovered {len(self.lines)} lines from {self.calibration_file}")
+                return len(self.lines)
+        except Exception as e:
+            print(f"[LENS] Recovery error: {e}")
+        return 0
+
     def clear_lines(self):
         """Delete all lines and remove the lines file."""
         self.lines = []

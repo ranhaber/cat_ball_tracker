@@ -1552,6 +1552,16 @@ def create_app():
             video_processor.lens_calibration.clear_lines()
         return jsonify({"success": True})
     
+    @app.route('/api/lens_calibration/lines/recover', methods=['POST'])
+    def recover_lens_lines():
+        """Recover lines from lens_calibration.json after accidental deletion."""
+        if not video_processor.lens_calibration:
+            return jsonify({"error": "Lens calibration not available"}), 500
+        count = video_processor.lens_calibration.recover_lines_from_calibration()
+        if count > 0:
+            return jsonify({"success": True, "recovered_lines": count})
+        return jsonify({"error": "No lines found in calibration data to recover"}), 404
+    
     @app.route('/api/lens_calibration/lines/delete', methods=['POST'])
     def delete_lens_lines():
         """Delete specific lines by number (1-based).
