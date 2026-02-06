@@ -361,6 +361,7 @@ sudo journalctl -u cat_ball_tracker -n 50
 
 ## 📝 Version History
 
+- **v2.0.2** - Calibration: enter side lengths (meters) instead of X,Y; Zone: first mark = origin (0,0), right = +X, up = +Y
 - **v2.0.1** - Zone/Calibration snapshot uses full capture resolution (no stream downscale) for accurate overlay
 - **v2.0.0** - Recording on detection + video file input: record clips when cat/ball detected (stop N sec after last detection), save to configurable library path; Video tab: source Live camera vs From file, file picker from library or custom path; same resolution/FPS as live for later use as input
 - **v1.9.4** - PROPER FIX: Use captured_request() context manager (blocking/interrupt-driven, zero CPU waste)
