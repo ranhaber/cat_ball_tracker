@@ -272,7 +272,7 @@
                     <div class="control-section">
                         <h2>Detection Zone</h2>
                         <p>Define the area where detection should occur. Click points in order (e.g. clockwise).</p>
-                        <p class="zone-coords-hint"><strong>Coordinate system:</strong> First mark = origin (0,0). Right = +X, Up = +Y.</p>
+                        <p class="zone-coords-hint"><strong>Origin (0,0) is here:</strong> The first point you place in the Detection Zone is the origin (0,0). Right = +X, Up = +Y.</p>
                         <div class="perimeter-editor">
                             <div class="editor-toolbar">
                                 <button id="load-snapshot-perimeter" class="btn btn-primary">📷 Load Camera Frame</button>
@@ -290,7 +290,7 @@
                     <!-- 4-Point Calibration for Perspective Transform -->
                     <div class="control-section">
                         <h2>Perspective Calibration</h2>
-                        <p>Click 4 points in the same order as your Detection Zone. Then enter the <strong>length of each side</strong> in meters (same order: 1→2, 2→3, 3→4, 4→1). Point 1 = origin (0,0).</p>
+                        <p>Click the same 4 corners as the Detection Zone, in the same order. Then enter the <strong>length of each side of the polygon</strong> in meters (sides: 1→2, 2→3, 3→4, 4→1).</p>
                         <div class="calibration-editor">
                             <div class="editor-toolbar">
                                 <button id="load-snapshot-calibration" class="btn btn-primary">📷 Load Camera Frame</button>
@@ -312,7 +312,7 @@
                             <div class="calibration-info">
                                 <p>Status: <strong id="calibration-status">Not calibrated</strong></p>
                             </div>
-                            <p class="hint">Click 4 points (same order as zone). First point = (0,0). Enter the length of each side in meters.</p>
+                            <p class="hint">Click 4 points (same order as Detection Zone). Enter the length of each side of the polygon in meters.</p>
                         </div>
                     </div>
                 </div>
