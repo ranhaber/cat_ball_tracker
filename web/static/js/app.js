@@ -1110,7 +1110,10 @@ async function loadPerimeterSnapshot() {
 }
 
 function drawPerimeter() {
-    if (!perimeterCtx) return;
+    if (!perimeterCtx || !perimeterCanvas) return;
+    
+    // Always clear canvas first so "Clear Points" fully erases the polygon
+    perimeterCtx.clearRect(0, 0, perimeterCanvas.width, perimeterCanvas.height);
     
     // Draw background image or black
     if (perimeterImage) {
@@ -1123,6 +1126,32 @@ function drawPerimeter() {
     if (perimeterPoints.length === 0) {
         return;
     }
+    
+    const p0 = perimeterPoints[0];
+    const axisLen = Math.min(perimeterCanvas.width, perimeterCanvas.height) * 0.12;
+    
+    // Coordinate system: origin at first point (0,0), X right, Y up (image Y down)
+    perimeterCtx.lineWidth = 2;
+    perimeterCtx.lineCap = 'round';
+    // +X axis (to the right)
+    perimeterCtx.strokeStyle = '#00bfff';
+    perimeterCtx.beginPath();
+    perimeterCtx.moveTo(p0[0], p0[1]);
+    perimeterCtx.lineTo(p0[0] + axisLen, p0[1]);
+    perimeterCtx.stroke();
+    perimeterCtx.fillStyle = '#00bfff';
+    perimeterCtx.font = 'bold 12px sans-serif';
+    perimeterCtx.textAlign = 'left';
+    perimeterCtx.fillText('+X', p0[0] + axisLen + 4, p0[1] + 4);
+    // +Y axis (up in world = decreasing y in image)
+    perimeterCtx.strokeStyle = '#ff8c00';
+    perimeterCtx.beginPath();
+    perimeterCtx.moveTo(p0[0], p0[1]);
+    perimeterCtx.lineTo(p0[0], p0[1] - axisLen);
+    perimeterCtx.stroke();
+    perimeterCtx.fillStyle = '#ff8c00';
+    perimeterCtx.textAlign = 'right';
+    perimeterCtx.fillText('+Y', p0[0] - 4, p0[1] - axisLen - 4);
     
     // Draw polygon
     if (perimeterPoints.length >= 2) {
@@ -1144,7 +1173,7 @@ function drawPerimeter() {
         perimeterCtx.stroke();
     }
     
-    // Draw points
+    // Draw points and labels
     perimeterPoints.forEach((point, index) => {
         // Outer circle
         perimeterCtx.fillStyle = '#00ff00';
@@ -1158,14 +1187,15 @@ function drawPerimeter() {
         perimeterCtx.arc(point[0], point[1], 4, 0, Math.PI * 2);
         perimeterCtx.fill();
         
-        // Label
+        // Label: first point as (0,0), others as 2, 3, 4...
+        const label = index === 0 ? '(0,0)' : String(index + 1);
         perimeterCtx.fillStyle = '#fff';
-        perimeterCtx.font = 'bold 14px sans-serif';
+        perimeterCtx.font = index === 0 ? 'bold 14px sans-serif' : 'bold 14px sans-serif';
         perimeterCtx.textAlign = 'center';
         perimeterCtx.strokeStyle = '#000';
         perimeterCtx.lineWidth = 3;
-        perimeterCtx.strokeText(String(index + 1), point[0], point[1] - 15);
-        perimeterCtx.fillText(String(index + 1), point[0], point[1] - 15);
+        perimeterCtx.strokeText(label, point[0], point[1] - 15);
+        perimeterCtx.fillText(label, point[0], point[1] - 15);
     });
 }
 
