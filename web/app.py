@@ -1502,6 +1502,13 @@ def create_app():
             print(f"[LENS] Calibration error: {e}")
             return jsonify({"error": f"Calibration failed: {e}"}), 500
     
+    @app.route('/api/lens_calibration/progress', methods=['GET'])
+    def get_lens_progress():
+        """Poll calibration progress during optimization."""
+        if video_processor.lens_calibration:
+            return jsonify(video_processor.lens_calibration.get_progress())
+        return jsonify({"in_progress": False, "iteration": 0, "max_iterations": 0})
+    
     @app.route('/api/lens_calibration', methods=['DELETE'])
     def clear_lens_calibration():
         """Clear lens calibration and delete saved file."""

@@ -43,6 +43,10 @@ class LensCalibration:
         self.overall_before_mean_px = 0.0
         self.overall_after_mean_px = 0.0
         self.overall_improvement_pct = 0.0
+        # Progress tracking (for UI polling during calibration)
+        self.calibration_in_progress = False
+        self.calibration_iteration = 0
+        self.calibration_max_iterations = 2000
 
         if os.path.exists(self.calibration_file):
             self.load()
@@ -123,8 +127,14 @@ class LensCalibration:
                 return np.zeros(len(lpts))
             return (A @ abc) / norm   # signed distances (better for least_squares)
 
+        eval_count = [0]  # mutable counter for closure
+
         def residuals(params):
             """Residual vector: signed distance-to-line for every point."""
+            eval_count[0] += 1
+            self.calibration_iteration = eval_count[0]
+            if eval_count[0] % 100 == 0:
+                print(f"[LENS] Iteration {eval_count[0]}/{self.calibration_max_iterations}", flush=True)
             undist_pts, _, _ = _undistort(params)
             res = []
             for mask in line_masks:
@@ -132,10 +142,20 @@ class LensCalibration:
             return np.concatenate(res)
 
         # 8-parameter optimisation: f, cx, cy, k1, k2, k3, p1, p2
+        # Tolerances tuned for Pi Zero 2W: accurate enough without taking minutes
         x0 = np.array([f0, cx0, cy0, 0.0, 0.0, 0.0, 0.0, 0.0])
-        result = least_squares(residuals, x0, method='lm',
-                               max_nfev=20000, xtol=1e-14, ftol=1e-14)
+        self.calibration_max_iterations = 20000
+        self.calibration_iteration = 0
+        self.calibration_in_progress = True
+        print(f"[LENS] Starting optimizer: {len(self.lines)} lines, "
+              f"{sum(len(l) for l in self.lines)} points, {image_width}x{image_height}")
+        try:
+            result = least_squares(residuals, x0, method='lm',
+                                   max_nfev=20000, xtol=1e-14, ftol=1e-14)
+        finally:
+            self.calibration_in_progress = False
         f_opt, cx_opt, cy_opt, k1, k2, k3, p1, p2 = result.x
+        print(f"[LENS] Optimizer done: {eval_count[0]} evaluations, cost={result.cost:.4f}")
 
         self.camera_matrix = np.array([
             [f_opt,  0, cx_opt],
@@ -373,6 +393,14 @@ class LensCalibration:
             os.remove(self.calibration_file)
         self.clear_lines()
         print("[LENS] Calibration and lines cleared")
+
+    def get_progress(self):
+        """Return current calibration progress (for polling during calibration)."""
+        return {
+            "in_progress": self.calibration_in_progress,
+            "iteration": self.calibration_iteration,
+            "max_iterations": self.calibration_max_iterations,
+        }
 
     def get_status(self):
         """Return calibration status for the UI."""

@@ -1828,8 +1828,24 @@ async function lensRunCalibration() {
         return;
     }
     const calibBtn = document.getElementById('lens-calibrate');
-    if (calibBtn) calibBtn.textContent = '⏳ Calibrating...';
+    const statusEl = document.getElementById('lens-status');
+    if (calibBtn) { calibBtn.textContent = '⏳ 0/2000'; calibBtn.disabled = true; }
+    if (statusEl) { statusEl.textContent = 'Calibrating... iteration 0/2000'; statusEl.style.color = '#d29922'; }
     console.log(`[LENS] Calibrating: ${allLines.length} lines, ${lensImageWidth}x${lensImageHeight}`);
+
+    // Poll progress every second while calibrating
+    const progressInterval = setInterval(async () => {
+        try {
+            const pr = await fetch('/api/lens_calibration/progress');
+            const pg = await pr.json();
+            if (pg.in_progress) {
+                const iter100 = Math.floor(pg.iteration / 100) * 100;
+                if (calibBtn) calibBtn.textContent = `⏳ ${iter100}/${pg.max_iterations}`;
+                if (statusEl) statusEl.textContent = `Calibrating... iteration ${iter100}/${pg.max_iterations}`;
+            }
+        } catch (e) { /* ignore polling errors */ }
+    }, 1000);
+
     try {
         const response = await fetch('/api/lens_calibration', {
             method: 'POST',
@@ -1840,6 +1856,7 @@ async function lensRunCalibration() {
                 image_height: lensImageHeight
             })
         });
+        clearInterval(progressInterval);
         const data = await response.json();
         console.log('[LENS] Response:', response.status, data);
         if (response.ok && data.success) {
@@ -1861,10 +1878,12 @@ async function lensRunCalibration() {
             alert('Calibration failed: ' + (data.error || 'Unknown error'));
         }
     } catch (err) {
+        clearInterval(progressInterval);
         console.error('Lens calibration error:', err);
         alert('Calibration error: ' + err.message);
+        if (statusEl) { statusEl.textContent = 'Calibration failed'; statusEl.style.color = '#ff4444'; }
     }
-    if (calibBtn) calibBtn.textContent = '🔧 Calibrate';
+    if (calibBtn) { calibBtn.textContent = '🔧 Calibrate'; calibBtn.disabled = false; }
 }
 
 // 6. Export Lines -- download saved lines from server as JSON
