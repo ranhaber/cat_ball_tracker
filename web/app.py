@@ -1502,6 +1502,14 @@ def create_app():
             print(f"[LENS] Calibration error: {e}")
             return jsonify({"error": f"Calibration failed: {e}"}), 500
     
+    @app.route('/api/lens_calibration/analyze', methods=['GET'])
+    def analyze_lens_lines():
+        """Analyze all lines and return per-line quality scores."""
+        if not video_processor.lens_calibration or not video_processor.lens_calibration.lines:
+            return jsonify({"error": "No lines data available"}), 404
+        result = video_processor.lens_calibration.analyze_lines()
+        return jsonify(result)
+    
     @app.route('/api/lens_calibration/progress', methods=['GET'])
     def get_lens_progress():
         """Poll calibration progress during optimization."""

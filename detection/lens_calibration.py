@@ -354,6 +354,127 @@ class LensCalibration:
             os.remove(path)
             print(f"[LENS] Deleted {self.LINES_FILE}")
 
+    def analyze_lines(self):
+        """Analyze all lines and score them for calibration quality.
+        
+        Lines are scored by:
+        - Distance from image center (edge/corner lines are more informative)
+        - Length in pixels (longer lines reveal more distortion)
+        - Number of points (more points = more data)
+        - Curvature (deviation from straight = visible distortion signal)
+        
+        Returns list of per-line stats sorted by score (best first).
+        """
+        if not self.lines or not self.image_width or not self.image_height:
+            return []
+        
+        cx = self.image_width / 2.0
+        cy = self.image_height / 2.0
+        max_r = np.sqrt(cx * cx + cy * cy)  # corner distance
+        
+        results = []
+        for li, line in enumerate(self.lines):
+            pts = np.array(line, dtype=np.float64)
+            n = len(pts)
+            
+            # Centroid of the line
+            centroid_x = np.mean(pts[:, 0])
+            centroid_y = np.mean(pts[:, 1])
+            
+            # Average distance of points from image center (0 = center, 1 = corner)
+            dists_from_center = np.sqrt((pts[:, 0] - cx)**2 + (pts[:, 1] - cy)**2)
+            avg_dist_from_center = float(np.mean(dists_from_center))
+            norm_dist = avg_dist_from_center / max_r  # 0-1
+            
+            # Max distance from center (any point reaching the edge is valuable)
+            max_dist_from_center = float(np.max(dists_from_center))
+            norm_max_dist = max_dist_from_center / max_r
+            
+            # Length of line (distance from first to last point)
+            length_px = float(np.sqrt((pts[-1, 0] - pts[0, 0])**2 + (pts[-1, 1] - pts[0, 1])**2))
+            norm_length = length_px / max_r  # normalize by max possible
+            
+            # Curvature: max deviation from the straight line fit
+            A = np.column_stack([pts, np.ones(n)])
+            _, _, Vt = np.linalg.svd(A)
+            abc = Vt[-1]
+            norm_abc = np.sqrt(abc[0]**2 + abc[1]**2)
+            if norm_abc > 1e-12:
+                distances = np.abs(A @ abc) / norm_abc
+                max_deviation = float(np.max(distances))
+                mean_deviation = float(np.mean(distances))
+            else:
+                max_deviation = 0.0
+                mean_deviation = 0.0
+            
+            # Region classification
+            rel_x = centroid_x / self.image_width
+            rel_y = centroid_y / self.image_height
+            if rel_x < 0.25:
+                region_h = "left"
+            elif rel_x > 0.75:
+                region_h = "right"
+            else:
+                region_h = "center"
+            if rel_y < 0.25:
+                region_t = "top"
+            elif rel_y > 0.75:
+                region_t = "bottom"
+            else:
+                region_t = "middle"
+            region = f"{region_t}-{region_h}"
+            
+            # Angle of line (0=horizontal, 90=vertical)
+            dx = pts[-1, 0] - pts[0, 0]
+            dy = pts[-1, 1] - pts[0, 1]
+            angle = float(np.degrees(np.arctan2(abs(dy), abs(dx))))
+            
+            # Score: higher = more useful for calibration
+            # Edge/corner lines with high curvature and length are best
+            score = (norm_max_dist * 3.0 +     # reaching the edge is very valuable
+                     norm_dist * 2.0 +          # being far from center is valuable
+                     norm_length * 2.0 +        # longer lines are better
+                     min(max_deviation / 5.0, 1.0) * 2.0 +  # visible curvature
+                     min(n / 10.0, 1.0) * 1.0)  # more points helps
+            
+            results.append({
+                "line": li + 1,
+                "points": n,
+                "region": region,
+                "angle_deg": round(angle, 1),
+                "length_px": round(length_px, 0),
+                "avg_dist_from_center": round(avg_dist_from_center, 0),
+                "max_dist_from_center": round(max_dist_from_center, 0),
+                "curvature_max_px": round(max_deviation, 2),
+                "curvature_mean_px": round(mean_deviation, 2),
+                "score": round(score, 2),
+            })
+        
+        # Sort by score (best first)
+        results.sort(key=lambda x: x["score"], reverse=True)
+        
+        # Region coverage summary
+        regions = set(r["region"] for r in results)
+        angles = [r["angle_deg"] for r in results]
+        has_horizontal = any(a < 30 for a in angles)
+        has_vertical = any(a > 60 for a in angles)
+        has_diagonal = any(30 <= a <= 60 for a in angles)
+        
+        return {
+            "lines": results,
+            "summary": {
+                "total_lines": len(results),
+                "total_points": sum(r["points"] for r in results),
+                "regions_covered": sorted(list(regions)),
+                "has_horizontal": has_horizontal,
+                "has_vertical": has_vertical,
+                "has_diagonal": has_diagonal,
+                "avg_score": round(np.mean([r["score"] for r in results]), 2),
+                "best_score": results[0]["score"] if results else 0,
+                "worst_score": results[-1]["score"] if results else 0,
+            }
+        }
+
     def export_lines(self):
         """Export lines/points data as a dict (for download)."""
         return {

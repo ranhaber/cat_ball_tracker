@@ -361,6 +361,7 @@ sudo journalctl -u cat_ball_tracker -n 50
 
 ## 📝 Version History
 
+- **v2.2.5** - Lens Calibration: line analysis endpoint (per-line scoring by region, curvature, length, distance from center); live progress polling; duplicate function fix
 - **v2.2.4** - Lens Calibration: live progress polling (iteration X/20000 on button and status); full precision optimizer (xtol=1e-14); progress API endpoint
 - **v2.2.3** - Lens Calibration UI redesign: Load Frame (no side effects), Add Line (memory), Save Lines (to file), Calibrate, Export/Import, Clear; saved vs unsaved visual distinction
 - **v2.2.2** - Lens Calibration: auto-save lines to persistent file on each "New Line" (append-only); auto-load saved lines on startup; separate lines file from calibration result
