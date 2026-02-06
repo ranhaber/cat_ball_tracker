@@ -89,37 +89,85 @@ class CameraCalibration:
         """
         Set calibration from 4 pixel points and the length of each side in meters.
         First point = origin (0, 0). Right in image = +X, up in image = +Y.
-        
+        Uses all 4 side lengths so the world quadrilateral closes exactly (e.g. rectangle).
+
         Args:
             points_pixel: List of 4 [x, y] pixel coordinates (same order as zone).
             side_lengths: List of 4 lengths in meters: [P0->P1, P1->P2, P2->P3, P3->P0].
-        
+
         Returns:
             bool: True if calibration successful
         """
         if len(points_pixel) != 4 or len(side_lengths) != 4:
             print(f"Error: Need exactly 4 pixel points and 4 side lengths")
             return False
-        
+
+        L01, L12, L23, L30 = (float(side_lengths[i]) for i in range(4))
+        if L01 <= 0 or L12 <= 0 or L23 <= 0 or L30 <= 0:
+            print("Error: All side lengths must be positive")
+            return False
+
         # Build world coordinates: P0 = (0,0); right = +X, up = +Y (image y down => world y = -image_y for direction)
         world_pts = []
-        world_pts.append([0.0, 0.0])  # First mark = origin
-        
-        for i in range(1, 4):
-            px_prev = points_pixel[i - 1]
-            px_curr = points_pixel[i]
-            dx = px_curr[0] - px_prev[0]
-            dy = px_curr[1] - px_prev[1]
-            # In world: image right = +X, image up = +Y, so direction = (dx, -dy)
-            len_pixel = (dx * dx + dy * dy) ** 0.5
-            if len_pixel < 1e-6:
-                print(f"Error: Points {i} and {i+1} are too close together")
-                return False
-            length_m = float(side_lengths[i - 1])
-            wx = world_pts[i - 1][0] + length_m * (dx / len_pixel)
-            wy = world_pts[i - 1][1] - length_m * (dy / len_pixel)  # -dy because image Y down
-            world_pts.append([wx, wy])
-        
+        world_pts.append([0.0, 0.0])  # First mark = origin (0,0)
+
+        # P1 from P0 using L01 and image direction P0->P1
+        dx01 = points_pixel[1][0] - points_pixel[0][0]
+        dy01 = points_pixel[1][1] - points_pixel[0][1]
+        len01_px = (dx01 * dx01 + dy01 * dy01) ** 0.5
+        if len01_px < 1e-6:
+            print("Error: Points 1 and 2 are too close together")
+            return False
+        world_pts.append([
+            world_pts[0][0] + L01 * (dx01 / len01_px),
+            world_pts[0][1] - L01 * (dy01 / len01_px)
+        ])
+
+        # P2 from P1 using L12 and image direction P1->P2
+        dx12 = points_pixel[2][0] - points_pixel[1][0]
+        dy12 = points_pixel[2][1] - points_pixel[1][1]
+        len12_px = (dx12 * dx12 + dy12 * dy12) ** 0.5
+        if len12_px < 1e-6:
+            print("Error: Points 2 and 3 are too close together")
+            return False
+        world_pts.append([
+            world_pts[1][0] + L12 * (dx12 / len12_px),
+            world_pts[1][1] - L12 * (dy12 / len12_px)
+        ])
+
+        # P3: use L23 (distance P2->P3) and L30 (distance P3->P0) so the quad closes with user's lengths.
+        # P3 is at distance L23 from P2 and L30 from origin (P0). Two-circle intersection.
+        p2x, p2y = world_pts[2][0], world_pts[2][1]
+        d_sq = p2x * p2x + p2y * p2y
+        d = d_sq ** 0.5
+        if d < 1e-10:
+            print("Error: P2 coincides with origin; cannot close with L30")
+            return False
+        # a = (L30^2 - L23^2 + d^2) / (2*d), h^2 = L30^2 - a^2
+        a = (L30 * L30 - L23 * L23 + d_sq) / (2.0 * d)
+        h_sq = L30 * L30 - a * a
+        if h_sq < -1e-6:
+            print(f"Error: Side lengths cannot form closed quad (L30={L30}, L23={L23}, d(P2)={d:.3f})")
+            return False
+        h_sq = max(0.0, h_sq)
+        h = h_sq ** 0.5
+        # P3 = a * (P2/d) ± h * perpendicular(P2/d); perpendicular = (-p2y/d, p2x/d)
+        ux, uy = p2x / d, p2y / d
+        px_mid = a * ux
+        py_mid = a * uy
+        perp_x = -uy
+        perp_y = ux
+        # Choose the solution that gives convex quad (same winding as P0,P1,P2): cross product (P2-P1)x(P3-P2) same sign as (P1-P0)x(P2-P1)
+        cross_prev = (world_pts[1][0] - world_pts[0][0]) * (world_pts[2][1] - world_pts[1][1]) - (world_pts[1][1] - world_pts[0][1]) * (world_pts[2][0] - world_pts[1][0])
+        p3_plus = [px_mid + h * perp_x, py_mid + h * perp_y]
+        p3_minus = [px_mid - h * perp_x, py_mid - h * perp_y]
+        cross_plus = (world_pts[2][0] - world_pts[1][0]) * (p3_plus[1] - world_pts[2][1]) - (world_pts[2][1] - world_pts[1][1]) * (p3_plus[0] - world_pts[2][0])
+        cross_minus = (world_pts[2][0] - world_pts[1][0]) * (p3_minus[1] - world_pts[2][1]) - (world_pts[2][1] - world_pts[1][1]) * (p3_minus[0] - world_pts[2][0])
+        if cross_prev * cross_plus >= 0:
+            world_pts.append(p3_plus)
+        else:
+            world_pts.append(p3_minus)
+
         points = [
             {"pixel": list(points_pixel[i]), "world": world_pts[i]}
             for i in range(4)

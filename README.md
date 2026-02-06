@@ -361,6 +361,7 @@ sudo journalctl -u cat_ball_tracker -n 50
 
 ## 📝 Version History
 
+- **v2.0.5** - Calibration: use all 4 side lengths (two-circle for P3) so top-down view is a proper rectangle and Side 4 stays as entered
 - **v2.0.4** - Detection Zone Clear Points: force canvas reset and clear perimeter on server (DELETE) so polygon stays erased
 - **v2.0.3** - Detection Zone: fix Clear Points (polygon fully erased); show coordinate system (0,0 at first point, +X right, +Y up) and polygon
 - **v2.0.2** - Calibration: enter side lengths (meters) instead of X,Y; Zone: first mark = origin (0,0), right = +X, up = +Y
