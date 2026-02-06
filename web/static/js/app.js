@@ -509,7 +509,7 @@ async function loadCalibrationSnapshot() {
     if (btn) btn.textContent = '⏳ Loading...';
     
     try {
-        const response = await fetch('/video_feed?snapshot=1');
+        const response = await fetch('/api/snapshot');
         const blob = await response.blob();
         
         calibrationImage = new Image();
@@ -1077,7 +1077,7 @@ async function loadPerimeterSnapshot() {
     if (btn) btn.textContent = '⏳ Loading...';
     
     try {
-        const response = await fetch('/video_feed?snapshot=1');
+        const response = await fetch('/api/snapshot');
         const blob = await response.blob();
         
         perimeterImage = new Image();

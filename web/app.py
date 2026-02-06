@@ -620,6 +620,21 @@ class VideoProcessor:
         if ret:
             return jpeg.tobytes()
         return None
+    
+    def get_frame_jpeg_capture_resolution(self):
+        """Get current frame as JPEG at capture resolution (no scaling). For Zone/Calibration snapshots."""
+        with self.frame_lock:
+            if self.current_frame is None:
+                return None
+            frame = self.current_frame.copy()
+        ret, jpeg = cv2.imencode(
+            '.jpg',
+            frame,
+            [cv2.IMWRITE_JPEG_QUALITY, min(85, self.current_jpeg_quality + 15)]
+        )
+        if ret:
+            return jpeg.tobytes()
+        return None
         
     def set_detection_mode(self, mode):
         """Set detection mode (cat or ball)"""
@@ -953,10 +968,18 @@ def create_app():
         """Serve main page"""
         return render_template('index.html')
         
+    @app.route('/api/snapshot')
+    def snapshot_capture_resolution():
+        """Single snapshot at capture resolution (same as camera frame). For Zone and Calibration editors."""
+        jpeg = video_processor.get_frame_jpeg_capture_resolution()
+        if jpeg:
+            return Response(jpeg, mimetype='image/jpeg')
+        return Response(status=503)
+    
     @app.route('/video_feed')
     def video_feed():
         """MJPEG video stream endpoint"""
-        # Check if requesting a single snapshot
+        # Check if requesting a single snapshot (stream resolution)
         if request.args.get('snapshot'):
             jpeg = video_processor.get_frame_jpeg()
             if jpeg:
