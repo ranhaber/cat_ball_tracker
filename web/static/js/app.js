@@ -1060,10 +1060,22 @@ function initPerimeterEditor() {
         updatePointsCount();
     });
     
-    document.getElementById('clear-perimeter')?.addEventListener('click', () => {
+    document.getElementById('clear-perimeter')?.addEventListener('click', async () => {
         perimeterPoints = [];
+        if (perimeterCanvas) {
+            // Force canvas buffer clear (resetting width/height clears the canvas in HTML5)
+            const w = perimeterCanvas.width;
+            const h = perimeterCanvas.height;
+            perimeterCanvas.width = w;
+            perimeterCanvas.height = h;
+        }
         drawPerimeter();
         updatePointsCount();
+        try {
+            await fetch('/api/perimeter', { method: 'DELETE' });
+        } catch (e) {
+            console.warn('Clear perimeter on server failed:', e);
+        }
     });
     
     document.getElementById('save-perimeter')?.addEventListener('click', savePerimeter);
