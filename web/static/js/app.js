@@ -1695,10 +1695,11 @@ async function loadVideoSource() {
 // Lens Calibration (Plumb-Line Method)
 // ============================================================================
 let lensCanvas, lensCtx, lensImage = null;
-let lensLines = [];         // array of arrays of [x, y]
-let lensCurrentLine = [];   // points of the line being drawn
+let lensSavedLines = [];     // lines saved to file on server
+let lensUnsavedLines = [];   // lines added since last save (in memory only)
+let lensCurrentLine = [];    // points of the line currently being drawn
 let lensImageWidth = 640, lensImageHeight = 480;
-const LENS_TARGET_LINES = 6;  // default target number of lines
+const LENS_TARGET_LINES = 6;
 
 function initLensCalibration() {
     lensCanvas = document.getElementById('lens-canvas');
@@ -1706,10 +1707,11 @@ function initLensCalibration() {
     lensCtx = lensCanvas.getContext('2d');
 
     document.getElementById('load-snapshot-lens')?.addEventListener('click', loadLensSnapshot);
-    document.getElementById('lens-new-line')?.addEventListener('click', lensNewLine);
+    document.getElementById('lens-add-line')?.addEventListener('click', lensAddLine);
     document.getElementById('lens-undo-point')?.addEventListener('click', lensUndoPoint);
+    document.getElementById('lens-save-lines')?.addEventListener('click', lensSaveLines);
     document.getElementById('lens-calibrate')?.addEventListener('click', lensRunCalibration);
-    document.getElementById('lens-clear')?.addEventListener('click', lensClearAll);
+    document.getElementById('lens-clear')?.addEventListener('click', lensClearFile);
     document.getElementById('lens-export')?.addEventListener('click', lensExportLines);
     document.getElementById('lens-import')?.addEventListener('click', () => document.getElementById('lens-import-file')?.click());
     document.getElementById('lens-import-file')?.addEventListener('change', lensImportLines);
@@ -1727,6 +1729,7 @@ function initLensCalibration() {
     });
 }
 
+// 1. Load Frame -- just loads a new picture, touches nothing else
 async function loadLensSnapshot() {
     const btn = document.getElementById('load-snapshot-lens');
     if (btn) btn.textContent = '⏳ Loading...';
@@ -1740,33 +1743,23 @@ async function loadLensSnapshot() {
             lensCanvas.width = lensImageWidth;
             lensCanvas.height = lensImageHeight;
             lensCanvas.parentElement.classList.add('has-image');
-            lensLines = [];
-            lensCurrentLine = [];
             drawLensCanvas();
             updateLensUI();
-            if (btn) btn.textContent = `📷 Refresh (${lensImageWidth}x${lensImageHeight})`;
+            if (btn) btn.textContent = `📷 Load Frame (${lensImageWidth}x${lensImageHeight})`;
         };
         lensImage.src = URL.createObjectURL(blob);
     } catch (err) {
         console.error('Lens snapshot error:', err);
-        if (btn) btn.textContent = '📷 Load Camera Frame';
+        if (btn) btn.textContent = '📷 Load Frame';
     }
 }
 
-async function lensNewLine() {
+// 2. Add Line -- moves current line to unsaved list (memory only, NOT saved to file)
+function lensAddLine() {
     if (lensCurrentLine.length >= 3) {
-        const line = [...lensCurrentLine];
-        lensLines.push(line);
-        // Auto-save: append to persistent file on server
-        try {
-            await fetch('/api/lens_calibration/lines/append', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ points: line, image_width: lensImageWidth, image_height: lensImageHeight })
-            });
-        } catch (e) { console.warn('Auto-save line failed:', e); }
+        lensUnsavedLines.push([...lensCurrentLine]);
     } else if (lensCurrentLine.length > 0) {
-        alert('A line needs at least 3 points. Add more points or click elsewhere.');
+        alert('A line needs at least 3 points.');
         return;
     }
     lensCurrentLine = [];
@@ -1774,23 +1767,106 @@ async function lensNewLine() {
     updateLensUI();
 }
 
+// 3. Undo Point
 function lensUndoPoint() {
     if (lensCurrentLine.length > 0) {
         lensCurrentLine.pop();
-    } else if (lensLines.length > 0) {
-        lensCurrentLine = lensLines.pop();
+    } else if (lensUnsavedLines.length > 0) {
+        lensCurrentLine = lensUnsavedLines.pop();
     }
     drawLensCanvas();
     updateLensUI();
 }
 
-async function lensExportLines() {
-    // Finalise current line if 3+ points
-    const allLines = [...lensLines];
-    if (lensCurrentLine.length >= 3) allLines.push([...lensCurrentLine]);
-    if (allLines.length === 0) { alert('No lines to export'); return; }
+// 4. Save Lines -- saves all unsaved lines to the server file
+async function lensSaveLines() {
+    // Finalize current line if 3+ points
+    if (lensCurrentLine.length >= 3) {
+        lensUnsavedLines.push([...lensCurrentLine]);
+        lensCurrentLine = [];
+    }
+    if (lensUnsavedLines.length === 0) {
+        alert('No new lines to save.');
+        return;
+    }
+    const btn = document.getElementById('lens-save-lines');
+    if (btn) btn.textContent = '⏳ Saving...';
     try {
-        const data = { lines: allLines, image_width: lensImageWidth, image_height: lensImageHeight };
+        let saved = 0;
+        for (const line of lensUnsavedLines) {
+            const response = await fetch('/api/lens_calibration/lines/append', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ points: line, image_width: lensImageWidth, image_height: lensImageHeight })
+            });
+            if (response.ok) saved++;
+        }
+        // Move unsaved to saved
+        lensSavedLines.push(...lensUnsavedLines);
+        lensUnsavedLines = [];
+        alert(`Saved ${saved} new lines. Total saved: ${lensSavedLines.length}`);
+    } catch (err) {
+        console.error('Save lines error:', err);
+        alert('Error saving lines');
+    }
+    if (btn) btn.textContent = '💾 Save Lines';
+    drawLensCanvas();
+    updateLensUI();
+}
+
+// 5. Calibrate
+async function lensRunCalibration() {
+    // All saved + unsaved + current (if 3+)
+    const allLines = [...lensSavedLines, ...lensUnsavedLines];
+    if (lensCurrentLine.length >= 3) allLines.push([...lensCurrentLine]);
+    if (allLines.length < 2) {
+        alert('Need at least 2 lines (3+ points each). Save your lines first.');
+        return;
+    }
+    const calibBtn = document.getElementById('lens-calibrate');
+    if (calibBtn) calibBtn.textContent = '⏳ Calibrating...';
+    try {
+        const response = await fetch('/api/lens_calibration', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                lines: allLines,
+                image_width: lensImageWidth,
+                image_height: lensImageHeight
+            })
+        });
+        const data = await response.json();
+        if (response.ok && data.success) {
+            const c = data.calibration;
+            let msg = `Lens calibration done!\n\n`;
+            msg += `k1 = ${c.k1}, k2 = ${c.k2}, k3 = ${c.k3}\n`;
+            msg += `p1 = ${c.p1}, p2 = ${c.p2}\n`;
+            msg += `f = ${c.fx}, cx = ${c.cx}, cy = ${c.cy}\n\n`;
+            msg += `Overall: ${c.overall_improvement_pct}% improvement\n`;
+            msg += `  Before: ${c.overall_before_mean_px} px mean deviation\n`;
+            msg += `  After:  ${c.overall_after_mean_px} px mean deviation\n\n`;
+            msg += `Per line:\n`;
+            c.line_errors.forEach(e => {
+                msg += `  L${e.line} (${e.points} pts): ${e.before_mean_px}px → ${e.after_mean_px}px (${e.improvement_pct}% better)\n`;
+            });
+            alert(msg);
+            updateLensStatusUI({...c, is_calibrated: true, num_lines: allLines.length, total_points: allLines.reduce((s,l) => s + l.length, 0)});
+        } else {
+            alert('Calibration failed: ' + (data.error || 'Unknown error'));
+        }
+    } catch (err) {
+        console.error('Lens calibration error:', err);
+        alert('Error: ' + err.message);
+    }
+    if (calibBtn) calibBtn.textContent = '🔧 Calibrate';
+}
+
+// 6. Export Lines -- download saved lines from server as JSON
+async function lensExportLines() {
+    try {
+        const response = await fetch('/api/lens_calibration/lines');
+        const data = await response.json();
+        if (!data.lines || data.lines.length === 0) { alert('No saved lines to export'); return; }
         const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
@@ -1801,12 +1877,12 @@ async function lensExportLines() {
     } catch (err) { console.error('Export error:', err); alert('Export failed'); }
 }
 
+// 7. Import Lines -- upload JSON file, replaces saved lines on server
 async function lensImportLines(e) {
     const file = e.target.files[0];
     if (!file) return;
     try {
         const text = await file.text();
-        const data = JSON.parse(text);
         const response = await fetch('/api/lens_calibration/lines', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -1814,17 +1890,14 @@ async function lensImportLines(e) {
         });
         const result = await response.json();
         if (response.ok && result.success) {
-            lensLines = result.lines || data.lines;
+            lensSavedLines = result.lines || [];
+            lensUnsavedLines = [];
             lensCurrentLine = [];
-            lensImageWidth = result.image_width || data.image_width || 640;
-            lensImageHeight = result.image_height || data.image_height || 480;
-            if (lensCanvas) {
-                lensCanvas.width = lensImageWidth;
-                lensCanvas.height = lensImageHeight;
-            }
+            lensImageWidth = result.image_width || 640;
+            lensImageHeight = result.image_height || 480;
             drawLensCanvas();
             updateLensUI();
-            alert(`Imported ${result.num_lines} lines (${result.total_points} points). Load a camera frame to see them overlaid, then click Calibrate.`);
+            alert(`Imported ${result.num_lines} lines (${result.total_points} points).`);
         } else {
             alert('Import failed: ' + (result.error || 'Unknown error'));
         }
@@ -1832,54 +1905,58 @@ async function lensImportLines(e) {
         console.error('Import error:', err);
         alert('Failed to read file: ' + err.message);
     }
-    e.target.value = '';  // reset so same file can be re-imported
+    e.target.value = '';
 }
 
-async function lensClearAll() {
-    lensLines = [];
+// 8. Clear Lines File -- deletes saved lines AND calibration
+async function lensClearFile() {
+    if (!confirm('Delete all saved lines and calibration?')) return;
+    lensSavedLines = [];
+    lensUnsavedLines = [];
     lensCurrentLine = [];
     drawLensCanvas();
     updateLensUI();
     updateLensStatusUI({ is_calibrated: false });
     try {
         await fetch('/api/lens_calibration', { method: 'DELETE' });
-    } catch (e) { console.warn('Clear lens calibration failed:', e); }
+    } catch (e) { console.warn('Clear failed:', e); }
 }
 
 function updateLensUI() {
-    const completedLines = lensLines.length;
-    const totalLines = completedLines + (lensCurrentLine.length >= 3 ? 1 : 0);
-    const lineCountEl = document.getElementById('lens-line-count');
+    const savedCount = lensSavedLines.length;
+    const unsavedCount = lensUnsavedLines.length + (lensCurrentLine.length >= 3 ? 1 : 0);
+    const totalLines = savedCount + unsavedCount;
+
+    const savedEl = document.getElementById('lens-saved-count');
+    const unsavedEl = document.getElementById('lens-unsaved-count');
     const pointCountEl = document.getElementById('lens-point-count');
-    const targetEl = document.getElementById('lens-target-lines');
     const progressBar = document.getElementById('lens-progress-bar');
-    const newLineBtn = document.getElementById('lens-new-line');
+    const addLineBtn = document.getElementById('lens-add-line');
     const undoBtn = document.getElementById('lens-undo-point');
+    const saveBtn = document.getElementById('lens-save-lines');
     const calibBtn = document.getElementById('lens-calibrate');
     const exportBtn = document.getElementById('lens-export');
 
-    if (lineCountEl) lineCountEl.textContent = completedLines;
-    if (targetEl) targetEl.textContent = LENS_TARGET_LINES;
+    if (savedEl) savedEl.textContent = savedCount;
+    if (unsavedEl) unsavedEl.textContent = lensUnsavedLines.length + (lensCurrentLine.length >= 3 ? 1 : 0);
     if (pointCountEl) pointCountEl.textContent = lensCurrentLine.length;
     if (progressBar) {
-        const pct = Math.min(100, Math.round((completedLines / LENS_TARGET_LINES) * 100));
+        const pct = Math.min(100, Math.round((savedCount / LENS_TARGET_LINES) * 100));
         progressBar.style.width = pct + '%';
-        progressBar.style.background = completedLines >= LENS_TARGET_LINES ? '#3fb950' : '#d29922';
+        progressBar.style.background = savedCount >= LENS_TARGET_LINES ? '#3fb950' : '#d29922';
     }
-    if (newLineBtn) newLineBtn.disabled = !lensImage;
-    if (undoBtn) undoBtn.disabled = (lensCurrentLine.length === 0 && lensLines.length === 0);
-    if (exportBtn) exportBtn.disabled = (completedLines === 0 && lensCurrentLine.length < 3);
-    // Enable calibrate when at least 2 lines, but hint that more is better
+    if (addLineBtn) addLineBtn.disabled = !lensImage || lensCurrentLine.length < 3;
+    if (undoBtn) undoBtn.disabled = (lensCurrentLine.length === 0 && lensUnsavedLines.length === 0);
+    if (saveBtn) saveBtn.disabled = (lensUnsavedLines.length === 0 && lensCurrentLine.length < 3);
     if (calibBtn) {
         calibBtn.disabled = totalLines < 2;
         if (totalLines >= 2 && totalLines < LENS_TARGET_LINES) {
-            calibBtn.textContent = `🔧 Calibrate (${totalLines}/${LENS_TARGET_LINES} lines)`;
-        } else if (totalLines >= LENS_TARGET_LINES) {
-            calibBtn.textContent = '🔧 Calibrate';
+            calibBtn.textContent = `🔧 Calibrate (${totalLines}/${LENS_TARGET_LINES})`;
         } else {
             calibBtn.textContent = '🔧 Calibrate';
         }
     }
+    if (exportBtn) exportBtn.disabled = savedCount === 0;
 }
 
 const LINE_COLORS = ['#ff4444', '#44ff44', '#4488ff', '#ffff44', '#ff44ff', '#44ffff', '#ff8844', '#88ff44'];
@@ -1893,13 +1970,21 @@ function drawLensCanvas() {
         lensCtx.fillStyle = '#000';
         lensCtx.fillRect(0, 0, lensCanvas.width, lensCanvas.height);
     }
-    // Draw completed lines
-    lensLines.forEach((line, li) => {
-        drawLensLine(line, LINE_COLORS[li % LINE_COLORS.length], li + 1);
+    let lineNum = 0;
+    // Draw saved lines (solid)
+    lensSavedLines.forEach((line) => {
+        lineNum++;
+        drawLensLine(line, LINE_COLORS[(lineNum - 1) % LINE_COLORS.length], lineNum, false);
     });
-    // Draw current line
+    // Draw unsaved lines (dashed, slightly transparent)
+    lensUnsavedLines.forEach((line) => {
+        lineNum++;
+        drawLensLine(line, LINE_COLORS[(lineNum - 1) % LINE_COLORS.length], lineNum, true);
+    });
+    // Draw current line being drawn (dashed)
     if (lensCurrentLine.length > 0) {
-        drawLensLine(lensCurrentLine, LINE_COLORS[lensLines.length % LINE_COLORS.length], lensLines.length + 1, true);
+        lineNum++;
+        drawLensLine(lensCurrentLine, LINE_COLORS[(lineNum - 1) % LINE_COLORS.length], lineNum, true);
     }
 }
 
@@ -2009,7 +2094,8 @@ async function loadLensCalibrationStatus() {
         const response = await fetch('/api/lens_calibration/lines');
         const data = await response.json();
         if (data.lines && data.lines.length > 0) {
-            lensLines = data.lines;
+            lensSavedLines = data.lines;
+            lensUnsavedLines = [];
             lensCurrentLine = [];
             if (data.image_width) lensImageWidth = data.image_width;
             if (data.image_height) lensImageHeight = data.image_height;
@@ -2019,7 +2105,7 @@ async function loadLensCalibrationStatus() {
             }
             drawLensCanvas();
             updateLensUI();
-            console.log(`[LENS] Loaded ${lensLines.length} saved lines`);
+            console.log(`[LENS] Loaded ${lensSavedLines.length} saved lines`);
         }
     } catch (err) {
         console.error('Error loading saved lens lines:', err);

@@ -325,33 +325,36 @@
                     <!-- Lens Calibration (Plumb-Line Method) -->
                     <div class="control-section">
                         <h2>Lens Calibration</h2>
-                        <p>Correct lens distortion for accurate pixel-to-world mapping. Mark <strong>3-5 points along each of 6 straight lines</strong> visible in the camera image (edges of tiles, walls, door frames, tape, etc.). Lines can be in any direction and on any plane. You can add more lines for better accuracy.</p>
+                        <p>Correct lens distortion for accurate pixel-to-world mapping. Mark <strong>3+ points along straight lines</strong> visible in the camera image (edges of tiles, walls, door frames, tape, etc.). Lines can be in any direction and on any plane.</p>
                         <div class="lens-calibration-editor">
                             <div class="editor-toolbar">
-                                <button id="load-snapshot-lens" class="btn btn-primary">📷 Load Camera Frame</button>
-                                <button id="lens-new-line" class="btn btn-secondary" disabled>➕ New Line</button>
+                                <button id="load-snapshot-lens" class="btn btn-primary">📷 Load Frame</button>
+                                <button id="lens-add-line" class="btn btn-secondary" disabled>➕ Add Line</button>
                                 <button id="lens-undo-point" class="btn btn-secondary" disabled>↩ Undo Point</button>
-                                <button id="lens-calibrate" class="btn btn-success" disabled>🔧 Calibrate</button>
-                                <button id="lens-export" class="btn btn-secondary" disabled>💾 Export Lines</button>
-                                <button id="lens-import" class="btn btn-secondary">📂 Import Lines</button>
-                                <input type="file" id="lens-import-file" accept=".json" style="display:none">
-                                <button id="lens-clear" class="btn btn-secondary">🗑️ Clear All</button>
+                                <button id="lens-save-lines" class="btn btn-success" disabled>💾 Save Lines</button>
                             </div>
                             <div class="canvas-container">
                                 <canvas id="lens-canvas" width="640" height="480"></canvas>
-                                <p class="canvas-hint" id="lens-hint">Click "Load Camera Frame" to start</p>
+                                <p class="canvas-hint" id="lens-hint">Click "Load Frame" to start</p>
                             </div>
                             <div id="lens-lines-info">
-                                <p>Lines: <strong id="lens-line-count">0</strong> / <span id="lens-target-lines">6</span> | Points on current line: <strong id="lens-point-count">0</strong></p>
+                                <p>Saved: <strong id="lens-saved-count">0</strong> lines | Unsaved: <strong id="lens-unsaved-count">0</strong> lines | Current line: <strong id="lens-point-count">0</strong> pts</p>
                                 <div id="lens-progress" style="width:100%;height:6px;background:#333;border-radius:3px;margin-top:4px;">
                                     <div id="lens-progress-bar" style="width:0%;height:100%;background:#3fb950;border-radius:3px;transition:width 0.3s;"></div>
                                 </div>
+                            </div>
+                            <div class="editor-toolbar" style="margin-top:8px;">
+                                <button id="lens-calibrate" class="btn btn-success" disabled>🔧 Calibrate</button>
+                                <button id="lens-export" class="btn btn-secondary" disabled>📥 Export Lines</button>
+                                <button id="lens-import" class="btn btn-secondary">📤 Import Lines</button>
+                                <input type="file" id="lens-import-file" accept=".json" style="display:none">
+                                <button id="lens-clear" class="btn btn-secondary">🗑️ Clear Lines File</button>
                             </div>
                             <div class="calibration-info">
                                 <p>Status: <strong id="lens-status">Not calibrated</strong></p>
                                 <p id="lens-params" style="display:none; font-size:0.85em; color:#aaa;"></p>
                             </div>
-                            <p class="hint">Load a frame, click 3+ points along a straight line, click "New Line" to start the next. Target: 6 lines spread across the image (center, edges, corners). You can add more for better accuracy. Click "Calibrate" when ready (minimum 2 lines).</p>
+                            <p class="hint">1) Load Frame. 2) Click 3+ points along a straight line. 3) Add Line (repeat). 4) Save Lines when done adding. 5) Calibrate. Target: 6+ lines spread across the image.</p>
                         </div>
                     </div>
                 </div>
