@@ -916,43 +916,49 @@ function drawTopDownView(data) {
         ctx.stroke();
     }
     
-    // Draw X and Y axes through origin (0,0) so first Detection Zone point is clearly at origin
-    const originInBounds = bounds.min_x <= 0 && 0 <= bounds.max_x && bounds.min_y <= 0 && 0 <= bounds.max_y;
-    if (originInBounds) {
-        const [ox, oy] = toCanvas(0, 0);
-        // Y axis (x = 0): vertical line
-        ctx.strokeStyle = '#ff8c00';
-        ctx.lineWidth = 2;
-        ctx.setLineDash([4, 4]);
-        ctx.beginPath();
-        ctx.moveTo(ox, toCanvas(0, bounds.min_y)[1]);
-        ctx.lineTo(ox, toCanvas(0, bounds.max_y)[1]);
-        ctx.stroke();
-        ctx.setLineDash([]);
-        ctx.fillStyle = '#ff8c00';
-        ctx.font = '11px sans-serif';
-        ctx.textAlign = 'right';
-        ctx.fillText('Y', ox - 6, toCanvas(0, bounds.max_y)[1] - 4);
-        // X axis (y = 0): horizontal line
-        ctx.strokeStyle = '#00bfff';
-        ctx.beginPath();
-        ctx.moveTo(toCanvas(bounds.min_x, 0)[0], oy);
-        ctx.lineTo(toCanvas(bounds.max_x, 0)[0], oy);
-        ctx.stroke();
-        ctx.fillStyle = '#00bfff';
-        ctx.textAlign = 'left';
-        ctx.fillText('X', toCanvas(bounds.max_x, 0)[0] + 4, oy + 4);
-        // Origin label (0,0)
-        ctx.fillStyle = '#fff';
-        ctx.font = 'bold 11px sans-serif';
-        ctx.textAlign = 'left';
-        ctx.textBaseline = 'top';
-        ctx.fillText('(0,0)', ox + 4, oy + 2);
-        ctx.strokeStyle = '#fff';
-        ctx.lineWidth = 1;
-        ctx.beginPath();
-        ctx.arc(ox, oy, 4, 0, Math.PI * 2);
-        ctx.stroke();
+    // Draw X and Y axes and (0,0) at the first Detection Zone polygon point so they match
+    const originWorld = data.perimeter_world && data.perimeter_world.length >= 1
+        ? { x: data.perimeter_world[0].x, y: data.perimeter_world[0].y }
+        : (bounds.min_x <= 0 && 0 <= bounds.max_x && bounds.min_y <= 0 && 0 <= bounds.max_y ? { x: 0, y: 0 } : null);
+    if (originWorld) {
+        const [ox, oy] = toCanvas(originWorld.x, originWorld.y);
+        const inBounds = bounds.min_x <= originWorld.x && originWorld.x <= bounds.max_x &&
+            bounds.min_y <= originWorld.y && originWorld.y <= bounds.max_y;
+        if (inBounds) {
+            // Y axis through first zone point: vertical line
+            ctx.strokeStyle = '#ff8c00';
+            ctx.lineWidth = 2;
+            ctx.setLineDash([4, 4]);
+            ctx.beginPath();
+            ctx.moveTo(ox, toCanvas(originWorld.x, bounds.min_y)[1]);
+            ctx.lineTo(ox, toCanvas(originWorld.x, bounds.max_y)[1]);
+            ctx.stroke();
+            ctx.setLineDash([]);
+            ctx.fillStyle = '#ff8c00';
+            ctx.font = '11px sans-serif';
+            ctx.textAlign = 'right';
+            ctx.fillText('+Y', ox - 6, toCanvas(originWorld.x, bounds.max_y)[1] - 4);
+            // X axis through first zone point: horizontal line
+            ctx.strokeStyle = '#00bfff';
+            ctx.beginPath();
+            ctx.moveTo(toCanvas(bounds.min_x, originWorld.y)[0], oy);
+            ctx.lineTo(toCanvas(bounds.max_x, originWorld.y)[0], oy);
+            ctx.stroke();
+            ctx.fillStyle = '#00bfff';
+            ctx.textAlign = 'left';
+            ctx.fillText('+X', toCanvas(bounds.max_x, originWorld.y)[0] + 4, oy + 4);
+            // Origin label (0,0) at first zone point
+            ctx.fillStyle = '#fff';
+            ctx.font = 'bold 11px sans-serif';
+            ctx.textAlign = 'left';
+            ctx.textBaseline = 'top';
+            ctx.fillText('(0,0)', ox + 4, oy + 2);
+            ctx.strokeStyle = '#fff';
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            ctx.arc(ox, oy, 4, 0, Math.PI * 2);
+            ctx.stroke();
+        }
     }
     
     // Draw perimeter polygon
