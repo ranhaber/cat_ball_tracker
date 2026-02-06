@@ -1753,9 +1753,18 @@ async function loadLensSnapshot() {
     }
 }
 
-function lensNewLine() {
+async function lensNewLine() {
     if (lensCurrentLine.length >= 3) {
-        lensLines.push([...lensCurrentLine]);
+        const line = [...lensCurrentLine];
+        lensLines.push(line);
+        // Auto-save: append to persistent file on server
+        try {
+            await fetch('/api/lens_calibration/lines/append', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ points: line, image_width: lensImageWidth, image_height: lensImageHeight })
+            });
+        } catch (e) { console.warn('Auto-save line failed:', e); }
     } else if (lensCurrentLine.length > 0) {
         alert('A line needs at least 3 points. Add more points or click elsewhere.');
         return;
@@ -1834,7 +1843,7 @@ async function lensClearAll() {
     updateLensStatusUI({ is_calibrated: false });
     try {
         await fetch('/api/lens_calibration', { method: 'DELETE' });
-    } catch (e) { console.warn('Clear lens calibration on server failed:', e); }
+    } catch (e) { console.warn('Clear lens calibration failed:', e); }
 }
 
 function updateLensUI() {
@@ -1994,6 +2003,26 @@ async function loadLensCalibrationStatus() {
         updateLensStatusUI(data);
     } catch (err) {
         console.error('Error loading lens calibration status:', err);
+    }
+    // Load saved lines from persistent file
+    try {
+        const response = await fetch('/api/lens_calibration/lines');
+        const data = await response.json();
+        if (data.lines && data.lines.length > 0) {
+            lensLines = data.lines;
+            lensCurrentLine = [];
+            if (data.image_width) lensImageWidth = data.image_width;
+            if (data.image_height) lensImageHeight = data.image_height;
+            if (lensCanvas) {
+                lensCanvas.width = lensImageWidth;
+                lensCanvas.height = lensImageHeight;
+            }
+            drawLensCanvas();
+            updateLensUI();
+            console.log(`[LENS] Loaded ${lensLines.length} saved lines`);
+        }
+    } catch (err) {
+        console.error('Error loading saved lens lines:', err);
     }
 }
 

@@ -1511,21 +1511,44 @@ def create_app():
     
     @app.route('/api/lens_calibration/lines', methods=['GET'])
     def export_lens_lines():
-        """Export lines/points data as JSON (download)."""
+        """Export lines/points data as JSON (download or page-load)."""
         if not video_processor.lens_calibration or not video_processor.lens_calibration.lines:
-            return jsonify({"error": "No lines data available"}), 404
+            return jsonify({"lines": [], "num_lines": 0, "total_points": 0,
+                            "image_width": 0, "image_height": 0})
         data = video_processor.lens_calibration.export_lines()
         return jsonify(data)
     
     @app.route('/api/lens_calibration/lines', methods=['POST'])
     def import_lens_lines():
-        """Import lines/points data from JSON (upload)."""
+        """Import lines/points data from JSON (upload). Replaces all lines."""
         if not video_processor.lens_calibration:
             return jsonify({"error": "Lens calibration not available"}), 500
         data = request.get_json()
         try:
             result = video_processor.lens_calibration.import_lines(data)
             return jsonify({"success": True, **result})
+        except ValueError as e:
+            return jsonify({"error": str(e)}), 400
+    
+    @app.route('/api/lens_calibration/lines', methods=['DELETE'])
+    def clear_lens_lines():
+        """Delete all lines (but keep calibration result if any)."""
+        if video_processor.lens_calibration:
+            video_processor.lens_calibration.clear_lines()
+        return jsonify({"success": True})
+    
+    @app.route('/api/lens_calibration/lines/append', methods=['POST'])
+    def append_lens_line():
+        """Append a single line. Auto-saves to file."""
+        if not video_processor.lens_calibration:
+            return jsonify({"error": "Lens calibration not available"}), 500
+        data = request.get_json()
+        points = data.get('points', [])
+        image_width = data.get('image_width', 0)
+        image_height = data.get('image_height', 0)
+        try:
+            count = video_processor.lens_calibration.append_line(points, image_width, image_height)
+            return jsonify({"success": True, "num_lines": count})
         except ValueError as e:
             return jsonify({"error": str(e)}), 400
     

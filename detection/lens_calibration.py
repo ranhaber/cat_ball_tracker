@@ -46,6 +46,8 @@ class LensCalibration:
 
         if os.path.exists(self.calibration_file):
             self.load()
+        # Also load lines file (may have lines without calibration yet)
+        self.load_lines_file()
 
     # ------------------------------------------------------------------
     # Core: plumb-line optimisation
@@ -277,8 +279,63 @@ class LensCalibration:
             print(f"[LENS] Error loading {self.calibration_file}: {e}")
             self.is_calibrated = False
 
+    LINES_FILE = "lens_lines_data.json"
+
+    def _lines_path(self):
+        return os.path.join(config.BASE_DIR, self.LINES_FILE)
+
+    def _save_lines_file(self):
+        """Save current lines to the persistent lines file."""
+        data = {
+            "image_width": self.image_width,
+            "image_height": self.image_height,
+            "lines": self.lines,
+        }
+        with open(self._lines_path(), 'w') as f:
+            json.dump(data, f, indent=2)
+
+    def load_lines_file(self):
+        """Load lines from the persistent file. Returns line count or 0."""
+        path = self._lines_path()
+        if not os.path.exists(path):
+            return 0
+        try:
+            with open(path, 'r') as f:
+                data = json.load(f)
+            self.lines = data.get("lines", [])
+            self.image_width = data.get("image_width", self.image_width)
+            self.image_height = data.get("image_height", self.image_height)
+            if self.lines:
+                print(f"[LENS] Loaded {len(self.lines)} lines from {self.LINES_FILE}")
+            return len(self.lines)
+        except Exception as e:
+            print(f"[LENS] Error loading {self.LINES_FILE}: {e}")
+            return 0
+
+    def append_line(self, points, image_width=0, image_height=0):
+        """Append a single line (list of [x,y]) and auto-save to file.
+        Returns updated line count."""
+        pts = [[float(p[0]), float(p[1])] for p in points]
+        if len(pts) < 3:
+            raise ValueError(f"Line needs at least 3 points (has {len(pts)})")
+        if image_width > 0:
+            self.image_width = image_width
+        if image_height > 0:
+            self.image_height = image_height
+        self.lines.append(pts)
+        self._save_lines_file()
+        return len(self.lines)
+
+    def clear_lines(self):
+        """Delete all lines and remove the lines file."""
+        self.lines = []
+        path = self._lines_path()
+        if os.path.exists(path):
+            os.remove(path)
+            print(f"[LENS] Deleted {self.LINES_FILE}")
+
     def export_lines(self):
-        """Export lines/points data as a dict (for saving to file)."""
+        """Export lines/points data as a dict (for download)."""
         return {
             "image_width": self.image_width,
             "image_height": self.image_height,
@@ -288,7 +345,7 @@ class LensCalibration:
         }
 
     def import_lines(self, data):
-        """Import lines/points data from a dict. Returns the lines for UI display."""
+        """Import lines/points data from a dict. Replaces current lines and saves to file."""
         lines = data.get("lines", [])
         if not lines:
             raise ValueError("No lines found in file")
@@ -298,6 +355,7 @@ class LensCalibration:
         self.lines = [[[float(p[0]), float(p[1])] for p in line] for line in lines]
         self.image_width = data.get("image_width", 0)
         self.image_height = data.get("image_height", 0)
+        self._save_lines_file()
         return {
             "lines": self.lines,
             "image_width": self.image_width,
@@ -307,14 +365,14 @@ class LensCalibration:
         }
 
     def clear(self):
-        """Remove calibration and delete file."""
+        """Remove calibration and delete both calibration and lines files."""
         self.dist_coeffs = None
         self.camera_matrix = None
-        self.lines = []
         self.is_calibrated = False
         if os.path.exists(self.calibration_file):
             os.remove(self.calibration_file)
-        print("[LENS] Calibration cleared")
+        self.clear_lines()
+        print("[LENS] Calibration and lines cleared")
 
     def get_status(self):
         """Return calibration status for the UI."""
