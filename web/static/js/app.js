@@ -476,7 +476,8 @@ async function loadMotionSettings() {
 // ============================================================================
 let calibrationCanvas, calibrationCtx;
 let calibrationImage = null;
-let calibrationPoints = [];  // Array of { pixel: [x,y], world: [x,y] }
+let calibrationPoints = [];  // Array of { pixel: [x,y], world?: [x,y] } (world set from side lengths or loaded)
+let calibrationSideLengths = [null, null, null, null];  // [L01, L12, L23, L30] in meters
 
 function initCalibration() {
     calibrationCanvas = document.getElementById('calibration-canvas');
@@ -549,27 +550,14 @@ function handleCalibrationClick(e) {
     }
     
     const rect = calibrationCanvas.getBoundingClientRect();
-    // Scale from display size to actual canvas/image resolution
     const scaleX = calibrationCanvas.width / rect.width;
     const scaleY = calibrationCanvas.height / rect.height;
     
-    // Coordinates are at full camera resolution
     const px = Math.round((e.clientX - rect.left) * scaleX);
     const py = Math.round((e.clientY - rect.top) * scaleY);
     
-    // Ask for world coordinates
-    const pointNum = calibrationPoints.length + 1;
-    const worldX = prompt(`Point ${pointNum}: Enter X coordinate in meters (left-right):`);
-    if (worldX === null || isNaN(parseFloat(worldX))) return;
-    
-    const worldY = prompt(`Point ${pointNum}: Enter Y coordinate in meters (near-far):`);
-    if (worldY === null || isNaN(parseFloat(worldY))) return;
-    
-    // Add point
-    calibrationPoints.push({
-        pixel: [px, py],
-        world: [parseFloat(worldX), parseFloat(worldY)]
-    });
+    // Add point (pixel only; world derived from side lengths when saving)
+    calibrationPoints.push({ pixel: [px, py] });
     
     updateCalibrationPointsUI();
     drawCalibration();
@@ -592,7 +580,8 @@ function drawCalibration() {
     // Draw calibration points
     calibrationPoints.forEach((point, index) => {
         const [px, py] = point.pixel;
-        const [wx, wy] = point.world;
+        const hasWorld = point.world && point.world.length === 2;
+        const label = hasWorld ? `(${point.world[0].toFixed(1)}m, ${point.world[1].toFixed(1)}m)` : (index === 0 ? '0,0' : `Point ${index + 1}`);
         const color = colors[index % colors.length];
         
         // Draw point circle
@@ -613,16 +602,12 @@ function drawCalibration() {
         calibrationCtx.textBaseline = 'middle';
         calibrationCtx.fillText(String(index + 1), px, py);
         
-        // Draw world coordinates label
-        const label = `(${wx}m, ${wy}m)`;
+        // Draw label (world coords or "0,0" / "Point N")
         calibrationCtx.font = 'bold 12px sans-serif';
         calibrationCtx.textBaseline = 'top';
-        
-        // Background for label
         const metrics = calibrationCtx.measureText(label);
         calibrationCtx.fillStyle = 'rgba(0,0,0,0.7)';
         calibrationCtx.fillRect(px - metrics.width/2 - 3, py + 15, metrics.width + 6, 18);
-        
         calibrationCtx.fillStyle = color;
         calibrationCtx.fillText(label, px, py + 17);
     });
@@ -641,71 +626,70 @@ function drawCalibration() {
 }
 
 function updateCalibrationPointsUI() {
-    const countEl = document.getElementById('points-count');
+    const countEl = document.getElementById('calibration-points-count');
     const containerEl = document.getElementById('points-container');
+    const sideLengthsEl = document.getElementById('side-lengths-container');
     const saveBtn = document.getElementById('save-calibration');
     
     if (countEl) {
         countEl.textContent = `${calibrationPoints.length}/4`;
     }
     
-    // Enable save button only when we have 4 points
+    const hasFour = calibrationPoints.length === 4;
     if (saveBtn) {
-        saveBtn.disabled = calibrationPoints.length !== 4;
+        saveBtn.disabled = !hasFour || calibrationSideLengths.some(v => v === null || v === '' || isNaN(parseFloat(v)));
     }
     
-    // Build points list HTML
+    // Points list: short labels (Point 1 = 0,0, Point 2, 3, 4) with remove
     if (containerEl) {
         containerEl.innerHTML = '';
         const colors = ['#ff0000', '#00ff00', '#0000ff', '#ffff00'];
-        
         calibrationPoints.forEach((point, index) => {
+            const label = index === 0 ? 'Point 1 (origin 0,0)' : `Point ${index + 1}`;
             const div = document.createElement('div');
             div.className = 'calibration-point-item';
             div.innerHTML = `
-                <span class="point-label" style="color: ${colors[index]}">Point ${index + 1}</span>
+                <span class="point-label" style="color: ${colors[index]}">${label}</span>
                 <button class="remove-point" data-index="${index}">✕</button>
-                <div class="point-coords">
-                    <div>
-                        <label>X (m)</label>
-                        <input type="number" step="0.1" value="${point.world[0]}" 
-                               data-index="${index}" data-coord="x" class="world-coord-input">
-                    </div>
-                    <div>
-                        <label>Y (m)</label>
-                        <input type="number" step="0.1" value="${point.world[1]}" 
-                               data-index="${index}" data-coord="y" class="world-coord-input">
-                    </div>
-                </div>
             `;
             containerEl.appendChild(div);
         });
-        
-        // Add event listeners for remove buttons
         containerEl.querySelectorAll('.remove-point').forEach(btn => {
             btn.addEventListener('click', (e) => {
                 const index = parseInt(e.target.dataset.index);
                 calibrationPoints.splice(index, 1);
+                calibrationSideLengths = [null, null, null, null];
                 updateCalibrationPointsUI();
                 drawCalibration();
             });
         });
-        
-        // Add event listeners for world coordinate inputs
-        containerEl.querySelectorAll('.world-coord-input').forEach(input => {
-            input.addEventListener('change', (e) => {
-                const index = parseInt(e.target.dataset.index);
-                const coord = e.target.dataset.coord;
-                const value = parseFloat(e.target.value) || 0;
-                
-                if (coord === 'x') {
-                    calibrationPoints[index].world[0] = value;
-                } else {
-                    calibrationPoints[index].world[1] = value;
-                }
-                drawCalibration();
+    }
+    
+    // Side lengths (shown when 4 points)
+    if (sideLengthsEl) {
+        if (hasFour) {
+            sideLengthsEl.style.display = 'block';
+            sideLengthsEl.innerHTML = '<p><strong>Side lengths (meters):</strong></p>' +
+                [1, 2, 3, 4].map(i => {
+                    const val = calibrationSideLengths[i - 1];
+                    const v = val !== null && val !== '' ? val : '';
+                    return `<div class="side-length-row">
+                        <label>Side ${i} (Point ${i}→${i === 4 ? 1 : i + 1})</label>
+                        <input type="number" step="0.01" min="0" data-side="${i - 1}" class="side-length-input" value="${v}" placeholder="meters">
+                    </div>`;
+                }).join('');
+            sideLengthsEl.querySelectorAll('.side-length-input').forEach(input => {
+                input.addEventListener('input', (e) => {
+                    const idx = parseInt(e.target.dataset.side);
+                    const v = e.target.value.trim();
+                    calibrationSideLengths[idx] = v === '' ? null : parseFloat(v);
+                    if (saveBtn) saveBtn.disabled = calibrationSideLengths.some(v => v === null || v === '' || isNaN(parseFloat(v)));
+                });
             });
-        });
+        } else {
+            sideLengthsEl.style.display = 'none';
+            sideLengthsEl.innerHTML = '';
+        }
     }
 }
 
@@ -714,15 +698,15 @@ async function loadCalibrationStatus() {
         const response = await fetch('/api/calibration');
         const data = await response.json();
         
-        // Load saved points if any
         if (data.points && Array.isArray(data.points) && data.points.length > 0) {
             calibrationPoints = data.points;
+            if (data.side_lengths && Array.isArray(data.side_lengths) && data.side_lengths.length === 4) {
+                calibrationSideLengths = data.side_lengths.map(v => v);
+            }
             updateCalibrationPointsUI();
         }
         
         updateCalibrationStatusUI(data);
-        
-        // Show top-down view if calibrated
         updateTopDownVisibility(data.is_calibrated);
     } catch (error) {
         console.error('Error loading calibration:', error);
@@ -750,16 +734,32 @@ async function saveCalibrationPoints() {
         alert('Need exactly 4 calibration points');
         return;
     }
+    const lengths = calibrationSideLengths.map(v => v === null || v === '' ? null : parseFloat(v));
+    if (lengths.some(v => v === null || isNaN(v) || v < 0)) {
+        alert('Please enter all 4 side lengths (positive numbers in meters)');
+        return;
+    }
     
     try {
         const response = await fetch('/api/calibration', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ points: calibrationPoints })
+            body: JSON.stringify({
+                points: calibrationPoints.map(p => ({ pixel: p.pixel })),
+                side_lengths: lengths
+            })
         });
         
         if (response.ok) {
             const data = await response.json();
+            if (data.calibration && data.calibration.points) {
+                calibrationPoints = data.calibration.points;
+                if (data.calibration.side_lengths) {
+                    calibrationSideLengths = data.calibration.side_lengths.map(v => v);
+                }
+            }
+            updateCalibrationPointsUI();
+            drawCalibration();
             updateCalibrationStatusUI(data.calibration);
             updateTopDownVisibility(data.calibration.is_calibrated);
             alert('Calibration saved successfully!');
@@ -776,6 +776,7 @@ async function saveCalibrationPoints() {
 
 async function clearCalibration() {
     calibrationPoints = [];
+    calibrationSideLengths = [null, null, null, null];
     updateCalibrationPointsUI();
     drawCalibration();
     
@@ -1169,8 +1170,8 @@ function drawPerimeter() {
 }
 
 function updatePointsCount() {
-    const el = document.getElementById('points-count');
-    if (el) el.textContent = `Points: ${perimeterPoints.length}`;
+    const el = document.getElementById('perimeter-points-count');
+    if (el) el.textContent = `Points: ${perimeterPoints.length} (minimum 3 required)`;
 }
 
 async function savePerimeter() {
@@ -1284,6 +1285,9 @@ async function updateStatus() {
                 statusResolution.textContent = status.resolution || '--';
             }
         }
+
+        const versionEl = document.getElementById('version');
+        if (versionEl && status.version) versionEl.textContent = `v${status.version}`;
         
         // Update motion detection status
         const motionStatus = document.getElementById('motion-status');

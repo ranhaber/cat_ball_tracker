@@ -271,7 +271,8 @@
                     <!-- Perimeter Editor -->
                     <div class="control-section">
                         <h2>Detection Zone</h2>
-                        <p>Define the area where detection should occur:</p>
+                        <p>Define the area where detection should occur. Click points in order (e.g. clockwise).</p>
+                        <p class="zone-coords-hint"><strong>Coordinate system:</strong> First mark = origin (0,0). Right = +X, Up = +Y.</p>
                         <div class="perimeter-editor">
                             <div class="editor-toolbar">
                                 <button id="load-snapshot-perimeter" class="btn btn-primary">📷 Load Camera Frame</button>
@@ -282,14 +283,14 @@
                                 <canvas id="perimeter-canvas" width="640" height="480"></canvas>
                                 <p class="canvas-hint" id="perimeter-hint">Click "Load Camera Frame" to start</p>
                             </div>
-                            <p id="points-count">Points: 0 (minimum 3 required)</p>
+                            <p id="perimeter-points-count">Points: 0 (minimum 3 required)</p>
                         </div>
                     </div>
 
                     <!-- 4-Point Calibration for Perspective Transform -->
                     <div class="control-section">
                         <h2>Perspective Calibration</h2>
-                        <p>Click 4 points on the ground and enter their real-world X,Y coordinates (meters):</p>
+                        <p>Click 4 points in the same order as your Detection Zone. Then enter the <strong>length of each side</strong> in meters (same order: 1→2, 2→3, 3→4, 4→1). Point 1 = origin (0,0).</p>
                         <div class="calibration-editor">
                             <div class="editor-toolbar">
                                 <button id="load-snapshot-calibration" class="btn btn-primary">📷 Load Camera Frame</button>
@@ -303,14 +304,15 @@
                             
                             <!-- Calibration Points List -->
                             <div class="calibration-points-list" id="calibration-points-list">
-                                <p><strong>Calibration Points:</strong> <span id="points-count">0/4</span></p>
+                                <p><strong>Calibration Points:</strong> <span id="calibration-points-count">0/4</span></p>
                                 <div id="points-container"></div>
+                                <div id="side-lengths-container" class="side-lengths-container" style="display: none;"></div>
                             </div>
                             
                             <div class="calibration-info">
                                 <p>Status: <strong id="calibration-status">Not calibrated</strong></p>
                             </div>
-                            <p class="hint">Click 4 points on the ground plane. For each point, enter the real-world X (left-right) and Y (near-far) coordinates in meters.</p>
+                            <p class="hint">Click 4 points (same order as zone). First point = (0,0). Enter the length of each side in meters.</p>
                         </div>
                     </div>
                 </div>
@@ -318,7 +320,7 @@
         </main>
 
         <footer>
-            <p>Cat Dome - Detection & Tracking System | <span id="version">v2.0.0</span></p>
+            <p>Cat Dome - Detection & Tracking System | <span id="version">—</span></p>
         </footer>
     </div>
 

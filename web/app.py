@@ -690,6 +690,7 @@ class VideoProcessor:
             
     def get_status(self):
         """Get current system status"""
+        import main as main_module
         system_info = get_system_info()
         
         is_calibrated = False
@@ -697,6 +698,7 @@ class VideoProcessor:
             is_calibrated = self.calibration.is_calibrated
         
         return {
+            "version": getattr(main_module, "__version__", "?"),
             "fps": round(self.fps, 1),
             "frame_count": self.frame_count,
             "detection_mode": self.get_detection_mode(),
@@ -730,13 +732,21 @@ class VideoProcessor:
     def get_calibration(self):
         """Get current calibration status and points"""
         if self.calibration:
-            return self.calibration.to_json()
-        return {"is_calibrated": False, "points": [], "world_bounds": config.DEFAULT_WORLD_BOUNDS}
+            out = self.calibration.to_json()
+            out["side_lengths"] = self.calibration.get_side_lengths()
+            return out
+        return {"is_calibrated": False, "points": [], "world_bounds": config.DEFAULT_WORLD_BOUNDS, "side_lengths": []}
     
     def set_calibration(self, points):
         """Set calibration points"""
         if self.calibration:
             return self.calibration.set_calibration_points(points)
+        return False
+
+    def set_calibration_from_side_lengths(self, points_pixel, side_lengths):
+        """Set calibration from 4 pixel points and side lengths in meters (first point = 0,0; right = +X, up = +Y)."""
+        if self.calibration:
+            return self.calibration.set_calibration_from_side_lengths(points_pixel, side_lengths)
         return False
     
     def clear_calibration(self):
@@ -1341,22 +1351,38 @@ def create_app():
     
     @app.route('/api/calibration', methods=['POST'])
     def set_calibration():
-        """Set calibration points (4 points required)"""
+        """Set calibration: either (points with pixel+world) or (points with pixel only + side_lengths)."""
         data = request.get_json()
         points = data.get('points', [])
+        side_lengths = data.get('side_lengths', [])
         
         if len(points) != 4:
             return jsonify({"error": "Exactly 4 calibration points required"}), 400
         
-        # Validate point format
-        for i, p in enumerate(points):
-            if "pixel" not in p or "world" not in p:
-                return jsonify({"error": f"Point {i+1} missing 'pixel' or 'world' coordinates"}), 400
+        if side_lengths:
+            # Calibration from side lengths: points need only pixel coords; first point = (0,0), right = +X, up = +Y
+            if len(side_lengths) != 4:
+                return jsonify({"error": "Exactly 4 side lengths required (P0→P1, P1→P2, P2→P3, P3→P0)"}), 400
+            points_pixel = []
+            for i, p in enumerate(points):
+                if "pixel" not in p:
+                    return jsonify({"error": f"Point {i+1} missing 'pixel' coordinates"}), 400
+                points_pixel.append(p["pixel"] if len(p["pixel"]) == 2 else [float(p["pixel"][0]), float(p["pixel"][1])])
+            try:
+                side_lengths = [float(x) for x in side_lengths]
+            except (TypeError, ValueError):
+                return jsonify({"error": "Side lengths must be numbers (meters)"}), 400
+            success = video_processor.set_calibration_from_side_lengths(points_pixel, side_lengths)
+        else:
+            # Legacy: full points with pixel and world
+            for i, p in enumerate(points):
+                if "pixel" not in p or "world" not in p:
+                    return jsonify({"error": f"Point {i+1} missing 'pixel' or 'world' coordinates"}), 400
+            success = video_processor.set_calibration(points)
         
-        success = video_processor.set_calibration(points)
         if success:
             return jsonify({
-                "success": True, 
+                "success": True,
                 "calibration": video_processor.get_calibration()
             })
         return jsonify({"error": "Calibration failed"}), 400
