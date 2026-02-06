@@ -257,6 +257,16 @@ MINIMAP_POINT_COLOR_CAT = (0, 255, 0)    # Green
 MINIMAP_POINT_COLOR_BALL = (0, 165, 255)  # Orange
 
 # ============================================================================
+# RECORDING (on detection)
+# ============================================================================
+# Directory for saved clips (created if missing)
+VIDEO_LIBRARY_PATH = "/home/ranhaber/cat_dome_videos"
+# Stop recording this many seconds after last detection of cat/ball
+RECORD_AFTER_DETECTION_SEC = 5
+# Recording format: H.264 in MP4 (good compression, same quality)
+RECORDING_FOURCC = "avc1"  # H.264 for MP4
+
+# ============================================================================
 # Sync FRAME_WIDTH/HEIGHT with DEFAULT_RESOLUTION
 # ============================================================================
 FRAME_WIDTH = DEFAULT_RESOLUTION[0]

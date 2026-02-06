@@ -49,6 +49,50 @@
                         <span>Show Motion Regions</span>
                     </label>
                 </div>
+                <!-- Video Source & Recording (v2.0) -->
+                <div class="control-section video-source-section">
+                    <h3>📹 Video Source</h3>
+                    <div class="video-source-options">
+                        <label class="radio-label">
+                            <input type="radio" name="video-source" value="live" id="video-source-live">
+                            <span>Live camera</span>
+                        </label>
+                        <label class="radio-label">
+                            <input type="radio" name="video-source" value="file" id="video-source-file">
+                            <span>From file</span>
+                        </label>
+                    </div>
+                    <div id="video-file-panel" class="video-file-panel" style="display: none;">
+                        <div class="video-file-row">
+                            <label>Library path:</label>
+                            <input type="text" id="video-library-path-input" placeholder="/home/ranhaber/cat_dome_videos">
+                            <button type="button" id="video-refresh-library-btn" class="btn-small">Refresh list</button>
+                        </div>
+                        <div class="video-file-row">
+                            <label>File from library:</label>
+                            <select id="video-library-select">
+                                <option value="">-- Select file --</option>
+                            </select>
+                            <button type="button" id="video-load-library-btn" class="btn-small">Load</button>
+                        </div>
+                        <div class="video-file-row">
+                            <label>Or path to file:</label>
+                            <input type="text" id="video-file-path-input" placeholder="/path/to/video.mp4">
+                            <button type="button" id="video-load-path-btn" class="btn-small">Load</button>
+                        </div>
+                    </div>
+                    <div class="recording-options">
+                        <h4>Recording on detection</h4>
+                        <label class="checkbox-label">
+                            <input type="checkbox" id="recording-enabled-checkbox" checked>
+                            <span>Record when cat/ball is detected</span>
+                        </label>
+                        <div class="video-file-row">
+                            <label>Stop recording (sec after last detection):</label>
+                            <input type="number" id="record-after-sec" min="1" max="60" value="5" style="width: 4em;">
+                        </div>
+                    </div>
+                </div>
             </section>
 
             <!-- Settings Tab -->
@@ -274,7 +318,7 @@
         </main>
 
         <footer>
-            <p>Cat Dome - Detection & Tracking System | <span id="version">v1.9.4</span></p>
+            <p>Cat Dome - Detection & Tracking System | <span id="version">v2.0.0</span></p>
         </footer>
     </div>
 

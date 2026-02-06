@@ -89,7 +89,7 @@ def get_system_info():
         pass
     
     return info
-from camera.camera_handler import CameraHandler
+from camera.camera_handler import CameraHandler, FileCameraHandler
 from detection.detector import TFLiteDetector
 from detection.tracker import CentroidTracker
 from detection.perimeter import PerimeterManager
@@ -155,6 +155,19 @@ class VideoProcessor:
         self.current_profile = saved_profile
         self.current_jpeg_quality = config.JPEG_QUALITY  # Will be updated by profile
         
+        # Video source and recording
+        self.video_library_path = saved.get("video_library_path", getattr(config, 'VIDEO_LIBRARY_PATH', '/home/ranhaber/cat_dome_videos'))
+        self.record_after_detection_sec = saved.get("record_after_detection_sec", getattr(config, 'RECORD_AFTER_DETECTION_SEC', 5))
+        self.recording_enabled = saved.get("recording_enabled", True)
+        self.video_source = saved.get("video_source", "live")
+        self.video_file_path = saved.get("video_file_path")  # None or path
+        self.file_camera = None  # FileCameraHandler, created when source is file
+        # Recording state
+        self._recording_writer = None
+        self._recording_start_time = None
+        self._recording_last_detection_time = None
+        self._recording_filename = None
+        
         # Detection mode and threshold will be set on detector after it's created
         self._saved_detection_mode = saved.get("detection_mode", config.DEFAULT_DETECTION_MODE)
         self._saved_threshold = saved.get("detection_threshold", config.DETECTION_THRESHOLD)
@@ -204,8 +217,20 @@ class VideoProcessor:
         # Apply saved performance profile
         self._apply_performance_profile(self.current_profile, save=False)
         
-        # Start camera
+        # Ensure video library directory exists
+        lib_path = self.video_library_path or getattr(config, 'VIDEO_LIBRARY_PATH', '/home/ranhaber/cat_dome_videos')
+        os.makedirs(lib_path, exist_ok=True)
+        
+        # Start camera (or file source)
         self.camera.start()
+        if self.video_source == "file" and self.video_file_path and os.path.isfile(self.video_file_path):
+            self.file_camera = FileCameraHandler()
+            try:
+                self.file_camera.start(self.video_file_path)
+            except Exception as e:
+                print(f"File camera failed: {e}")
+                self.file_camera = None
+                self.video_source = "live"
         
         # Start processing thread
         self.running = True
@@ -218,6 +243,10 @@ class VideoProcessor:
     def stop(self):
         """Stop all components"""
         self.running = False
+        self._stop_recording()
+        if self.file_camera:
+            self.file_camera.stop()
+            self.file_camera = None
         if self.camera:
             self.camera.stop()
         print("Video processor stopped")
@@ -229,20 +258,22 @@ class VideoProcessor:
         
         while self.running:
             try:
-                # Get frame from camera (BLOCKING - waits for frame ready, zero CPU!)
-                request = self.camera.get_request()
-                
-                if request is None:
-                    # Mock camera fallback (uses threaded capture)
-                    frame = self.camera.get_frame()
+                frame = None
+                if self.video_source == "file" and self.file_camera and self.file_camera.running:
+                    frame = self.file_camera.get_frame()
                     if frame is None:
-                        time.sleep(0.01)
+                        time.sleep(0.05)
                         continue
                 else:
-                    # Real camera: use captured_request (blocking, interrupt-driven)
-                    with request as req:
-                        frame = req.make_array("main")
-                        # Auto-releases when exiting context
+                    request = self.camera.get_request()
+                    if request is None:
+                        frame = self.camera.get_frame()
+                        if frame is None:
+                            time.sleep(0.01)
+                            continue
+                    else:
+                        with request as req:
+                            frame = req.make_array("main")
                 
                 frame_h, frame_w = frame.shape[:2]
                 run_ai_detection = False
@@ -405,8 +436,20 @@ class VideoProcessor:
                 with self.frame_lock:
                     self.current_frame = annotated
                 
-                # MOVED: Update FPS only when we actually process a frame (not every loop)
-                # This was causing FPS to be 35+ instead of 5-7
+                # Recording on detection (live only, when enabled)
+                if self.video_source == "live" and self.recording_enabled:
+                    target_class = config.COCO_CLASSES.get(self.get_detection_mode(), 17)
+                    has_target = any(d[5] == target_class for d in last_detections)
+                    now = time.time()
+                    if has_target:
+                        if self._recording_writer is None:
+                            self._start_recording()
+                        if self._recording_writer is not None:
+                            self._recording_writer.write(annotated)
+                            self._recording_last_detection_time = now
+                    else:
+                        if self._recording_writer is not None and (now - self._recording_last_detection_time) >= self.record_after_detection_sec:
+                            self._stop_recording()
                 
             except Exception as e:
                 print(f"Processing error: {e}")
@@ -488,6 +531,47 @@ class VideoProcessor:
             self.fps = self._fps_count / elapsed
             self._fps_count = 0
             self._fps_start = time.time()
+    
+    def _start_recording(self):
+        """Start writing a new clip (same resolution/FPS as live for later use as input)."""
+        lib = self.video_library_path or getattr(config, 'VIDEO_LIBRARY_PATH', '/home/ranhaber/cat_dome_videos')
+        os.makedirs(lib, exist_ok=True)
+        obj_name = self.get_detection_mode()
+        ts = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        self._recording_filename = os.path.join(lib, f"{obj_name}_{ts}.mp4")
+        w, h = self.current_resolution
+        fps = self.current_framerate
+        for fourcc_name in (getattr(config, 'RECORDING_FOURCC', 'avc1'), 'mp4v', 'X264'):
+            fourcc = cv2.VideoWriter_fourcc(*fourcc_name)
+            self._recording_writer = cv2.VideoWriter(self._recording_filename, fourcc, fps, (w, h))
+            if self._recording_writer is not None and self._recording_writer.isOpened():
+                break
+            if self._recording_writer is not None:
+                self._recording_writer.release()
+            self._recording_writer = None
+        try:
+            if self._recording_writer is None:
+                return
+            self._recording_start_time = time.time()
+            self._recording_last_detection_time = time.time()
+            print(f"[REC] Started: {self._recording_filename}")
+        except Exception as e:
+            print(f"[REC] Start failed: {e}")
+            self._recording_writer = None
+    
+    def _stop_recording(self):
+        """Stop current clip and release writer."""
+        if self._recording_writer is None:
+            return
+        try:
+            self._recording_writer.release()
+            print(f"[REC] Stopped: {self._recording_filename}")
+        except Exception:
+            pass
+        self._recording_writer = None
+        self._recording_filename = None
+        self._recording_start_time = None
+        self._recording_last_detection_time = None
             
     def get_frame_jpeg(self):
         """Get current frame as JPEG bytes"""
@@ -1076,6 +1160,90 @@ def create_app():
         
         video_processor.set_confirm_frames(frames)
         return jsonify({"success": True, "confirm_frames": frames})
+    
+    # =========================================================================
+    # Video Source & Recording API
+    # =========================================================================
+    
+    @app.route('/api/video/source', methods=['GET'])
+    def get_video_source():
+        """Get current video source and file path"""
+        return jsonify({
+            "video_source": video_processor.video_source,
+            "video_file_path": video_processor.video_file_path,
+            "video_library_path": video_processor.video_library_path,
+            "recording_enabled": video_processor.recording_enabled,
+            "record_after_detection_sec": video_processor.record_after_detection_sec,
+        })
+    
+    @app.route('/api/video/source', methods=['POST'])
+    def set_video_source():
+        """Set video source: live or file. For file, provide video_file_path."""
+        data = request.get_json() or {}
+        source = data.get("video_source", "live")
+        path = data.get("video_file_path")
+        if source not in ("live", "file"):
+            return jsonify({"error": "video_source must be 'live' or 'file'"}), 400
+        if source == "file" and (not path or not os.path.isfile(path)):
+            return jsonify({"error": "Valid video_file_path required for file source"}), 400
+        video_processor.video_source = source
+        video_processor.video_file_path = path if source == "file" else None
+        settings.update_setting("video_source", video_processor.video_source)
+        settings.update_setting("video_file_path", video_processor.video_file_path)
+        if source == "file" and path:
+            if video_processor.file_camera:
+                video_processor.file_camera.stop()
+            video_processor.file_camera = FileCameraHandler()
+            try:
+                video_processor.file_camera.start(path)
+            except Exception as e:
+                video_processor.file_camera = None
+                video_processor.video_source = "live"
+                return jsonify({"error": str(e)}), 400
+        else:
+            if video_processor.file_camera:
+                video_processor.file_camera.stop()
+                video_processor.file_camera = None
+        return jsonify({"success": True, "video_source": video_processor.video_source, "video_file_path": video_processor.video_file_path})
+    
+    @app.route('/api/video/library', methods=['GET'])
+    def get_video_library():
+        """List video files in library dir (or optional path query param)."""
+        path = request.args.get("path") or video_processor.video_library_path or getattr(config, 'VIDEO_LIBRARY_PATH', '/home/ranhaber/cat_dome_videos')
+        if not os.path.isdir(path):
+            return jsonify({"path": path, "files": [], "error": "Directory not found"})
+        try:
+            names = sorted([f for f in os.listdir(path) if f.lower().endswith(('.mp4', '.avi', '.mkv', '.mov'))])
+            files = [{"name": n, "path": os.path.join(path, n)} for n in names]
+            return jsonify({"path": path, "files": files})
+        except Exception as e:
+            return jsonify({"path": path, "files": [], "error": str(e)})
+    
+    @app.route('/api/video/recording', methods=['GET'])
+    def get_recording_settings():
+        return jsonify({
+            "recording_enabled": video_processor.recording_enabled,
+            "record_after_detection_sec": video_processor.record_after_detection_sec,
+            "video_library_path": video_processor.video_library_path,
+        })
+    
+    @app.route('/api/video/recording', methods=['POST'])
+    def set_recording_settings():
+        data = request.get_json() or {}
+        if "recording_enabled" in data:
+            video_processor.recording_enabled = bool(data["recording_enabled"])
+            settings.update_setting("recording_enabled", video_processor.recording_enabled)
+        if "record_after_detection_sec" in data:
+            sec = int(data["record_after_detection_sec"])
+            if 1 <= sec <= 60:
+                video_processor.record_after_detection_sec = sec
+                settings.update_setting("record_after_detection_sec", sec)
+        if "video_library_path" in data:
+            p = (data.get("video_library_path") or "").strip()
+            video_processor.video_library_path = p or getattr(config, 'VIDEO_LIBRARY_PATH', '/home/ranhaber/cat_dome_videos')
+            os.makedirs(video_processor.video_library_path, exist_ok=True)
+            settings.update_setting("video_library_path", video_processor.video_library_path)
+        return jsonify({"success": True, "recording_enabled": video_processor.recording_enabled, "record_after_detection_sec": video_processor.record_after_detection_sec, "video_library_path": video_processor.video_library_path})
     
     # =========================================================================
     # Motion Detection API Endpoints

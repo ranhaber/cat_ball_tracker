@@ -24,7 +24,12 @@ def get_default_settings():
         "confirm_frames": getattr(config, 'DETECTION_CONFIRM_FRAMES', 1),
         "motion_first_enabled": getattr(config, 'MOTION_FIRST_ENABLED', True),
         "show_motion_regions": getattr(config, 'SHOW_MOTION_REGIONS', False),
-        "performance_profile": getattr(config, 'DEFAULT_PERFORMANCE_PROFILE', 'performance')
+        "performance_profile": getattr(config, 'DEFAULT_PERFORMANCE_PROFILE', 'performance'),
+        "video_library_path": getattr(config, 'VIDEO_LIBRARY_PATH', '/home/ranhaber/cat_dome_videos'),
+        "record_after_detection_sec": getattr(config, 'RECORD_AFTER_DETECTION_SEC', 5),
+        "recording_enabled": True,
+        "video_source": "live",
+        "video_file_path": None,
     }
 
 

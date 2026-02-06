@@ -316,3 +316,59 @@ class CameraHandler:
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.stop()
         return False
+
+
+class FileCameraHandler:
+    """
+    Reads frames from a video file. Same interface as CameraHandler for get_frame/get_resolution.
+    Used when source is "From file" so detection can run on recorded clips.
+    """
+    
+    def __init__(self):
+        self.cap = None
+        self.width = None
+        self.height = None
+        self.fps = 10.0
+        self.running = False
+        self._path = None
+        
+    def start(self, path):
+        """Open video file for reading"""
+        if self.cap is not None:
+            self.cap.release()
+        self.cap = cv2.VideoCapture(path)
+        if not self.cap.isOpened():
+            raise ValueError(f"Cannot open video: {path}")
+        self.width = int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        self.height = int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        fps = self.cap.get(cv2.CAP_PROP_FPS)
+        self.fps = fps if fps and fps > 0 else 10.0
+        self.running = True
+        self._path = path
+        
+    def stop(self):
+        """Release video file"""
+        self.running = False
+        if self.cap is not None:
+            self.cap.release()
+            self.cap = None
+        self._path = None
+        
+    def get_request(self):
+        """File source has no request context; return None so caller uses get_frame()"""
+        return None
+    
+    def get_frame(self):
+        """Read next frame. Returns None when end of file or error."""
+        if not self.cap or not self.running:
+            return None
+        ret, frame = self.cap.read()
+        if not ret or frame is None:
+            return None
+        return frame
+    
+    def get_resolution(self):
+        return (self.width, self.height) if self.width and self.height else (2304, 1296)
+    
+    def get_fps(self):
+        return self.fps

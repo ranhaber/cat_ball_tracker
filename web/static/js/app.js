@@ -20,6 +20,7 @@ document.addEventListener('DOMContentLoaded', () => {
     initThresholdSlider();
     initConfirmSlider();
     initProfileSelector();
+    initVideoSource();
     loadCurrentState();
 });
 
@@ -1358,6 +1359,7 @@ async function loadCurrentState() {
         await loadConfirmFrames();
         await loadCalibrationStatus();
         await loadCurrentProfile();
+        await loadVideoSource();
         await updateStatus();
         
     } catch (error) {
@@ -1382,4 +1384,142 @@ async function loadCurrentProfile() {
     } catch (error) {
         console.error('Error loading current profile:', error);
     }
+}
+
+// ============================================================================
+// Video Source & Recording (Video tab)
+// ============================================================================
+function initVideoSource() {
+    const liveRadio = document.getElementById('video-source-live');
+    const fileRadio = document.getElementById('video-source-file');
+    const filePanel = document.getElementById('video-file-panel');
+    const librarySelect = document.getElementById('video-library-select');
+    const loadLibraryBtn = document.getElementById('video-load-library-btn');
+    const pathInput = document.getElementById('video-file-path-input');
+    const loadPathBtn = document.getElementById('video-load-path-btn');
+    const recordingCheckbox = document.getElementById('recording-enabled-checkbox');
+    const recordAfterSec = document.getElementById('record-after-sec');
+
+    if (!liveRadio || !fileRadio) return;
+
+    function showFilePanel(show) {
+        filePanel.style.display = show ? 'block' : 'none';
+    }
+
+    liveRadio.addEventListener('change', async () => {
+        if (!liveRadio.checked) return;
+        showFilePanel(false);
+        try {
+            const res = await fetch('/api/video/source', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ video_source: 'live' })
+            });
+            const data = await res.json();
+            if (data.success) console.log('Switched to live camera');
+        } catch (e) { console.error(e); }
+    });
+
+    fileRadio.addEventListener('change', () => {
+        showFilePanel(fileRadio.checked);
+        if (fileRadio.checked) loadVideoLibrary();
+    });
+
+    const libraryPathInput = document.getElementById('video-library-path-input');
+    const refreshLibraryBtn = document.getElementById('video-refresh-library-btn');
+    if (refreshLibraryBtn) refreshLibraryBtn.addEventListener('click', () => {
+        const path = (libraryPathInput && libraryPathInput.value.trim()) || null;
+        loadVideoLibrary(path);
+    });
+
+    loadLibraryBtn.addEventListener('click', async () => {
+        const path = librarySelect.value;
+        if (!path) return;
+        try {
+            const res = await fetch('/api/video/source', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ video_source: 'file', video_file_path: path })
+            });
+            const data = await res.json();
+            if (data.success) console.log('Loading file:', path);
+            else alert(data.error || 'Failed to load file');
+        } catch (e) { console.error(e); alert('Request failed'); }
+    });
+
+    loadPathBtn.addEventListener('click', async () => {
+        const path = (pathInput.value || '').trim();
+        if (!path) return;
+        try {
+            const res = await fetch('/api/video/source', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ video_source: 'file', video_file_path: path })
+            });
+            const data = await res.json();
+            if (data.success) console.log('Loading file:', path);
+            else alert(data.error || 'Failed to load file');
+        } catch (e) { console.error(e); alert('Request failed'); }
+    });
+
+    recordingCheckbox.addEventListener('change', async () => {
+        try {
+            await fetch('/api/video/recording', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ recording_enabled: recordingCheckbox.checked })
+            });
+        } catch (e) { console.error(e); }
+    });
+
+    recordAfterSec.addEventListener('change', () => {
+        const sec = parseInt(recordAfterSec.value, 10);
+        if (sec >= 1 && sec <= 60) {
+            fetch('/api/video/recording', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ record_after_detection_sec: sec })
+            }).catch(e => console.error(e));
+        }
+    });
+}
+
+async function loadVideoLibrary(customPath) {
+    const select = document.getElementById('video-library-select');
+    const pathInput = document.getElementById('video-library-path-input');
+    if (!select) return;
+    try {
+        const url = customPath != null ? `/api/video/library?path=${encodeURIComponent(customPath)}` : '/api/video/library';
+        const res = await fetch(url);
+        const data = await res.json();
+        if (pathInput) pathInput.value = data.path || '';
+        select.innerHTML = '<option value="">-- Select file --</option>';
+        (data.files || []).forEach(f => {
+            const opt = document.createElement('option');
+            opt.value = f.path;
+            opt.textContent = f.name;
+            select.appendChild(opt);
+        });
+    } catch (e) { console.error(e); }
+}
+
+async function loadVideoSource() {
+    try {
+        const res = await fetch('/api/video/source');
+        const data = await res.json();
+        const liveRadio = document.getElementById('video-source-live');
+        const fileRadio = document.getElementById('video-source-file');
+        const filePanel = document.getElementById('video-file-panel');
+        const recordingCheckbox = document.getElementById('recording-enabled-checkbox');
+        const recordAfterSec = document.getElementById('record-after-sec');
+        const pathInput = document.getElementById('video-library-path-input');
+        if (!liveRadio || !fileRadio) return;
+        liveRadio.checked = data.video_source === 'live';
+        fileRadio.checked = data.video_source === 'file';
+        filePanel.style.display = data.video_source === 'file' ? 'block' : 'none';
+        if (pathInput) pathInput.value = data.video_library_path || '';
+        if (recordingCheckbox !== null) recordingCheckbox.checked = data.recording_enabled !== false;
+        if (recordAfterSec !== null) recordAfterSec.value = data.record_after_detection_sec || 5;
+        if (data.video_source === 'file') await loadVideoLibrary();
+    } catch (e) { console.error(e); }
 }

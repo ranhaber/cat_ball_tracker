@@ -2,7 +2,7 @@
 
 A real-time cat and ball detection system for Raspberry Pi Zero 2W with Camera Module 3. Features motion-first detection for efficiency, a web interface for live streaming, and zone-based tracking.
 
-**Version:** 1.9.4
+**Version:** 2.0.0
 
 ---
 
@@ -361,6 +361,7 @@ sudo journalctl -u cat_ball_tracker -n 50
 
 ## 📝 Version History
 
+- **v2.0.0** - Recording on detection + video file input: record clips when cat/ball detected (stop N sec after last detection), save to configurable library path; Video tab: source Live camera vs From file, file picker from library or custom path; same resolution/FPS as live for later use as input
 - **v1.9.4** - PROPER FIX: Use captured_request() context manager (blocking/interrupt-driven, zero CPU waste)
 - **v1.9.3** - CRITICAL FIX: Use picamera2 callbacks instead of polling (proper event-driven architecture) [PARTIAL - main loop still polling]
 - **v1.9.2** - MAJOR CPU OPTIMIZATION: Use event-driven camera capture (blocking capture_request instead of polling) [FAILED - known issue]
