@@ -863,11 +863,23 @@ async function updateTopDownView() {
     }
 }
 
+const TOPDOWN_MARGIN_M = 1;  // 1m margin on each side of the zone for top-down view
+
 function drawTopDownView(data) {
     const canvas = topdownCanvas;
     const ctx = topdownCtx;
-    const bounds = data.world_bounds;
-    
+    // Bounds: use Detection Zone extent + 1m margin each direction when we have perimeter; else backend world_bounds
+    let bounds = data.world_bounds;
+    if (data.perimeter_world && data.perimeter_world.length >= 1) {
+        const px = data.perimeter_world.map(p => p.x);
+        const py = data.perimeter_world.map(p => p.y);
+        bounds = {
+            min_x: Math.min(...px) - TOPDOWN_MARGIN_M,
+            max_x: Math.max(...px) + TOPDOWN_MARGIN_M,
+            min_y: Math.min(...py) - TOPDOWN_MARGIN_M,
+            max_y: Math.max(...py) + TOPDOWN_MARGIN_M
+        };
+    }
     if (!bounds) return;
     
     // Clear canvas
@@ -979,6 +991,24 @@ function drawTopDownView(data) {
         ctx.closePath();
         ctx.fill();
         ctx.stroke();
+        
+        // Draw all Detection Zone polygon points (vertices) with labels
+        data.perimeter_world.forEach((point, index) => {
+            const [cx, cy] = toCanvas(point.x, point.y);
+            ctx.fillStyle = '#00ff00';
+            ctx.beginPath();
+            ctx.arc(cx, cy, 6, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.strokeStyle = '#000';
+            ctx.lineWidth = 1;
+            ctx.stroke();
+            const label = index === 0 ? '(0,0)' : String(index + 1);
+            ctx.fillStyle = '#fff';
+            ctx.font = 'bold 11px sans-serif';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'bottom';
+            ctx.fillText(label, cx, cy - 8);
+        });
     }
     
     // Draw tracked objects
