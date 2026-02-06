@@ -2057,55 +2057,7 @@ function drawLensLine(points, color, lineNum, isCurrent) {
     lensCtx.fillText(`L${lineNum}`, mid[0], mid[1] - 12);
 }
 
-async function lensRunCalibration() {
-    // Finalise current line if it has 3+ points
-    const allLines = [...lensLines];
-    if (lensCurrentLine.length >= 3) {
-        allLines.push([...lensCurrentLine]);
-    }
-    if (allLines.length < 2) {
-        alert('Need at least 2 completed lines (3+ points each)');
-        return;
-    }
-    const calibBtn = document.getElementById('lens-calibrate');
-    if (calibBtn) calibBtn.textContent = '⏳ Calibrating...';
-    try {
-        const response = await fetch('/api/lens_calibration', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                lines: allLines,
-                image_width: lensImageWidth,
-                image_height: lensImageHeight
-            })
-        });
-        const data = await response.json();
-        if (response.ok && data.success) {
-            const c = data.calibration;
-            let msg = `Lens calibration done!\n\n`;
-            msg += `k1 = ${c.k1}, k2 = ${c.k2}\n\n`;
-            msg += `Overall: ${c.overall_improvement_pct}% improvement\n`;
-            msg += `  Before: ${c.overall_before_mean_px} px mean deviation\n`;
-            msg += `  After:  ${c.overall_after_mean_px} px mean deviation\n\n`;
-            msg += `Per line:\n`;
-            c.line_errors.forEach(e => {
-                msg += `  L${e.line} (${e.points} pts): ${e.before_mean_px}px → ${e.after_mean_px}px (${e.improvement_pct}% better)\n`;
-            });
-            alert(msg);
-            lensLines = allLines;
-            lensCurrentLine = [];
-            drawLensCanvas();
-            updateLensUI();
-            updateLensStatusUI({...c, is_calibrated: true, num_lines: allLines.length, total_points: allLines.reduce((s,l) => s + l.length, 0)});
-        } else {
-            alert('Calibration failed: ' + (data.error || 'Unknown error'));
-        }
-    } catch (err) {
-        console.error('Lens calibration error:', err);
-        alert('Error: ' + err.message);
-    }
-    if (calibBtn) calibBtn.textContent = '🔧 Calibrate';
-}
+// (old duplicate lensRunCalibration removed -- the active one is above)
 
 async function loadLensCalibrationStatus() {
     try {
