@@ -21,6 +21,7 @@ document.addEventListener('DOMContentLoaded', () => {
     initConfirmSlider();
     initProfileSelector();
     initVideoSource();
+    initLensCalibration();
     loadCurrentState();
 });
 
@@ -1523,6 +1524,7 @@ async function loadCurrentState() {
         await loadThreshold();
         await loadConfirmFrames();
         await loadCalibrationStatus();
+        await loadLensCalibrationStatus();
         await loadCurrentProfile();
         await loadVideoSource();
         await updateStatus();
@@ -1687,4 +1689,280 @@ async function loadVideoSource() {
         if (recordAfterSec !== null) recordAfterSec.value = data.record_after_detection_sec || 5;
         if (data.video_source === 'file') await loadVideoLibrary();
     } catch (e) { console.error(e); }
+}
+
+// ============================================================================
+// Lens Calibration (Plumb-Line Method)
+// ============================================================================
+let lensCanvas, lensCtx, lensImage = null;
+let lensLines = [];         // array of arrays of [x, y]
+let lensCurrentLine = [];   // points of the line being drawn
+let lensImageWidth = 640, lensImageHeight = 480;
+const LENS_TARGET_LINES = 6;  // default target number of lines
+
+function initLensCalibration() {
+    lensCanvas = document.getElementById('lens-canvas');
+    if (!lensCanvas) return;
+    lensCtx = lensCanvas.getContext('2d');
+
+    document.getElementById('load-snapshot-lens')?.addEventListener('click', loadLensSnapshot);
+    document.getElementById('lens-new-line')?.addEventListener('click', lensNewLine);
+    document.getElementById('lens-undo-point')?.addEventListener('click', lensUndoPoint);
+    document.getElementById('lens-calibrate')?.addEventListener('click', lensRunCalibration);
+    document.getElementById('lens-clear')?.addEventListener('click', lensClearAll);
+
+    lensCanvas.addEventListener('click', (e) => {
+        if (!lensImage) { alert('Load a camera frame first'); return; }
+        const rect = lensCanvas.getBoundingClientRect();
+        const sx = lensCanvas.width / rect.width;
+        const sy = lensCanvas.height / rect.height;
+        const x = Math.round((e.clientX - rect.left) * sx);
+        const y = Math.round((e.clientY - rect.top) * sy);
+        lensCurrentLine.push([x, y]);
+        drawLensCanvas();
+        updateLensUI();
+    });
+}
+
+async function loadLensSnapshot() {
+    const btn = document.getElementById('load-snapshot-lens');
+    if (btn) btn.textContent = '⏳ Loading...';
+    try {
+        const response = await fetch('/api/snapshot');
+        const blob = await response.blob();
+        lensImage = new Image();
+        lensImage.onload = () => {
+            lensImageWidth = lensImage.width;
+            lensImageHeight = lensImage.height;
+            lensCanvas.width = lensImageWidth;
+            lensCanvas.height = lensImageHeight;
+            lensCanvas.parentElement.classList.add('has-image');
+            lensLines = [];
+            lensCurrentLine = [];
+            drawLensCanvas();
+            updateLensUI();
+            if (btn) btn.textContent = `📷 Refresh (${lensImageWidth}x${lensImageHeight})`;
+        };
+        lensImage.src = URL.createObjectURL(blob);
+    } catch (err) {
+        console.error('Lens snapshot error:', err);
+        if (btn) btn.textContent = '📷 Load Camera Frame';
+    }
+}
+
+function lensNewLine() {
+    if (lensCurrentLine.length >= 3) {
+        lensLines.push([...lensCurrentLine]);
+    } else if (lensCurrentLine.length > 0) {
+        alert('A line needs at least 3 points. Add more points or click elsewhere.');
+        return;
+    }
+    lensCurrentLine = [];
+    drawLensCanvas();
+    updateLensUI();
+}
+
+function lensUndoPoint() {
+    if (lensCurrentLine.length > 0) {
+        lensCurrentLine.pop();
+    } else if (lensLines.length > 0) {
+        lensCurrentLine = lensLines.pop();
+    }
+    drawLensCanvas();
+    updateLensUI();
+}
+
+async function lensClearAll() {
+    lensLines = [];
+    lensCurrentLine = [];
+    drawLensCanvas();
+    updateLensUI();
+    updateLensStatusUI({ is_calibrated: false });
+    try {
+        await fetch('/api/lens_calibration', { method: 'DELETE' });
+    } catch (e) { console.warn('Clear lens calibration on server failed:', e); }
+}
+
+function updateLensUI() {
+    const completedLines = lensLines.length;
+    const totalLines = completedLines + (lensCurrentLine.length >= 3 ? 1 : 0);
+    const lineCountEl = document.getElementById('lens-line-count');
+    const pointCountEl = document.getElementById('lens-point-count');
+    const targetEl = document.getElementById('lens-target-lines');
+    const progressBar = document.getElementById('lens-progress-bar');
+    const newLineBtn = document.getElementById('lens-new-line');
+    const undoBtn = document.getElementById('lens-undo-point');
+    const calibBtn = document.getElementById('lens-calibrate');
+
+    if (lineCountEl) lineCountEl.textContent = completedLines;
+    if (targetEl) targetEl.textContent = LENS_TARGET_LINES;
+    if (pointCountEl) pointCountEl.textContent = lensCurrentLine.length;
+    if (progressBar) {
+        const pct = Math.min(100, Math.round((completedLines / LENS_TARGET_LINES) * 100));
+        progressBar.style.width = pct + '%';
+        progressBar.style.background = completedLines >= LENS_TARGET_LINES ? '#3fb950' : '#d29922';
+    }
+    if (newLineBtn) newLineBtn.disabled = !lensImage;
+    if (undoBtn) undoBtn.disabled = (lensCurrentLine.length === 0 && lensLines.length === 0);
+    // Enable calibrate when at least 2 lines, but hint that more is better
+    if (calibBtn) {
+        calibBtn.disabled = totalLines < 2;
+        if (totalLines >= 2 && totalLines < LENS_TARGET_LINES) {
+            calibBtn.textContent = `🔧 Calibrate (${totalLines}/${LENS_TARGET_LINES} lines)`;
+        } else if (totalLines >= LENS_TARGET_LINES) {
+            calibBtn.textContent = '🔧 Calibrate';
+        } else {
+            calibBtn.textContent = '🔧 Calibrate';
+        }
+    }
+}
+
+const LINE_COLORS = ['#ff4444', '#44ff44', '#4488ff', '#ffff44', '#ff44ff', '#44ffff', '#ff8844', '#88ff44'];
+
+function drawLensCanvas() {
+    if (!lensCtx || !lensCanvas) return;
+    lensCtx.clearRect(0, 0, lensCanvas.width, lensCanvas.height);
+    if (lensImage) {
+        lensCtx.drawImage(lensImage, 0, 0, lensCanvas.width, lensCanvas.height);
+    } else {
+        lensCtx.fillStyle = '#000';
+        lensCtx.fillRect(0, 0, lensCanvas.width, lensCanvas.height);
+    }
+    // Draw completed lines
+    lensLines.forEach((line, li) => {
+        drawLensLine(line, LINE_COLORS[li % LINE_COLORS.length], li + 1);
+    });
+    // Draw current line
+    if (lensCurrentLine.length > 0) {
+        drawLensLine(lensCurrentLine, LINE_COLORS[lensLines.length % LINE_COLORS.length], lensLines.length + 1, true);
+    }
+}
+
+function drawLensLine(points, color, lineNum, isCurrent) {
+    if (points.length < 2) {
+        // Single point
+        if (points.length === 1) {
+            lensCtx.fillStyle = color;
+            lensCtx.beginPath();
+            lensCtx.arc(points[0][0], points[0][1], 6, 0, Math.PI * 2);
+            lensCtx.fill();
+        }
+        return;
+    }
+    // Line through points
+    lensCtx.strokeStyle = color;
+    lensCtx.lineWidth = 2;
+    if (isCurrent) lensCtx.setLineDash([6, 4]);
+    lensCtx.beginPath();
+    lensCtx.moveTo(points[0][0], points[0][1]);
+    for (let i = 1; i < points.length; i++) {
+        lensCtx.lineTo(points[i][0], points[i][1]);
+    }
+    lensCtx.stroke();
+    lensCtx.setLineDash([]);
+    // Points
+    points.forEach((p, idx) => {
+        lensCtx.fillStyle = color;
+        lensCtx.beginPath();
+        lensCtx.arc(p[0], p[1], 5, 0, Math.PI * 2);
+        lensCtx.fill();
+        lensCtx.strokeStyle = '#000';
+        lensCtx.lineWidth = 1;
+        lensCtx.stroke();
+    });
+    // Line label
+    const mid = points[Math.floor(points.length / 2)];
+    lensCtx.fillStyle = '#fff';
+    lensCtx.font = 'bold 13px sans-serif';
+    lensCtx.textAlign = 'center';
+    lensCtx.strokeStyle = '#000';
+    lensCtx.lineWidth = 3;
+    lensCtx.strokeText(`L${lineNum}`, mid[0], mid[1] - 12);
+    lensCtx.fillText(`L${lineNum}`, mid[0], mid[1] - 12);
+}
+
+async function lensRunCalibration() {
+    // Finalise current line if it has 3+ points
+    const allLines = [...lensLines];
+    if (lensCurrentLine.length >= 3) {
+        allLines.push([...lensCurrentLine]);
+    }
+    if (allLines.length < 2) {
+        alert('Need at least 2 completed lines (3+ points each)');
+        return;
+    }
+    const calibBtn = document.getElementById('lens-calibrate');
+    if (calibBtn) calibBtn.textContent = '⏳ Calibrating...';
+    try {
+        const response = await fetch('/api/lens_calibration', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                lines: allLines,
+                image_width: lensImageWidth,
+                image_height: lensImageHeight
+            })
+        });
+        const data = await response.json();
+        if (response.ok && data.success) {
+            const c = data.calibration;
+            let msg = `Lens calibration done!\n\n`;
+            msg += `k1 = ${c.k1}, k2 = ${c.k2}\n\n`;
+            msg += `Overall: ${c.overall_improvement_pct}% improvement\n`;
+            msg += `  Before: ${c.overall_before_mean_px} px mean deviation\n`;
+            msg += `  After:  ${c.overall_after_mean_px} px mean deviation\n\n`;
+            msg += `Per line:\n`;
+            c.line_errors.forEach(e => {
+                msg += `  L${e.line} (${e.points} pts): ${e.before_mean_px}px → ${e.after_mean_px}px (${e.improvement_pct}% better)\n`;
+            });
+            alert(msg);
+            lensLines = allLines;
+            lensCurrentLine = [];
+            drawLensCanvas();
+            updateLensUI();
+            updateLensStatusUI({...c, is_calibrated: true, num_lines: allLines.length, total_points: allLines.reduce((s,l) => s + l.length, 0)});
+        } else {
+            alert('Calibration failed: ' + (data.error || 'Unknown error'));
+        }
+    } catch (err) {
+        console.error('Lens calibration error:', err);
+        alert('Error: ' + err.message);
+    }
+    if (calibBtn) calibBtn.textContent = '🔧 Calibrate';
+}
+
+async function loadLensCalibrationStatus() {
+    try {
+        const response = await fetch('/api/lens_calibration');
+        const data = await response.json();
+        updateLensStatusUI(data);
+    } catch (err) {
+        console.error('Error loading lens calibration status:', err);
+    }
+}
+
+function updateLensStatusUI(data) {
+    const statusEl = document.getElementById('lens-status');
+    const paramsEl = document.getElementById('lens-params');
+    if (!statusEl) return;
+    if (data && data.is_calibrated) {
+        let statusText = `Calibrated (${data.num_lines} lines, ${data.total_points} points)`;
+        if (data.overall_improvement_pct !== undefined) {
+            statusText += ` — ${data.overall_improvement_pct}% improvement`;
+        }
+        statusEl.textContent = statusText;
+        statusEl.style.color = '#3fb950';
+        if (paramsEl) {
+            paramsEl.style.display = 'block';
+            let info = `k1=${data.k1}, k2=${data.k2} | fx=${data.fx}, fy=${data.fy} | cx=${data.cx}, cy=${data.cy}`;
+            if (data.overall_before_mean_px !== undefined) {
+                info += ` | deviation: ${data.overall_before_mean_px}px → ${data.overall_after_mean_px}px`;
+            }
+            paramsEl.textContent = info;
+        }
+    } else {
+        statusEl.textContent = 'Not calibrated';
+        statusEl.style.color = '#d29922';
+        if (paramsEl) paramsEl.style.display = 'none';
+    }
 }

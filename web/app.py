@@ -104,6 +104,13 @@ except ImportError:
     CALIBRATION_AVAILABLE = False
     CameraCalibration = None
 
+try:
+    from detection.lens_calibration import LensCalibration
+    LENS_CALIBRATION_AVAILABLE = True
+except ImportError:
+    LENS_CALIBRATION_AVAILABLE = False
+    LensCalibration = None
+
 
 class VideoProcessor:
     """
@@ -117,6 +124,7 @@ class VideoProcessor:
         self.tracker = None
         self.perimeter = None
         self.calibration = None
+        self.lens_calibration = None
         self.motion_detector = None
         
         self.running = False
@@ -207,6 +215,12 @@ class VideoProcessor:
             self.calibration = CameraCalibration()
         else:
             self.calibration = None
+        
+        # Lens distortion calibration (optional)
+        if LENS_CALIBRATION_AVAILABLE:
+            self.lens_calibration = LensCalibration()
+        else:
+            self.lens_calibration = None
         
         # Set saved detection mode and threshold
         if hasattr(self, '_saved_detection_mode'):
@@ -756,9 +770,13 @@ class VideoProcessor:
             self.calibration.clear()
     
     def pixel_to_world(self, pixel_x, pixel_y):
-        """Convert pixel coordinates to world coordinates"""
+        """Convert pixel coordinates to world coordinates.
+        Applies lens undistortion first if available."""
         if self.calibration and self.calibration.is_calibrated:
-            return self.calibration.pixel_to_world(pixel_x, pixel_y)
+            ux, uy = pixel_x, pixel_y
+            if self.lens_calibration and self.lens_calibration.is_calibrated:
+                ux, uy = self.lens_calibration.undistort_point(pixel_x, pixel_y)
+            return self.calibration.pixel_to_world(ux, uy)
         return None
     
     def get_topdown_data(self):
@@ -1450,6 +1468,46 @@ def create_app():
         """
         data = video_processor.get_topdown_data()
         return jsonify(data)
+    
+    # =========================================================================
+    # Lens Calibration API Endpoints
+    # =========================================================================
+    
+    @app.route('/api/lens_calibration', methods=['GET'])
+    def get_lens_calibration():
+        """Get lens calibration status and parameters."""
+        if video_processor.lens_calibration:
+            return jsonify(video_processor.lens_calibration.get_status())
+        return jsonify({"is_calibrated": False})
+    
+    @app.route('/api/lens_calibration', methods=['POST'])
+    def set_lens_calibration():
+        """Run lens calibration from plumb lines.
+        Body: { lines: [[[x,y],[x,y],[x,y],...], ...], image_width: W, image_height: H }
+        """
+        if not video_processor.lens_calibration:
+            return jsonify({"error": "Lens calibration not available"}), 500
+        data = request.get_json()
+        lines = data.get('lines', [])
+        image_width = data.get('image_width', 0)
+        image_height = data.get('image_height', 0)
+        if not lines or not image_width or not image_height:
+            return jsonify({"error": "Missing lines, image_width, or image_height"}), 400
+        try:
+            result = video_processor.lens_calibration.calibrate(lines, image_width, image_height)
+            return jsonify({"success": True, "calibration": result})
+        except ValueError as e:
+            return jsonify({"error": str(e)}), 400
+        except Exception as e:
+            print(f"[LENS] Calibration error: {e}")
+            return jsonify({"error": f"Calibration failed: {e}"}), 500
+    
+    @app.route('/api/lens_calibration', methods=['DELETE'])
+    def clear_lens_calibration():
+        """Clear lens calibration and delete saved file."""
+        if video_processor.lens_calibration:
+            video_processor.lens_calibration.clear()
+        return jsonify({"success": True})
     
     # =========================================================================
     # Performance Profile API Endpoints (Phase 2)
