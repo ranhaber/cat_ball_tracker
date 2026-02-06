@@ -1819,6 +1819,7 @@ async function lensRunCalibration() {
     // All saved + unsaved + current (if 3+)
     const allLines = [...lensSavedLines, ...lensUnsavedLines];
     if (lensCurrentLine.length >= 3) allLines.push([...lensCurrentLine]);
+    console.log(`[LENS] Calibrate clicked: saved=${lensSavedLines.length}, unsaved=${lensUnsavedLines.length}, current=${lensCurrentLine.length}, total=${allLines.length}, img=${lensImageWidth}x${lensImageHeight}`);
     if (allLines.length < 2) {
         alert(`Need at least 2 lines (3+ points each).\nCurrently: ${lensSavedLines.length} saved, ${lensUnsavedLines.length} unsaved.`);
         return;
@@ -1829,8 +1830,8 @@ async function lensRunCalibration() {
     }
     const calibBtn = document.getElementById('lens-calibrate');
     const statusEl = document.getElementById('lens-status');
-    if (calibBtn) { calibBtn.textContent = '⏳ 0/2000'; calibBtn.disabled = true; }
-    if (statusEl) { statusEl.textContent = 'Calibrating... iteration 0/2000'; statusEl.style.color = '#d29922'; }
+    if (calibBtn) { calibBtn.textContent = '⏳ 0/20000'; calibBtn.disabled = true; }
+    if (statusEl) { statusEl.textContent = 'Calibrating... iteration 0/20000'; statusEl.style.color = '#d29922'; }
     console.log(`[LENS] Calibrating: ${allLines.length} lines, ${lensImageWidth}x${lensImageHeight}`);
 
     // Poll progress every second while calibrating
