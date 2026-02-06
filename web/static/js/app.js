@@ -1009,6 +1009,29 @@ function drawTopDownView(data) {
             ctx.textBaseline = 'bottom';
             ctx.fillText(label, cx, cy - 8);
         });
+        
+        // Draw side lengths near the center of each side (in meters)
+        const n = data.perimeter_world.length;
+        for (let i = 0; i < n; i++) {
+            const a = data.perimeter_world[i];
+            const b = data.perimeter_world[(i + 1) % n];
+            const dx = b.x - a.x;
+            const dy = b.y - a.y;
+            const len = Math.sqrt(dx * dx + dy * dy);
+            const midX = (a.x + b.x) / 2;
+            const midY = (a.y + b.y) / 2;
+            const [mcx, mcy] = toCanvas(midX, midY);
+            const text = len >= 1 ? `${len.toFixed(2)} m` : `${(len * 100).toFixed(0)} cm`;
+            ctx.font = '11px sans-serif';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            const tw = ctx.measureText(text).width;
+            const th = 14;
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+            ctx.fillRect(mcx - tw / 2 - 4, mcy - th / 2 - 2, tw + 8, th + 4);
+            ctx.fillStyle = '#b0ffb0';
+            ctx.fillText(text, mcx, mcy);
+        }
     }
     
     // Draw tracked objects

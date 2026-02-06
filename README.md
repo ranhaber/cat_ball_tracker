@@ -361,6 +361,7 @@ sudo journalctl -u cat_ball_tracker -n 50
 
 ## 📝 Version History
 
+- **v2.0.9** - Top-down view: show side length of each polygon edge near center of side (m/cm)
 - **v2.0.8** - Top-down view: show all Detection Zone polygon points (labels); 1m margin on x-y bounds
 - **v2.0.7** - Top-down view: (0,0) and axes drawn at first Detection Zone polygon point so they match
 - **v2.0.6** - Top-down view: draw X and Y axes through origin and label (0,0) so zone aligns with first point at 0,0
