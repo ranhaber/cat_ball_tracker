@@ -307,12 +307,18 @@
                                 <p><strong>Calibration Points:</strong> <span id="calibration-points-count">0/4</span></p>
                                 <div id="points-container"></div>
                                 <div id="side-lengths-container" class="side-lengths-container" style="display: none;"></div>
+                                <div id="diagonal-container" class="side-lengths-container" style="display: none;">
+                                    <div class="side-length-row">
+                                        <label>Diagonal (Point 1→3) <small style="color:#aaa;">(optional, for non-rectangles)</small></label>
+                                        <input type="number" id="calibration-diagonal" class="side-length-input" step="0.01" min="0" placeholder="meters">
+                                    </div>
+                                </div>
                             </div>
                             
                             <div class="calibration-info">
                                 <p>Status: <strong id="calibration-status">Not calibrated</strong></p>
                             </div>
-                            <p class="hint">Click 4 points (same order as Detection Zone). Enter the length of each side of the polygon in meters.</p>
+                            <p class="hint">Click 4 points (same order as Detection Zone). Enter side lengths in meters. For non-rectangle polygons, also enter the diagonal (Point 1→3) for exact accuracy.</p>
                         </div>
                     </div>
                 </div>

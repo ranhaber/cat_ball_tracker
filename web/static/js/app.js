@@ -478,6 +478,7 @@ let calibrationCanvas, calibrationCtx;
 let calibrationImage = null;
 let calibrationPoints = [];  // Array of { pixel: [x,y], world?: [x,y] } (world set from side lengths or loaded)
 let calibrationSideLengths = [null, null, null, null];  // [L01, L12, L23, L30] in meters
+let calibrationDiagonal = null;  // Optional diagonal P0->P2 in meters (for non-rectangle quads)
 
 function initCalibration() {
     calibrationCanvas = document.getElementById('calibration-canvas');
@@ -691,6 +692,15 @@ function updateCalibrationPointsUI() {
             sideLengthsEl.innerHTML = '';
         }
     }
+    // Diagonal input (shown when 4 points)
+    const diagContainer = document.getElementById('diagonal-container');
+    if (diagContainer) {
+        diagContainer.style.display = hasFour ? 'block' : 'none';
+        const diagInput = document.getElementById('calibration-diagonal');
+        if (diagInput && calibrationDiagonal !== null && calibrationDiagonal !== '') {
+            diagInput.value = calibrationDiagonal;
+        }
+    }
 }
 
 async function loadCalibrationStatus() {
@@ -740,14 +750,22 @@ async function saveCalibrationPoints() {
         return;
     }
     
+    // Read diagonal (optional)
+    const diagInput = document.getElementById('calibration-diagonal');
+    const diagVal = diagInput ? parseFloat(diagInput.value) : NaN;
+    const diagonal = (!isNaN(diagVal) && diagVal > 0) ? diagVal : null;
+    
     try {
+        const payload = {
+            points: calibrationPoints.map(p => ({ pixel: p.pixel })),
+            side_lengths: lengths
+        };
+        if (diagonal !== null) payload.diagonal = diagonal;
+        
         const response = await fetch('/api/calibration', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                points: calibrationPoints.map(p => ({ pixel: p.pixel })),
-                side_lengths: lengths
-            })
+            body: JSON.stringify(payload)
         });
         
         if (response.ok) {
@@ -777,6 +795,9 @@ async function saveCalibrationPoints() {
 async function clearCalibration() {
     calibrationPoints = [];
     calibrationSideLengths = [null, null, null, null];
+    calibrationDiagonal = null;
+    const diagInput = document.getElementById('calibration-diagonal');
+    if (diagInput) diagInput.value = '';
     updateCalibrationPointsUI();
     drawCalibration();
     

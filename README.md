@@ -361,6 +361,7 @@ sudo journalctl -u cat_ball_tracker -n 50
 
 ## 📝 Version History
 
+- **v2.1.0** - Calibration: optional diagonal (P1→P3) for exact shape of any quadrilateral (SSS triangles); rectangles auto-detected; proper axis-aligned world layout; homography now accurate for all ground-plane pixels
 - **v2.0.9** - Top-down view: show side length of each polygon edge near center of side (m/cm)
 - **v2.0.8** - Top-down view: show all Detection Zone polygon points (labels); 1m margin on x-y bounds
 - **v2.0.7** - Top-down view: (0,0) and axes drawn at first Detection Zone polygon point so they match

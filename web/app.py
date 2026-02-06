@@ -743,10 +743,11 @@ class VideoProcessor:
             return self.calibration.set_calibration_points(points)
         return False
 
-    def set_calibration_from_side_lengths(self, points_pixel, side_lengths):
-        """Set calibration from 4 pixel points and side lengths in meters (first point = 0,0; right = +X, up = +Y)."""
+    def set_calibration_from_side_lengths(self, points_pixel, side_lengths, diagonal=None):
+        """Set calibration from 4 pixel points and side lengths in meters (first point = 0,0; right = +X, up = +Y).
+        Optional diagonal (P0->P2) for exact shape of general (non-rectangle) quads."""
         if self.calibration:
-            return self.calibration.set_calibration_from_side_lengths(points_pixel, side_lengths)
+            return self.calibration.set_calibration_from_side_lengths(points_pixel, side_lengths, diagonal=diagonal)
         return False
     
     def clear_calibration(self):
@@ -777,16 +778,15 @@ class VideoProcessor:
         if not is_calibrated:
             return result
         
-        # Transform perimeter points to world coordinates
+        # Transform perimeter points to world coordinates via the homography.
+        # The homography is accurate because calibration world coords are now a proper
+        # axis-aligned rectangle (not distorted by pixel directions).
         perimeter_points = self.get_perimeter()
         if perimeter_points:
-            # Get current frame resolution for scaling
             frame_res = None
             if self.camera and self.camera.running:
                 frame_res = self.camera.get_resolution()
-            
             for point in perimeter_points:
-                # Scale perimeter point to frame resolution if needed
                 px, py = point
                 if frame_res and hasattr(self.perimeter, 'saved_resolution') and self.perimeter.saved_resolution:
                     saved_w, saved_h = self.perimeter.saved_resolution
@@ -794,7 +794,6 @@ class VideoProcessor:
                     if saved_w > 0 and saved_h > 0:
                         px = px * curr_w / saved_w
                         py = py * curr_h / saved_h
-                
                 world_pos = self.calibration.pixel_to_world(px, py)
                 if world_pos:
                     result["perimeter_world"].append({
@@ -1372,7 +1371,13 @@ def create_app():
                 side_lengths = [float(x) for x in side_lengths]
             except (TypeError, ValueError):
                 return jsonify({"error": "Side lengths must be numbers (meters)"}), 400
-            success = video_processor.set_calibration_from_side_lengths(points_pixel, side_lengths)
+            diagonal = data.get('diagonal', None)
+            if diagonal is not None:
+                try:
+                    diagonal = float(diagonal)
+                except (TypeError, ValueError):
+                    return jsonify({"error": "Diagonal must be a number (meters)"}), 400
+            success = video_processor.set_calibration_from_side_lengths(points_pixel, side_lengths, diagonal=diagonal)
         else:
             # Legacy: full points with pixel and world
             for i, p in enumerate(points):
