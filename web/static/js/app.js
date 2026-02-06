@@ -1820,11 +1820,16 @@ async function lensRunCalibration() {
     const allLines = [...lensSavedLines, ...lensUnsavedLines];
     if (lensCurrentLine.length >= 3) allLines.push([...lensCurrentLine]);
     if (allLines.length < 2) {
-        alert('Need at least 2 lines (3+ points each). Save your lines first.');
+        alert(`Need at least 2 lines (3+ points each).\nCurrently: ${lensSavedLines.length} saved, ${lensUnsavedLines.length} unsaved.`);
+        return;
+    }
+    if (!lensImageWidth || !lensImageHeight || lensImageWidth <= 1 || lensImageHeight <= 1) {
+        alert('Image dimensions unknown. Load a camera frame first.');
         return;
     }
     const calibBtn = document.getElementById('lens-calibrate');
     if (calibBtn) calibBtn.textContent = '⏳ Calibrating...';
+    console.log(`[LENS] Calibrating: ${allLines.length} lines, ${lensImageWidth}x${lensImageHeight}`);
     try {
         const response = await fetch('/api/lens_calibration', {
             method: 'POST',
@@ -1836,6 +1841,7 @@ async function lensRunCalibration() {
             })
         });
         const data = await response.json();
+        console.log('[LENS] Response:', response.status, data);
         if (response.ok && data.success) {
             const c = data.calibration;
             let msg = `Lens calibration done!\n\n`;
@@ -1856,7 +1862,7 @@ async function lensRunCalibration() {
         }
     } catch (err) {
         console.error('Lens calibration error:', err);
-        alert('Error: ' + err.message);
+        alert('Calibration error: ' + err.message);
     }
     if (calibBtn) calibBtn.textContent = '🔧 Calibrate';
 }
