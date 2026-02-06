@@ -1710,6 +1710,9 @@ function initLensCalibration() {
     document.getElementById('lens-undo-point')?.addEventListener('click', lensUndoPoint);
     document.getElementById('lens-calibrate')?.addEventListener('click', lensRunCalibration);
     document.getElementById('lens-clear')?.addEventListener('click', lensClearAll);
+    document.getElementById('lens-export')?.addEventListener('click', lensExportLines);
+    document.getElementById('lens-import')?.addEventListener('click', () => document.getElementById('lens-import-file')?.click());
+    document.getElementById('lens-import-file')?.addEventListener('change', lensImportLines);
 
     lensCanvas.addEventListener('click', (e) => {
         if (!lensImage) { alert('Load a camera frame first'); return; }
@@ -1772,6 +1775,57 @@ function lensUndoPoint() {
     updateLensUI();
 }
 
+async function lensExportLines() {
+    // Finalise current line if 3+ points
+    const allLines = [...lensLines];
+    if (lensCurrentLine.length >= 3) allLines.push([...lensCurrentLine]);
+    if (allLines.length === 0) { alert('No lines to export'); return; }
+    try {
+        const data = { lines: allLines, image_width: lensImageWidth, image_height: lensImageHeight };
+        const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = 'lens_lines.json';
+        a.click();
+        URL.revokeObjectURL(url);
+    } catch (err) { console.error('Export error:', err); alert('Export failed'); }
+}
+
+async function lensImportLines(e) {
+    const file = e.target.files[0];
+    if (!file) return;
+    try {
+        const text = await file.text();
+        const data = JSON.parse(text);
+        const response = await fetch('/api/lens_calibration/lines', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: text
+        });
+        const result = await response.json();
+        if (response.ok && result.success) {
+            lensLines = result.lines || data.lines;
+            lensCurrentLine = [];
+            lensImageWidth = result.image_width || data.image_width || 640;
+            lensImageHeight = result.image_height || data.image_height || 480;
+            if (lensCanvas) {
+                lensCanvas.width = lensImageWidth;
+                lensCanvas.height = lensImageHeight;
+            }
+            drawLensCanvas();
+            updateLensUI();
+            alert(`Imported ${result.num_lines} lines (${result.total_points} points). Load a camera frame to see them overlaid, then click Calibrate.`);
+        } else {
+            alert('Import failed: ' + (result.error || 'Unknown error'));
+        }
+    } catch (err) {
+        console.error('Import error:', err);
+        alert('Failed to read file: ' + err.message);
+    }
+    e.target.value = '';  // reset so same file can be re-imported
+}
+
 async function lensClearAll() {
     lensLines = [];
     lensCurrentLine = [];
@@ -1793,6 +1847,7 @@ function updateLensUI() {
     const newLineBtn = document.getElementById('lens-new-line');
     const undoBtn = document.getElementById('lens-undo-point');
     const calibBtn = document.getElementById('lens-calibrate');
+    const exportBtn = document.getElementById('lens-export');
 
     if (lineCountEl) lineCountEl.textContent = completedLines;
     if (targetEl) targetEl.textContent = LENS_TARGET_LINES;
@@ -1804,6 +1859,7 @@ function updateLensUI() {
     }
     if (newLineBtn) newLineBtn.disabled = !lensImage;
     if (undoBtn) undoBtn.disabled = (lensCurrentLine.length === 0 && lensLines.length === 0);
+    if (exportBtn) exportBtn.disabled = (completedLines === 0 && lensCurrentLine.length < 3);
     // Enable calibrate when at least 2 lines, but hint that more is better
     if (calibBtn) {
         calibBtn.disabled = totalLines < 2;
@@ -1954,7 +2010,8 @@ function updateLensStatusUI(data) {
         statusEl.style.color = '#3fb950';
         if (paramsEl) {
             paramsEl.style.display = 'block';
-            let info = `k1=${data.k1}, k2=${data.k2} | fx=${data.fx}, fy=${data.fy} | cx=${data.cx}, cy=${data.cy}`;
+            let info = `f=${data.fx} | k1=${data.k1}, k2=${data.k2}, k3=${data.k3 || 0}`;
+            if (data.p1 || data.p2) info += ` | p1=${data.p1}, p2=${data.p2}`;
             if (data.overall_before_mean_px !== undefined) {
                 info += ` | deviation: ${data.overall_before_mean_px}px → ${data.overall_after_mean_px}px`;
             }

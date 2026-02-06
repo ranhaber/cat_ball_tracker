@@ -1509,6 +1509,26 @@ def create_app():
             video_processor.lens_calibration.clear()
         return jsonify({"success": True})
     
+    @app.route('/api/lens_calibration/lines', methods=['GET'])
+    def export_lens_lines():
+        """Export lines/points data as JSON (download)."""
+        if not video_processor.lens_calibration or not video_processor.lens_calibration.lines:
+            return jsonify({"error": "No lines data available"}), 404
+        data = video_processor.lens_calibration.export_lines()
+        return jsonify(data)
+    
+    @app.route('/api/lens_calibration/lines', methods=['POST'])
+    def import_lens_lines():
+        """Import lines/points data from JSON (upload)."""
+        if not video_processor.lens_calibration:
+            return jsonify({"error": "Lens calibration not available"}), 500
+        data = request.get_json()
+        try:
+            result = video_processor.lens_calibration.import_lines(data)
+            return jsonify({"success": True, **result})
+        except ValueError as e:
+            return jsonify({"error": str(e)}), 400
+    
     # =========================================================================
     # Performance Profile API Endpoints (Phase 2)
     # =========================================================================

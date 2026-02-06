@@ -361,6 +361,7 @@ sudo journalctl -u cat_ball_tracker -n 50
 
 ## 📝 Version History
 
+- **v2.2.1** - Lens Calibration: upgraded to 8-param model (f, cx, cy, k1, k2, k3, p1, p2) with Levenberg-Marquardt; export/import lines as JSON; target 6 lines with progress bar
 - **v2.2.0** - Lens Calibration: plumb-line method for radial distortion correction (k1, k2). Mark 3+ points on 6 straight lines in the image; optimizer finds distortion; before/after improvement stats; saved to lens_calibration.json; undistort applied to all pixel-to-world conversions
 - **v2.1.0** - Calibration: optional diagonal (P1→P3) for exact shape of any quadrilateral (SSS triangles); rectangles auto-detected; proper axis-aligned world layout; homography now accurate for all ground-plane pixels
 - **v2.0.9** - Top-down view: show side length of each polygon edge near center of side (m/cm)
