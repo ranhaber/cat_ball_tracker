@@ -346,6 +346,28 @@ class LensCalibration:
         self._save_lines_file()
         return len(self.lines)
 
+    def delete_line(self, line_number):
+        """Delete a specific line by number (1-based). Saves updated file."""
+        idx = line_number - 1
+        if idx < 0 or idx >= len(self.lines):
+            raise ValueError(f"Line {line_number} does not exist (have {len(self.lines)} lines)")
+        removed = self.lines.pop(idx)
+        self._save_lines_file()
+        print(f"[LENS] Deleted line {line_number} ({len(removed)} points). {len(self.lines)} lines remaining.")
+        return len(self.lines)
+
+    def delete_lines(self, line_numbers):
+        """Delete multiple lines by number (1-based). Saves updated file."""
+        # Sort descending so indices don't shift during removal
+        for num in sorted(line_numbers, reverse=True):
+            idx = num - 1
+            if 0 <= idx < len(self.lines):
+                removed = self.lines.pop(idx)
+                print(f"[LENS] Deleted line {num} ({len(removed)} points)")
+        self._save_lines_file()
+        print(f"[LENS] {len(self.lines)} lines remaining.")
+        return len(self.lines)
+
     def clear_lines(self):
         """Delete all lines and remove the lines file."""
         self.lines = []

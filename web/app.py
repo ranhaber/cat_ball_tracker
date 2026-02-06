@@ -1552,6 +1552,26 @@ def create_app():
             video_processor.lens_calibration.clear_lines()
         return jsonify({"success": True})
     
+    @app.route('/api/lens_calibration/lines/delete', methods=['POST'])
+    def delete_lens_lines():
+        """Delete specific lines by number (1-based).
+        Body: { line: 1 } or { lines: [1, 2] }
+        """
+        if not video_processor.lens_calibration:
+            return jsonify({"error": "Lens calibration not available"}), 500
+        data = request.get_json()
+        line_numbers = data.get('lines', [])
+        single = data.get('line', None)
+        if single is not None:
+            line_numbers = [int(single)]
+        if not line_numbers:
+            return jsonify({"error": "Specify 'line' (number) or 'lines' (array of numbers)"}), 400
+        try:
+            remaining = video_processor.lens_calibration.delete_lines([int(n) for n in line_numbers])
+            return jsonify({"success": True, "remaining_lines": remaining})
+        except ValueError as e:
+            return jsonify({"error": str(e)}), 400
+    
     @app.route('/api/lens_calibration/lines/append', methods=['POST'])
     def append_lens_line():
         """Append a single line. Auto-saves to file."""
