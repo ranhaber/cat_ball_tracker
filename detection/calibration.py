@@ -85,6 +85,47 @@ class CameraCalibration:
         
         return success
     
+    def set_calibration_from_side_lengths(self, points_pixel, side_lengths):
+        """
+        Set calibration from 4 pixel points and the length of each side in meters.
+        First point = origin (0, 0). Right in image = +X, up in image = +Y.
+        
+        Args:
+            points_pixel: List of 4 [x, y] pixel coordinates (same order as zone).
+            side_lengths: List of 4 lengths in meters: [P0->P1, P1->P2, P2->P3, P3->P0].
+        
+        Returns:
+            bool: True if calibration successful
+        """
+        if len(points_pixel) != 4 or len(side_lengths) != 4:
+            print(f"Error: Need exactly 4 pixel points and 4 side lengths")
+            return False
+        
+        # Build world coordinates: P0 = (0,0); right = +X, up = +Y (image y down => world y = -image_y for direction)
+        world_pts = []
+        world_pts.append([0.0, 0.0])  # First mark = origin
+        
+        for i in range(1, 4):
+            px_prev = points_pixel[i - 1]
+            px_curr = points_pixel[i]
+            dx = px_curr[0] - px_prev[0]
+            dy = px_curr[1] - px_prev[1]
+            # In world: image right = +X, image up = +Y, so direction = (dx, -dy)
+            len_pixel = (dx * dx + dy * dy) ** 0.5
+            if len_pixel < 1e-6:
+                print(f"Error: Points {i} and {i+1} are too close together")
+                return False
+            length_m = float(side_lengths[i - 1])
+            wx = world_pts[i - 1][0] + length_m * (dx / len_pixel)
+            wy = world_pts[i - 1][1] - length_m * (dy / len_pixel)  # -dy because image Y down
+            world_pts.append([wx, wy])
+        
+        points = [
+            {"pixel": list(points_pixel[i]), "world": world_pts[i]}
+            for i in range(4)
+        ]
+        return self.set_calibration_points(points)
+    
     def _compute_transform(self):
         """Compute the perspective transformation matrix."""
         try:
@@ -214,6 +255,22 @@ class CameraCalibration:
     def get_calibration_points(self):
         """Get current calibration points."""
         return self.calibration_points.copy()
+    
+    def get_side_lengths(self):
+        """
+        Get the length of each side in meters from current calibration.
+        Returns [L01, L12, L23, L30] or empty list if not calibrated.
+        """
+        if not self.calibration_points or len(self.calibration_points) != 4:
+            return []
+        pts = [p["world"] for p in self.calibration_points]
+        lengths = []
+        for i in range(4):
+            j = (i + 1) % 4
+            dx = pts[j][0] - pts[i][0]
+            dy = pts[j][1] - pts[i][1]
+            lengths.append(round((dx * dx + dy * dy) ** 0.5, 3))
+        return lengths
     
     def clear(self):
         """Clear calibration."""
