@@ -411,12 +411,9 @@ class CameraCalibration:
         """
         Convert pixel coordinates to real-world coordinates (meters).
         
-        Uses the nearest rectangle's local homography (Voronoi regions).
-        Each rectangle's homography is exact for its 4 corners, and accurate
-        for nearby pixels. The nearest rectangle gives the best result because
-        its homography captures the local perspective and distortion.
-        
-        Falls back to the global homography if no per-rectangle data.
+        Uses the global findHomography (best-fit from all calibration points).
+        With undistorted pixels, a single homography accurately models the
+        entire flat ground plane as viewed by a pinhole camera.
         
         Args:
             pixel_x: X coordinate in pixels
@@ -425,34 +422,13 @@ class CameraCalibration:
         Returns:
             tuple: (world_x, world_y) in meters, or None if not calibrated
         """
-        if not self.is_calibrated:
+        if not self.is_calibrated or self.transform_matrix is None:
             return None
         
         try:
             point = np.float32([[[pixel_x, pixel_y]]])
-            
-            # Use nearest rectangle's homography
-            if self.rect_homographies and len(self.rect_homographies) > 0:
-                # Find the nearest rectangle by distance to center
-                best_idx = 0
-                best_dist = float('inf')
-                for i, rh in enumerate(self.rect_homographies):
-                    dx = pixel_x - rh["center_px"][0]
-                    dy = pixel_y - rh["center_px"][1]
-                    dist = dx * dx + dy * dy
-                    if dist < best_dist:
-                        best_dist = dist
-                        best_idx = i
-                
-                transformed = cv2.perspectiveTransform(point, self.rect_homographies[best_idx]["H"])
-                return (float(transformed[0][0][0]), float(transformed[0][0][1]))
-            
-            # Fallback: global homography
-            if self.transform_matrix is not None:
-                transformed = cv2.perspectiveTransform(point, self.transform_matrix)
-                return (float(transformed[0][0][0]), float(transformed[0][0][1]))
-            
-            return None
+            transformed = cv2.perspectiveTransform(point, self.transform_matrix)
+            return (float(transformed[0][0][0]), float(transformed[0][0][1]))
             
         except Exception as e:
             print(f"Error in pixel_to_world: {e}")
