@@ -842,10 +842,10 @@ class VideoProcessor:
             
             for idx, point in enumerate(perimeter_points):
                 px, py = float(point[0]), float(point[1])
-                # Perimeter pixels are from lens-corrected+cropped snapshot.
-                # They are already in the same undistorted coordinate space as
-                # the calibration rectangles. No resolution scaling needed.
-                world_pos = self.pixel_to_world(px, py, already_undistorted=True)
+                # Perimeter pixels are stored in raw camera resolution space
+                # (set_perimeter scales from snapshot to camera resolution).
+                # pixel_to_world will undistort them before applying the homography.
+                world_pos = self.pixel_to_world(px, py, already_undistorted=False)
                 if world_pos:
                     result["perimeter_world"].append({
                         "x": round(world_pos[0], 2),
@@ -1497,9 +1497,9 @@ def create_app():
             for i, point in enumerate(perim_points):
                 px, py = float(point[0]), float(point[1])
                 
-                # Perimeter pixels are from lens-corrected+cropped snapshot.
-                # No resolution scaling needed — same coordinate space as calibration.
-                world_pos = video_processor.calibration.pixel_to_world(px, py)
+                # Perimeter pixels are in raw camera space (scaled by set_perimeter).
+                # Undistort before applying homography.
+                world_pos = video_processor.pixel_to_world(px, py, already_undistorted=False)
                 
                 debug["perimeter_points"].append({
                     "index": i,
