@@ -751,16 +751,34 @@ class VideoProcessor:
             return out
         return {"is_calibrated": False, "points": [], "world_bounds": config.DEFAULT_WORLD_BOUNDS, "side_lengths": []}
     
+    def _undistort_pixels(self, points_pixel):
+        """Undistort pixel coordinates if lens calibration is available.
+        This ensures the homography is computed in undistorted pixel space."""
+        if self.lens_calibration and self.lens_calibration.is_calibrated:
+            undistorted = []
+            for p in points_pixel:
+                ux, uy = self.lens_calibration.undistort_point(float(p[0]), float(p[1]))
+                undistorted.append([ux, uy])
+            return undistorted
+        return points_pixel
+
     def set_calibration(self, points):
-        """Set calibration points"""
+        """Set calibration points (undistorts pixels if lens calibration available)"""
         if self.calibration:
+            # Undistort pixel coordinates so homography is in undistorted space
+            if self.lens_calibration and self.lens_calibration.is_calibrated:
+                for p in points:
+                    ux, uy = self.lens_calibration.undistort_point(float(p["pixel"][0]), float(p["pixel"][1]))
+                    p["pixel"] = [ux, uy]
             return self.calibration.set_calibration_points(points)
         return False
 
     def set_calibration_from_side_lengths(self, points_pixel, side_lengths, diagonal=None):
-        """Set calibration from 4 pixel points and side lengths in meters (first point = 0,0; right = +X, up = +Y).
-        Optional diagonal (P0->P2) for exact shape of general (non-rectangle) quads."""
+        """Set calibration from 4 pixel points and side lengths in meters.
+        Undistorts pixels first if lens calibration is available, so the homography
+        is computed in undistorted pixel space."""
         if self.calibration:
+            points_pixel = self._undistort_pixels(points_pixel)
             return self.calibration.set_calibration_from_side_lengths(points_pixel, side_lengths, diagonal=diagonal)
         return False
     
