@@ -172,16 +172,19 @@ class LensCalibration:
         upper = [3000, cx0 + image_width * 0.1, cy0 + image_height * 0.1,
                  0.0, 5.0, 0.01, 0.01, 5.0]
 
-        self.calibration_max_iterations = 5000
+        # Scale max iterations with number of lines (more data = may need more iterations)
+        self.calibration_max_iterations = max(5000, len(self.lines) * 500)
         self.calibration_iteration = 0
         self.calibration_in_progress = True
-        print(f"[LENS] Starting FISHEYE optimizer: {len(self.lines)} lines, "
-              f"{sum(len(l) for l in self.lines)} points, {image_width}x{image_height}")
+        print(f"[LENS] Starting optimizer: {len(self.lines)} lines, "
+              f"{sum(len(l) for l in self.lines)} points, {image_width}x{image_height}, "
+              f"max_nfev={self.calibration_max_iterations}")
         print(f"[LENS] Initial: f={f0:.1f}, cx={cx0:.1f}, cy={cy0:.1f}")
         try:
             result = least_squares(residuals, x0, method='trf',
                                    bounds=(lower, upper),
-                                   max_nfev=5000, xtol=1e-10, ftol=1e-10)
+                                   max_nfev=self.calibration_max_iterations,
+                                   xtol=1e-12, ftol=1e-12)
         finally:
             self.calibration_in_progress = False
         # Use best result found (in case optimizer overshot)
