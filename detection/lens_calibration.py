@@ -278,15 +278,15 @@ class LensCalibration:
     # ------------------------------------------------------------------
 
     def _compute_optimal_matrix(self):
-        """Compute optimal camera matrix that crops to clean rectangle (no black borders)."""
+        """Compute optimal camera matrix that balances FOV retention vs black borders."""
         if self.camera_matrix is not None and self.image_width > 0 and self.image_height > 0:
             self.optimal_camera_matrix, self.undistort_roi = cv2.getOptimalNewCameraMatrix(
                 self.camera_matrix, self.dist_coeffs,
                 (self.image_width, self.image_height),
-                alpha=0.0,  # 0.0 = crop to largest clean rectangle (no black borders)
+                alpha=1.0,  # 1.0 = retain all source pixels (may have black corners)
                 newImgSize=(self.image_width, self.image_height))
             rx, ry, rw, rh = self.undistort_roi
-            print(f"[LENS] Optimal camera matrix computed (alpha=0, crop ROI={rx},{ry},{rw}x{rh})")
+            print(f"[LENS] Optimal camera matrix computed (alpha=0.7, crop ROI={rx},{ry},{rw}x{rh})")
         else:
             self.optimal_camera_matrix = self.camera_matrix
             self.undistort_roi = (0, 0, self.image_width, self.image_height)

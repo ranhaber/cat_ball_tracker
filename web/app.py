@@ -788,56 +788,11 @@ class VideoProcessor:
 
     def set_calibration_from_rectangles(self, rectangles):
         """Set calibration from multiple rectangles.
-        Pixels are in undistorted+cropped space (user clicks on corrected snapshot).
-        If lens calibration is available, runs joint optimization to find the best
-        distortion + homography that maps all rectangle corners to correct world coords."""
-        if not self.calibration:
-            return False
-        
-        self.calibration.rectangles = rectangles
-        
-        # First, compute world coords for all rectangles using the standard method
-        # (this positions rects in world space using rect 1 as origin + preliminary H)
-        success = self.calibration.set_calibration_from_rectangles(rectangles)
-        if not success:
-            return False
-        
-        # If lens calibration is available and we have 2+ rectangles,
-        # run joint optimization to improve distortion + homography together
-        if (self.lens_calibration and self.lens_calibration.is_calibrated 
-                and len(rectangles) >= 2 and len(self.calibration.calibration_points) >= 8):
-            
-            # Get raw pixels by redistorting the undistorted+cropped coords
-            raw_pixels = []
-            world_pts = []
-            for cp in self.calibration.calibration_points:
-                rx, ry = self.lens_calibration.redistort_point(cp["pixel"][0], cp["pixel"][1])
-                raw_pixels.append([rx, ry])
-                world_pts.append(cp["world"])
-            
-            print(f"[CALIBRATION] Running joint distortion+homography optimization "
-                  f"with {len(raw_pixels)} points...")
-            
-            result = self.calibration.joint_optimize_distortion(
-                raw_pixels, world_pts, self.lens_calibration)
-            
-            if result:
-                print(f"[CALIBRATION] Joint optimization RMSE: {result['rmse_meters']}m")
-                
-                # Recompute calibration with the new undistorted pixels
-                new_points = []
-                for i, cp in enumerate(self.calibration.calibration_points):
-                    new_points.append({
-                        "pixel": result["undistorted_pixels"][i],
-                        "world": cp["world"]
-                    })
-                self.calibration.set_calibration_points(new_points)
-                
-                # Reset topdown debug flag to show new info
-                if hasattr(self, '_topdown_debug_done'):
-                    del self._topdown_debug_done
-        
-        return True
+        Pixels are in undistorted+cropped space (user clicks on corrected snapshot)."""
+        if self.calibration:
+            self.calibration.rectangles = rectangles
+            return self.calibration.set_calibration_from_rectangles(rectangles)
+        return False
     
     def clear_calibration(self):
         """Clear calibration"""
