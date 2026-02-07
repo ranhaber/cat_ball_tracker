@@ -119,19 +119,42 @@ class CameraCalibration:
         dy01 = float(points_pixel[1][1] - points_pixel[0][1])
         
         tol = 0.01  # 1 cm
+        is_rect = abs(L01 - L23) < tol and abs(L12 - L30) < tol
         
-        # Determine diagonal
-        if diagonal is not None and float(diagonal) > 0:
-            d02 = float(diagonal)
-        else:
-            is_rect = abs(L01 - L23) < tol and abs(L12 - L30) < tol
-            if is_rect:
-                d02 = math.sqrt(L01 * L01 + L12 * L12)
+        if is_rect:
+            # ====== RECTANGLE: direct geometry (no SSS needed) ======
+            # P0=(0,0), P1=(width,0), P2=(width,height), P3=(0,height)
+            # Height sign determined by pixel winding direction.
+            width = L01
+            height = L12
+            
+            # CW in image (cross_px > 0, y-down) → P2 below P1 → world y negative
+            if cross_px > 0:
+                h_sign = -1.0
             else:
-                d02 = None
+                h_sign = 1.0
+            
+            world_pts = [
+                [0.0, 0.0],
+                [width, 0.0],
+                [width, h_sign * height],
+                [0.0, h_sign * height]
+            ]
+            
+            # Orient based on pixel direction of P0→P1
+            if abs(dx01) < abs(dy01):
+                # P0→P1 is mostly vertical → rotate 90°
+                sy = -1.0 if dy01 >= 0 else 1.0
+                world_pts = [[-sy * p[1], sy * p[0]] for p in world_pts]
+            else:
+                # P0→P1 is mostly horizontal → flip X if going left
+                if dx01 < 0:
+                    world_pts = [[-p[0], p[1]] for p in world_pts]
         
-        if d02 is not None:
-            # Exact SSS triangles
+        elif diagonal is not None and float(diagonal) > 0:
+            # ====== NON-RECTANGLE WITH DIAGONAL: SSS triangles ======
+            d02 = float(diagonal)
+            
             cos_a = (L01 * L01 + d02 * d02 - L12 * L12) / (2.0 * L01 * d02) if L01 > 0 and d02 > 0 else 0
             cos_a = max(-1.0, min(1.0, cos_a))
             sin_a = math.sqrt(max(0.0, 1.0 - cos_a * cos_a))
@@ -152,12 +175,24 @@ class CameraCalibration:
             ux, uy = p2x / d, p2y / d
             p3_a = [aa * ux + hh * (-uy), aa * uy + hh * ux]
             p3_b = [aa * ux - hh * (-uy), aa * uy - hh * ux]
-            cross_a = (p2x - L01) * (p3_a[1] - p2y) - (p2y - 0) * (p3_a[0] - p2x)
-            cross_01_12 = (L01 - 0) * (p2y - 0) - (0 - 0) * (p2x - L01)
-            if cross_01_12 * cross_a >= 0:
+            
+            # Pick P3 that is NOT degenerate (not same position as P0 or P1)
+            dist_a_p1 = math.sqrt((p3_a[0] - L01)**2 + p3_a[1]**2)
+            dist_b_p1 = math.sqrt((p3_b[0] - L01)**2 + p3_b[1]**2)
+            if dist_a_p1 < 0.01:
+                # p3_a is at P1 — degenerate, use p3_b
+                p3 = p3_b
+            elif dist_b_p1 < 0.01:
+                # p3_b is at P1 — degenerate, use p3_a
                 p3 = p3_a
             else:
-                p3 = p3_b
+                # Normal case: use winding check
+                cross_a = (p2x - L01) * (p3_a[1] - p2y) - (p2y - 0) * (p3_a[0] - p2x)
+                cross_01_12 = (L01 - 0) * (p2y - 0) - (0 - 0) * (p2x - L01)
+                if cross_01_12 * cross_a >= 0:
+                    p3 = p3_a
+                else:
+                    p3 = p3_b
             
             world_pts = [[0.0, 0.0], [L01, 0.0], [p2x, p2y], p3]
             
