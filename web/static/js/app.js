@@ -1715,6 +1715,8 @@ function initLensCalibration() {
     document.getElementById('lens-export')?.addEventListener('click', lensExportLines);
     document.getElementById('lens-import')?.addEventListener('click', () => document.getElementById('lens-import-file')?.click());
     document.getElementById('lens-import-file')?.addEventListener('change', lensImportLines);
+    document.getElementById('lens-delete-line')?.addEventListener('click', lensDeleteLine);
+    document.getElementById('lens-analyze')?.addEventListener('click', lensAnalyzeLines);
 
     lensCanvas.addEventListener('click', (e) => {
         if (!lensImage) { alert('Load a camera frame first'); return; }
@@ -1935,6 +1937,53 @@ async function lensImportLines(e) {
 }
 
 // 8. Clear Lines File -- deletes saved lines AND calibration
+async function lensDeleteLine() {
+    const input = document.getElementById('lens-delete-line-num');
+    if (!input || !input.value) { alert('Enter a line number to delete'); return; }
+    const lineNum = parseInt(input.value);
+    if (isNaN(lineNum) || lineNum < 1) { alert('Enter a valid line number (1 or higher)'); return; }
+    if (lineNum > lensSavedLines.length) { alert(`Line ${lineNum} does not exist. You have ${lensSavedLines.length} saved lines.`); return; }
+    if (!confirm(`Delete saved line ${lineNum}?`)) return;
+    try {
+        const response = await fetch('/api/lens_calibration/lines/delete', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ line: lineNum })
+        });
+        const data = await response.json();
+        if (response.ok && data.success) {
+            lensSavedLines.splice(lineNum - 1, 1);
+            input.value = '';
+            drawLensCanvas();
+            updateLensUI();
+            alert(`Line ${lineNum} deleted. ${data.remaining_lines} lines remaining.`);
+        } else {
+            alert('Delete failed: ' + (data.error || 'Unknown error'));
+        }
+    } catch (err) {
+        alert('Error: ' + err.message);
+    }
+}
+
+async function lensAnalyzeLines() {
+    try {
+        const response = await fetch('/api/lens_calibration/analyze');
+        const data = await response.json();
+        if (data.error) { alert(data.error); return; }
+        let msg = `Line Analysis (${data.summary.total_lines} lines, ${data.summary.total_points} points)\n`;
+        msg += `Regions: ${data.summary.regions_covered.join(', ')}\n`;
+        msg += `Directions: ${data.summary.has_horizontal ? 'H' : '-'} ${data.summary.has_vertical ? 'V' : '-'} ${data.summary.has_diagonal ? 'D' : '-'}\n\n`;
+        msg += `#  | Pts | Region          | Angle | Curve(px) | Score\n`;
+        msg += `---|-----|-----------------|-------|-----------|------\n`;
+        data.lines.forEach(l => {
+            msg += `${String(l.line).padStart(2)} | ${String(l.points).padStart(3)} | ${l.region.padEnd(15)} | ${String(l.angle_deg).padStart(5)} | ${String(l.curvature_max_px).padStart(9)} | ${l.score}\n`;
+        });
+        alert(msg);
+    } catch (err) {
+        alert('Error: ' + err.message);
+    }
+}
+
 async function lensClearFile() {
     if (!confirm('Delete all saved lines and calibration?')) return;
     lensSavedLines = [];
