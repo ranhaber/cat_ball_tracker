@@ -44,6 +44,8 @@ class LensCalibration:
         self.image_height = 0
         self.is_calibrated = False
         self.model_type = "fisheye"  # "fisheye" or "standard" (legacy)
+        # Optimal camera matrix for undistortion (retains all pixels)
+        self.optimal_camera_matrix = None
         # Quality stats (saved for display on reload)
         self.overall_before_mean_px = 0.0
         self.overall_after_mean_px = 0.0
@@ -203,6 +205,7 @@ class LensCalibration:
         self.dist_coeffs = np.array([[k1, k2, p1, p2, k3]], dtype=np.float64)
         self.is_calibrated = True
         self.model_type = "standard"
+        self._compute_optimal_matrix()
 
         # ---- Compute before/after stats ----
         line_errors = []
@@ -273,20 +276,35 @@ class LensCalibration:
     # Apply: undistort a single pixel coordinate
     # ------------------------------------------------------------------
 
+    def _compute_optimal_matrix(self):
+        """Compute optimal camera matrix that retains all pixels after undistortion."""
+        if self.camera_matrix is not None and self.image_width > 0 and self.image_height > 0:
+            self.optimal_camera_matrix, _ = cv2.getOptimalNewCameraMatrix(
+                self.camera_matrix, self.dist_coeffs,
+                (self.image_width, self.image_height),
+                alpha=1.0,  # 1.0 = retain all pixels (some black borders)
+                newImgSize=(self.image_width, self.image_height))
+            print(f"[LENS] Optimal camera matrix computed (alpha=1, full FOV retained)")
+        else:
+            self.optimal_camera_matrix = self.camera_matrix
+    
     def undistort_point(self, px, py):
-        """Undistort a single pixel coordinate.  Returns (ux, uy)."""
+        """Undistort a single pixel coordinate. Returns (ux, uy).
+        Uses optimal camera matrix so coordinates match undistorted frames."""
         if not self.is_calibrated:
             return (px, py)
+        P = self.optimal_camera_matrix if self.optimal_camera_matrix is not None else self.camera_matrix
         pt = np.array([[[px, py]]], dtype=np.float64)
-        out = cv2.undistortPoints(pt, self.camera_matrix, self.dist_coeffs,
-                                  P=self.camera_matrix)
+        out = cv2.undistortPoints(pt, self.camera_matrix, self.dist_coeffs, P=P)
         return (float(out[0, 0, 0]), float(out[0, 0, 1]))
     
     def undistort_frame(self, frame):
-        """Undistort an entire image frame. Returns the corrected frame."""
+        """Undistort an entire image frame. Returns the corrected frame.
+        Uses optimal camera matrix so the full FOV is retained (no cropped edges)."""
         if not self.is_calibrated:
             return frame
-        return cv2.undistort(frame, self.camera_matrix, self.dist_coeffs)
+        new_cam = self.optimal_camera_matrix if self.optimal_camera_matrix is not None else self.camera_matrix
+        return cv2.undistort(frame, self.camera_matrix, self.dist_coeffs, None, new_cam)
 
     # ------------------------------------------------------------------
     # Persistence
@@ -335,6 +353,7 @@ class LensCalibration:
             self.overall_after_mean_px = data.get("overall_after_mean_px", 0.0)
             self.overall_improvement_pct = data.get("overall_improvement_pct", 0.0)
             if self.is_calibrated:
+                self._compute_optimal_matrix()
                 f = self.camera_matrix[0, 0]
                 print(f"[LENS] Loaded: f={f:.1f}, "
                       f"k1={k1:.6f}, k2={k2:.6f}, k3={k3:.6f}, "
