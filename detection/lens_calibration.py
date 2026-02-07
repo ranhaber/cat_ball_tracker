@@ -118,10 +118,10 @@ class LensCalibration:
         all_points = np.array(all_points, dtype=np.float64)
 
         def _undistort(params):
-            """Undistort all points with standard model. Returns (N,2) array."""
-            f, cx, cy, k1, k2, p1, p2, k3 = params
+            """Undistort all points with rational model. Returns (N,2) array."""
+            f, cx, cy, k1, k2, p1, p2, k3, k4, k5, k6 = params
             cam = np.array([[f, 0, cx], [0, f, cy], [0, 0, 1]], dtype=np.float64)
-            dist = np.array([[k1, k2, p1, p2, k3]], dtype=np.float64)
+            dist = np.array([[k1, k2, p1, p2, k3, k4, k5, k6]], dtype=np.float64)
             pts = all_points.reshape(-1, 1, 2)
             out = cv2.undistortPoints(pts, cam, dist, P=cam)
             return out.reshape(-1, 2), cam, dist
@@ -162,18 +162,20 @@ class LensCalibration:
                 print(f"[LENS] Iter {eval_count[0]}/{self.calibration_max_iterations} "
                       f"| cost={cost:.2f} (best={best_result[1]:.2f}) | {direction} "
                       f"| f={params[0]:.1f} cx={params[1]:.1f} cy={params[2]:.1f} "
-                      f"| k1={params[3]:.6f} k2={params[4]:.6f} k3={params[5]:.6f} k4={params[6]:.6f}",
+                      f"| k1={params[3]:.6f} k2={params[4]:.6f} k3={params[7]:.6f} "
+                      f"| k4={params[8]:.6f} k5={params[9]:.6f} k6={params[10]:.6f}",
                       flush=True)
                 prev_cost[0] = cost
             return r
 
-        # 8 parameters: f, cx, cy, k1, k2, p1, p2, k3 (standard OpenCV model)
-        # k1 MUST be negative for barrel distortion (wide-angle rectilinear lens).
-        x0 = np.array([f0, cx0, cy0, -0.1, 0.0, 0.0, 0.0, 0.0])
-        lower = [200, cx0 - image_width * 0.1, cy0 - image_height * 0.1,
-                 -5.0, -5.0, -0.01, -0.01, -5.0]
-        upper = [3000, cx0 + image_width * 0.1, cy0 + image_height * 0.1,
-                 0.0, 5.0, 0.01, 0.01, 5.0]
+        # 11 parameters: f, cx, cy, k1, k2, p1, p2, k3, k4, k5, k6
+        # Rational model: r_d = r*(1+k1*r²+k2*r⁴+k3*r⁶) / (1+k4*r²+k5*r⁴+k6*r⁶)
+        # Better for wide-angle lenses (120° FOV) than standard polynomial.
+        x0 = np.array([f0, cx0, cy0, -0.1, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
+        lower = [200, cx0 - image_width * 0.2, cy0 - image_height * 0.2,
+                 -5.0, -5.0, -0.1, -0.1, -5.0, -5.0, -5.0, -5.0]
+        upper = [3000, cx0 + image_width * 0.2, cy0 + image_height * 0.2,
+                 5.0, 5.0, 0.1, 0.1, 5.0, 5.0, 5.0, 5.0]
 
         # Scale max iterations with number of lines (more data = may need more iterations)
         self.calibration_max_iterations = max(5000, len(self.lines) * 500)
@@ -192,9 +194,9 @@ class LensCalibration:
             self.calibration_in_progress = False
         # Use best result found (in case optimizer overshot)
         if best_result[0] is not None and best_result[1] < result.cost:
-            f_opt, cx_opt, cy_opt, k1, k2, p1, p2, k3 = best_result[0]
+            f_opt, cx_opt, cy_opt, k1, k2, p1, p2, k3, k4, k5, k6 = best_result[0]
         else:
-            f_opt, cx_opt, cy_opt, k1, k2, p1, p2, k3 = result.x
+            f_opt, cx_opt, cy_opt, k1, k2, p1, p2, k3, k4, k5, k6 = result.x
         print(f"[LENS] Optimizer done: {eval_count[0]} evaluations, cost={result.cost:.4f}")
 
         self.camera_matrix = np.array([
@@ -202,10 +204,10 @@ class LensCalibration:
             [    0, f_opt, cy_opt],
             [    0,  0,  1]
         ], dtype=np.float64)
-        # Standard dist_coeffs: [k1, k2, p1, p2, k3]
-        self.dist_coeffs = np.array([[k1, k2, p1, p2, k3]], dtype=np.float64)
+        # Rational dist_coeffs: [k1, k2, p1, p2, k3, k4, k5, k6]
+        self.dist_coeffs = np.array([[k1, k2, p1, p2, k3, k4, k5, k6]], dtype=np.float64)
         self.is_calibrated = True
-        self.model_type = "standard"
+        self.model_type = "rational"
         self._compute_optimal_matrix()
 
         # ---- Compute before/after stats ----
@@ -249,18 +251,22 @@ class LensCalibration:
         self.overall_improvement_pct = overall_improvement
         self.save()
 
-        print(f"[LENS] Calibration done (standard 8-param): f={f_opt:.1f}, "
+        print(f"[LENS] Calibration done (rational 11-param): f={f_opt:.1f}, "
               f"cx={cx_opt:.1f}, cy={cy_opt:.1f}, "
               f"k1={k1:.6f}, k2={k2:.6f}, k3={k3:.6f}, "
+              f"k4={k4:.6f}, k5={k5:.6f}, k6={k6:.6f}, "
               f"p1={p1:.6f}, p2={p2:.6f}")
         print(f"[LENS] Overall: before={overall_before:.2f}px, after={overall_after:.2f}px, "
               f"improvement={overall_improvement}%")
 
         return {
-            "model": "standard",
+            "model": "rational",
             "k1": round(k1, 8),
             "k2": round(k2, 8),
             "k3": round(k3, 8),
+            "k4": round(k4, 8),
+            "k5": round(k5, 8),
+            "k6": round(k6, 8),
             "p1": round(p1, 8),
             "p2": round(p2, 8),
             "fx": round(f_opt, 2),
@@ -327,14 +333,21 @@ class LensCalibration:
         xn = (ux_full - cx) / fx
         yn = (uy_full - cy) / fy
         
-        # Step 3: Apply distortion model to get distorted normalized coords
+        # Step 3: Apply distortion model (rational) to get distorted normalized coords
         r2 = xn * xn + yn * yn
         dc = self.dist_coeffs.flatten()
         k1, k2 = dc[0], dc[1]
-        p1, p2 = dc[2] if len(dc) > 2 else 0, dc[3] if len(dc) > 3 else 0
+        p1 = dc[2] if len(dc) > 2 else 0
+        p2 = dc[3] if len(dc) > 3 else 0
         k3 = dc[4] if len(dc) > 4 else 0
+        k4 = dc[5] if len(dc) > 5 else 0
+        k5 = dc[6] if len(dc) > 6 else 0
+        k6 = dc[7] if len(dc) > 7 else 0
         
-        radial = 1.0 + k1 * r2 + k2 * r2 * r2 + k3 * r2 * r2 * r2
+        # Rational model: numerator / denominator
+        numer = 1.0 + k1 * r2 + k2 * r2 * r2 + k3 * r2 * r2 * r2
+        denom = 1.0 + k4 * r2 + k5 * r2 * r2 + k6 * r2 * r2 * r2
+        radial = numer / denom if abs(denom) > 1e-10 else numer
         xd = xn * radial + 2 * p1 * xn * yn + p2 * (r2 + 2 * xn * xn)
         yd = yn * radial + p1 * (r2 + 2 * yn * yn) + 2 * p2 * xn * yn
         
@@ -365,7 +378,7 @@ class LensCalibration:
     # ------------------------------------------------------------------
 
     def save(self):
-        # Standard dist_coeffs: [k1, k2, p1, p2, k3]
+        # Rational dist_coeffs: [k1, k2, p1, p2, k3, k4, k5, k6]
         dc = self.dist_coeffs.flatten()
         data = {
             "model_type": self.model_type,
@@ -374,6 +387,9 @@ class LensCalibration:
             "p1": float(dc[2]) if len(dc) > 2 else 0.0,
             "p2": float(dc[3]) if len(dc) > 3 else 0.0,
             "k3": float(dc[4]) if len(dc) > 4 else 0.0,
+            "k4": float(dc[5]) if len(dc) > 5 else 0.0,
+            "k5": float(dc[6]) if len(dc) > 6 else 0.0,
+            "k6": float(dc[7]) if len(dc) > 7 else 0.0,
             "camera_matrix": self.camera_matrix.tolist(),
             "image_width": self.image_width,
             "image_height": self.image_height,
@@ -398,7 +414,10 @@ class LensCalibration:
             p1 = data.get("p1", 0)
             p2 = data.get("p2", 0)
             k3 = data.get("k3", 0)
-            self.dist_coeffs = np.array([[k1, k2, p1, p2, k3]], dtype=np.float64)
+            k4 = data.get("k4", 0)
+            k5 = data.get("k5", 0)
+            k6 = data.get("k6", 0)
+            self.dist_coeffs = np.array([[k1, k2, p1, p2, k3, k4, k5, k6]], dtype=np.float64)
             self.image_width = data.get("image_width", 0)
             self.image_height = data.get("image_height", 0)
             self.lines = data.get("lines", [])
@@ -411,6 +430,7 @@ class LensCalibration:
                 f = self.camera_matrix[0, 0]
                 print(f"[LENS] Loaded: f={f:.1f}, "
                       f"k1={k1:.6f}, k2={k2:.6f}, k3={k3:.6f}, "
+                      f"k4={k4:.6f}, k5={k5:.6f}, k6={k6:.6f}, "
                       f"p1={p1:.6f}, p2={p2:.6f}, "
                       f"{self.image_width}x{self.image_height}")
         except Exception as e:
