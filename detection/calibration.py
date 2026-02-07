@@ -359,6 +359,160 @@ class CameraCalibration:
         ]
         return self.set_calibration_points(points)
     
+    def joint_optimize_distortion(self, raw_pixels, world_pts, lens_cal):
+        """
+        Jointly optimize lens distortion + homography so that:
+        undistort(raw_pixel, dist_params) → findHomography → world = expected
+        
+        This finds distortion coefficients that minimize the reprojection error
+        through the perspective transform, directly optimizing for accurate
+        x,y world-coordinate mapping.
+        
+        Args:
+            raw_pixels: List of [x,y] raw (distorted) pixel coordinates
+            world_pts: List of [x,y] expected world coordinates
+            lens_cal: LensCalibration instance to update with results
+            
+        Returns:
+            dict with optimization results, or None on failure
+        """
+        from scipy.optimize import least_squares
+        import math
+        
+        raw_px = np.array(raw_pixels, dtype=np.float64)
+        world = np.array(world_pts, dtype=np.float64)
+        n = len(raw_px)
+        
+        if n < 8:
+            print("[JOINT] Need at least 8 points (2 rectangles) for joint optimization")
+            return None
+        
+        # Initial values from current lens calibration
+        if lens_cal.camera_matrix is not None:
+            fx0 = lens_cal.camera_matrix[0, 0]
+            cx0 = lens_cal.camera_matrix[0, 2]
+            cy0 = lens_cal.camera_matrix[1, 2]
+        else:
+            fx0 = (lens_cal.image_width / 2.0) / np.tan(np.radians(51.0))
+            cx0 = lens_cal.image_width / 2.0
+            cy0 = lens_cal.image_height / 2.0
+        
+        if lens_cal.dist_coeffs is not None:
+            dc = lens_cal.dist_coeffs.flatten()
+            k1_0, k2_0 = dc[0], dc[1]
+            p1_0 = dc[2] if len(dc) > 2 else 0
+            p2_0 = dc[3] if len(dc) > 3 else 0
+            k3_0 = dc[4] if len(dc) > 4 else 0
+        else:
+            k1_0, k2_0, p1_0, p2_0, k3_0 = 0, 0, 0, 0, 0
+        
+        eval_count = [0]
+        best = [None, np.inf]
+        
+        def residuals(params):
+            eval_count[0] += 1
+            fx, cx, cy, k1, k2, p1, p2, k3 = params
+            
+            cam = np.array([[fx, 0, cx], [0, fx, cy], [0, 0, 1]], dtype=np.float64)
+            dist = np.array([[k1, k2, p1, p2, k3]], dtype=np.float64)
+            
+            try:
+                # Undistort all raw pixels
+                pts = raw_px.reshape(-1, 1, 2)
+                undist = cv2.undistortPoints(pts, cam, dist, P=cam).reshape(-1, 2)
+                
+                # Find best homography for these undistorted points
+                H, _ = cv2.findHomography(undist, world, method=0)
+                if H is None:
+                    return np.full(n * 2, 1e6)
+                
+                # Project undistorted points through homography
+                projected = cv2.perspectiveTransform(
+                    undist.reshape(-1, 1, 2).astype(np.float32), 
+                    H.astype(np.float32)
+                ).reshape(-1, 2)
+                
+                # Reprojection error
+                err = (projected - world).flatten()
+                cost = float(np.sum(err ** 2))
+                
+                if cost < best[1]:
+                    best[0] = params.copy()
+                    best[1] = cost
+                
+                if eval_count[0] % 500 == 0:
+                    rmse = math.sqrt(cost / n)
+                    print(f"[JOINT] Iter {eval_count[0]}: RMSE={rmse:.4f}m, "
+                          f"k1={k1:.6f} k2={k2:.6f} k3={k3:.6f} f={fx:.1f}", flush=True)
+                
+                return err
+            except Exception:
+                return np.full(n * 2, 1e6)
+        
+        # Parameters: fx, cx, cy, k1, k2, p1, p2, k3
+        x0 = np.array([fx0, cx0, cy0, k1_0, k2_0, p1_0, p2_0, k3_0])
+        
+        w, h = lens_cal.image_width, lens_cal.image_height
+        lower = [200, cx0 - w * 0.2, cy0 - h * 0.2,
+                 -5.0, -5.0, -0.1, -0.1, -5.0]
+        upper = [3000, cx0 + w * 0.2, cy0 + h * 0.2,
+                 5.0, 5.0, 0.1, 0.1, 5.0]
+        
+        print(f"[JOINT] Starting joint distortion+homography optimization: "
+              f"{n} points, initial f={fx0:.1f}, k1={k1_0:.6f}, k2={k2_0:.6f}")
+        
+        result = least_squares(residuals, x0, method='trf',
+                               bounds=(lower, upper),
+                               max_nfev=20000, xtol=1e-14, ftol=1e-14)
+        
+        # Use best result
+        if best[0] is not None and best[1] < result.cost:
+            params = best[0]
+        else:
+            params = result.x
+        
+        fx, cx, cy, k1, k2, p1, p2, k3 = params
+        rmse = math.sqrt(best[1] / n) if best[1] < np.inf else 999
+        
+        print(f"[JOINT] Done: {eval_count[0]} evals, RMSE={rmse:.4f}m")
+        print(f"[JOINT] Result: f={fx:.1f}, cx={cx:.1f}, cy={cy:.1f}, "
+              f"k1={k1:.6f}, k2={k2:.6f}, k3={k3:.6f}, p1={p1:.6f}, p2={p2:.6f}")
+        
+        # Update lens calibration with new parameters
+        lens_cal.camera_matrix = np.array([[fx, 0, cx], [0, fx, cy], [0, 0, 1]], dtype=np.float64)
+        lens_cal.dist_coeffs = np.array([[k1, k2, p1, p2, k3]], dtype=np.float64)
+        lens_cal.is_calibrated = True
+        lens_cal._compute_optimal_matrix()
+        lens_cal.save()
+        
+        # Now recompute calibration with newly undistorted pixels
+        undist_all = []
+        cam_new = lens_cal.camera_matrix
+        dist_new = lens_cal.dist_coeffs
+        P_new = lens_cal.optimal_camera_matrix if lens_cal.optimal_camera_matrix is not None else cam_new
+        for rp in raw_pixels:
+            pt = np.array([[[rp[0], rp[1]]]], dtype=np.float64)
+            out = cv2.undistortPoints(pt, cam_new, dist_new, P=P_new)
+            ux, uy = float(out[0, 0, 0]), float(out[0, 0, 1])
+            if lens_cal.undistort_roi:
+                ux -= lens_cal.undistort_roi[0]
+                uy -= lens_cal.undistort_roi[1]
+            undist_all.append([ux, uy])
+        
+        return {
+            "rmse_meters": round(rmse, 4),
+            "evaluations": eval_count[0],
+            "fx": round(fx, 2),
+            "cx": round(cx, 2),
+            "cy": round(cy, 2),
+            "k1": round(k1, 8),
+            "k2": round(k2, 8),
+            "k3": round(k3, 8),
+            "p1": round(p1, 8),
+            "p2": round(p2, 8),
+            "undistorted_pixels": undist_all,
+        }
+    
     def _compute_transform(self):
         """Compute the perspective transformation matrix.
         4 points: exact (getPerspectiveTransform).
