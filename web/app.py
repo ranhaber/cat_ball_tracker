@@ -635,12 +635,15 @@ class VideoProcessor:
             return jpeg.tobytes()
         return None
     
-    def get_frame_jpeg_capture_resolution(self):
-        """Get current frame as JPEG at capture resolution (no scaling). For Zone/Calibration snapshots."""
+    def get_frame_jpeg_capture_resolution(self, undistort=False):
+        """Get current frame as JPEG at capture resolution (no scaling).
+        If undistort=True and lens calibration is available, applies lens correction first."""
         with self.frame_lock:
             if self.current_frame is None:
                 return None
             frame = self.current_frame.copy()
+        if undistort and self.lens_calibration and self.lens_calibration.is_calibrated:
+            frame = self.lens_calibration.undistort_frame(frame)
         ret, jpeg = cv2.imencode(
             '.jpg',
             frame,
@@ -773,18 +776,10 @@ class VideoProcessor:
 
     def set_calibration_from_rectangles(self, rectangles):
         """Set calibration from multiple rectangles.
-        Undistorts pixels for homography computation but preserves
-        original pixel positions in the rectangle data for UI display."""
+        Pixels are already in undistorted space (user clicks on lens-corrected snapshot)."""
         if self.calibration:
-            # Build undistorted copies for the homography, keep originals for display
-            rects_for_homography = []
-            for rect in rectangles:
-                r = dict(rect)
-                r["pixels"] = self._undistort_pixels(rect["pixels"])
-                rects_for_homography.append(r)
-            # Store original (display) rectangles, compute with undistorted
-            self.calibration.rectangles = rectangles  # originals for save/load/UI
-            return self.calibration.set_calibration_from_rectangles(rects_for_homography)
+            self.calibration.rectangles = rectangles
+            return self.calibration.set_calibration_from_rectangles(rectangles)
         return False
     
     def clear_calibration(self):
@@ -792,12 +787,14 @@ class VideoProcessor:
         if self.calibration:
             self.calibration.clear()
     
-    def pixel_to_world(self, pixel_x, pixel_y):
+    def pixel_to_world(self, pixel_x, pixel_y, already_undistorted=False):
         """Convert pixel coordinates to world coordinates.
-        Applies lens undistortion first if available."""
+        If already_undistorted=False (default), applies lens undistortion first.
+        Set already_undistorted=True for pixels from lens-corrected snapshots
+        (calibration rectangles, detection zone perimeter)."""
         if self.calibration and self.calibration.is_calibrated:
             ux, uy = pixel_x, pixel_y
-            if self.lens_calibration and self.lens_calibration.is_calibrated:
+            if not already_undistorted and self.lens_calibration and self.lens_calibration.is_calibrated:
                 ux, uy = self.lens_calibration.undistort_point(pixel_x, pixel_y)
             return self.calibration.pixel_to_world(ux, uy)
         return None
@@ -850,7 +847,8 @@ class VideoProcessor:
                     if saved_w > 0 and saved_h > 0:
                         px = px_orig * curr_w / saved_w
                         py = py_orig * curr_h / saved_h
-                world_pos = self.pixel_to_world(px, py)
+                # Perimeter pixels are from lens-corrected snapshot → already undistorted
+                world_pos = self.pixel_to_world(px, py, already_undistorted=True)
                 if world_pos:
                     result["perimeter_world"].append({
                         "x": round(world_pos[0], 2),
@@ -1040,8 +1038,9 @@ def create_app():
         
     @app.route('/api/snapshot')
     def snapshot_capture_resolution():
-        """Single snapshot at capture resolution (same as camera frame). For Zone and Calibration editors."""
-        jpeg = video_processor.get_frame_jpeg_capture_resolution()
+        """Single snapshot at capture resolution. If undistort=1 and lens cal available, applies correction."""
+        undistort = request.args.get('undistort', '0') == '1'
+        jpeg = video_processor.get_frame_jpeg_capture_resolution(undistort=undistort)
         if jpeg:
             return Response(jpeg, mimetype='image/jpeg')
         return Response(status=503)
@@ -1510,20 +1509,14 @@ def create_app():
                         px = px_orig * curr_w / saved_w
                         py = py_orig * curr_h / saved_h
                 
-                # Undistort (same as pixel_to_world)
-                ux, uy = px, py
-                if video_processor.lens_calibration and video_processor.lens_calibration.is_calibrated:
-                    ux, uy = video_processor.lens_calibration.undistort_point(px, py)
-                
-                # Apply homography
-                world_pos = video_processor.calibration.pixel_to_world(ux, uy)
+                # Perimeter pixels are from lens-corrected snapshot → already undistorted
+                world_pos = video_processor.calibration.pixel_to_world(px, py)
                 
                 debug["perimeter_points"].append({
                     "index": i,
-                    "raw_pixel": [round(float(px_orig), 1), round(float(py_orig), 1)],
-                    "scaled_pixel": [round(px, 1), round(py, 1)],
-                    "undistorted_pixel": [round(ux, 1), round(uy, 1)],
+                    "pixel": [round(px, 1), round(py, 1)],
                     "world": [round(world_pos[0], 4), round(world_pos[1], 4)] if world_pos else None,
+                    "note": "already undistorted (clicked on corrected image)"
                 })
             
             # Compute side lengths in top-down view

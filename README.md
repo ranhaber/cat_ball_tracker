@@ -2,7 +2,7 @@
 
 A real-time cat and ball detection system for Raspberry Pi Zero 2W with Camera Module 3. Features motion-first detection for efficiency, a web interface for live streaming, and zone-based tracking.
 
-**Version:** 2.6.1
+**Version:** 2.7.0
 
 ---
 
@@ -311,11 +311,30 @@ Rectangle 3 (far end):
 
 **What to use as rectangles:** Floor tiles, a doormat, a piece of cardboard, tape marks, a book — anything with known width × height and right angles.
 
+### Calibration Pipeline
+
+The correct order matters:
+
+1. **Lens Calibration** (do this first, once per lens)
+   - Corrects barrel distortion from the 120° wide-angle lens
+   - Mark straight lines in the image → optimizer finds distortion parameters
+   
+2. **Perspective Calibration** (after lens cal, redo if camera moves)
+   - Click "Load Camera Frame" → you see the **lens-corrected** image (straight lines are straight)
+   - Click rectangle corners on the corrected image → pixels are already undistorted
+   - Homography computed directly from what you see — no hidden corrections
+   
+3. **Detection Zone** (after lens cal, redo if camera moves)
+   - Same lens-corrected snapshot → zone pixels match calibration pixels
+
+4. **Cat/Ball Tracking** (automatic)
+   - Camera frame → detect object at raw pixel → undistort → apply homography → world (x,y)
+
 ### Tips for Accurate X,Y Tracking
 
-- **Do lens calibration first**: Go to Zone tab → Lens Calibration and calibrate barrel distortion **before** perspective calibration. With a 120° wide-angle lens this is critical
-- **Make rectangle 1 as large as possible**: It establishes the coordinate system. Bigger = better perspective constraint. Place it covering the main detection area
-- **Add rectangles at the edges**: The 120° lens has the most distortion at the edges. A rectangle there helps `findHomography` compensate
+- **Do lens calibration first**: The calibration and zone editors show lens-corrected snapshots. Without lens calibration, the snapshots are raw (barrel-distorted)
+- **Place rectangles across the frame**: Each rectangle gets its own local homography. The nearest rectangle is used for any pixel — more rectangles = better coverage
+- **Adjacent rectangles are best**: Rectangles that share corners give the most consistent results across the frame
 - **Measure carefully**: Width and height define the real-world scale. A 5cm error = 5cm tracking error. Use a tape measure
 - **Rectangle 1 = origin (0,0)**: All world coordinates are relative to the first corner of rectangle 1
 - **Verify with a known object**: After calibrating, place an object at different positions and check if the top-down view shows it in the correct location
@@ -440,6 +459,8 @@ sudo journalctl -u cat_ball_tracker -n 50
 
 ## 📝 Version History
 
+- **v2.7.0** - Undistorted snapshots: calibration and zone editors now show lens-corrected images; user clicks on corrected pixels directly; proper pipeline: lens cal → corrected snapshot → click rectangles/zone → homography from undistorted pixels; cat detection still undistorts raw camera pixels; nearest-rectangle Voronoi approach for pixel_to_world
+- **v2.6.2** - Use nearest rectangle only (no weighted blending) for pixel_to_world
 - **v2.6.1** - Fix: squares (all sides equal) caused degenerate P3=P1 in SSS solver due to floating point zero cross product; rectangles now use direct geometry (P0,P1,P2,P3 = corners) instead of SSS; SSS kept only for non-rectangle quads with diagonal; also added degeneracy check for SSS solver
 - **v2.6.0** - Regional calibration: each rectangle gets its own local homography; pixel_to_world uses inverse-distance weighted interpolation across all rectangles; eliminates single-homography compromise for 120° wide-angle lens; accurate across full frame even with barrel distortion
 - **v2.5.3** - Fix multi-rectangle calibration accuracy: each rectangle's exact shape computed independently (SSS/rectangle geometry); preliminary homography used only for position and orientation, not shape; fixes severe distortion when rectangles are spread across 120° wide-angle frame; added /api/calibration/debug endpoint

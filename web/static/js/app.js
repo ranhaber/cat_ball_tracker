@@ -504,7 +504,8 @@ async function loadCalibrationSnapshot() {
     if (btn) btn.textContent = '⏳ Loading...';
     
     try {
-        const response = await fetch('/api/snapshot');
+        // Request lens-corrected snapshot so clicks are in undistorted pixel space
+        const response = await fetch('/api/snapshot?undistort=1');
         const blob = await response.blob();
         
         calibrationImage = new Image();
@@ -1264,7 +1265,8 @@ async function loadPerimeterSnapshot() {
     if (btn) btn.textContent = '⏳ Loading...';
     
     try {
-        const response = await fetch('/api/snapshot');
+        // Request lens-corrected snapshot so clicks are in undistorted pixel space
+        const response = await fetch('/api/snapshot?undistort=1');
         const blob = await response.blob();
         
         perimeterImage = new Image();

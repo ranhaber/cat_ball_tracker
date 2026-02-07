@@ -281,6 +281,12 @@ class LensCalibration:
         out = cv2.undistortPoints(pt, self.camera_matrix, self.dist_coeffs,
                                   P=self.camera_matrix)
         return (float(out[0, 0, 0]), float(out[0, 0, 1]))
+    
+    def undistort_frame(self, frame):
+        """Undistort an entire image frame. Returns the corrected frame."""
+        if not self.is_calibrated:
+            return frame
+        return cv2.undistort(frame, self.camera_matrix, self.dist_coeffs)
 
     # ------------------------------------------------------------------
     # Persistence
