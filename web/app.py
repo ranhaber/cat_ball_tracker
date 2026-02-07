@@ -830,7 +830,7 @@ class VideoProcessor:
                     if saved_w > 0 and saved_h > 0:
                         px = px * curr_w / saved_w
                         py = py * curr_h / saved_h
-                world_pos = self.calibration.pixel_to_world(px, py)
+                world_pos = self.pixel_to_world(px, py)
                 if world_pos:
                     result["perimeter_world"].append({
                         "x": round(world_pos[0], 2),
