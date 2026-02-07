@@ -189,7 +189,7 @@ class CameraHandler:
             camera_config = self.camera.create_video_configuration(
                 main={
                     "size": (self.width, self.height),
-                    "format": "RGB888"  # RGB output; converted to BGR after capture for OpenCV
+                    "format": "RGB888"  # Despite the name, picamera2 "RGB888" stores BGR in memory (correct for OpenCV)
                 },
                 controls={
                     "FrameRate": self.fps
@@ -274,9 +274,8 @@ class CameraHandler:
             try:
                 frame = self.camera.capture_array()
                 self._frame_count += 1
-                # picamera2 capture_array returns RGB; convert to BGR for OpenCV
-                if not self.use_mock:
-                    frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+                # picamera2 "RGB888" format actually stores BGR in memory
+                # (reversed naming convention) - no conversion needed for OpenCV
                 return frame
             except Exception as e:
                 print(f"Frame capture error: {e}")

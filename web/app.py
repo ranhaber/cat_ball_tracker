@@ -287,10 +287,9 @@ class VideoProcessor:
                             continue
                     else:
                         with request as req:
+                            # picamera2 "RGB888" format actually stores BGR bytes in memory
+                            # (reversed naming convention), which is exactly what OpenCV needs
                             frame = req.make_array("main")
-                            # picamera2 make_array returns RGB regardless of format config;
-                            # OpenCV needs BGR, so convert to fix R/B channel swap
-                            frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
                 
                 frame_h, frame_w = frame.shape[:2]
                 run_ai_detection = False
@@ -777,21 +776,11 @@ class VideoProcessor:
             return self.calibration.set_calibration_points(points)
         return False
 
-    def set_calibration_from_rectangles(self, rectangles, pixels_undistorted=True):
+    def set_calibration_from_rectangles(self, rectangles):
         """Set calibration from multiple rectangles.
-        If pixels_undistorted=True, pixels are already in undistorted space.
-        If False, applies lens undistortion before computing homography."""
+        Pixels are already in undistorted space (user clicks on lens-corrected snapshot)."""
         if self.calibration:
             self.calibration.rectangles = rectangles
-            self.calibration.pixels_undistorted = pixels_undistorted
-            if not pixels_undistorted:
-                # User clicked on raw image — undistort pixels for homography
-                rects_for_homography = []
-                for rect in rectangles:
-                    r = dict(rect)
-                    r["pixels"] = self._undistort_pixels(rect["pixels"])
-                    rects_for_homography.append(r)
-                return self.calibration.set_calibration_from_rectangles(rects_for_homography)
             return self.calibration.set_calibration_from_rectangles(rectangles)
         return False
     
@@ -860,10 +849,8 @@ class VideoProcessor:
                     if saved_w > 0 and saved_h > 0:
                         px = px_orig * curr_w / saved_w
                         py = py_orig * curr_h / saved_h
-                # Perimeter pixels match the snapshot mode used when zone was drawn.
-                # If calibration was done with undistorted pixels, perimeter likely was too.
-                perim_undistorted = getattr(self.calibration, 'pixels_undistorted', True)
-                world_pos = self.pixel_to_world(px, py, already_undistorted=perim_undistorted)
+                # Perimeter pixels are from lens-corrected snapshot → already undistorted
+                world_pos = self.pixel_to_world(px, py, already_undistorted=True)
                 if world_pos:
                     result["perimeter_world"].append({
                         "x": round(world_pos[0], 2),
@@ -1448,8 +1435,7 @@ def create_app():
                 except (TypeError, ValueError):
                     rect["diagonal"] = None
         
-        pixels_undistorted = data.get('pixels_undistorted', True)
-        success = video_processor.set_calibration_from_rectangles(rectangles, pixels_undistorted=pixels_undistorted)
+        success = video_processor.set_calibration_from_rectangles(rectangles)
         
         if success:
             return jsonify({

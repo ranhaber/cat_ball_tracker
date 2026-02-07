@@ -504,9 +504,8 @@ async function loadCalibrationSnapshot() {
     if (btn) btn.textContent = '⏳ Loading...';
     
     try {
-        // Check if user wants lens-corrected snapshot
-        const useUndistorted = document.getElementById('use-undistorted-snapshot')?.checked ? '1' : '0';
-        const response = await fetch(`/api/snapshot?undistort=${useUndistorted}`);
+        // Always use lens-corrected snapshot so clicks are in undistorted pixel space
+        const response = await fetch('/api/snapshot?undistort=1');
         const blob = await response.blob();
         
         calibrationImage = new Image();
@@ -813,9 +812,7 @@ async function saveCalibrationRectangles() {
     }
     
     try {
-        const pixelsUndistorted = document.getElementById('use-undistorted-snapshot')?.checked || false;
         const payload = {
-            pixels_undistorted: pixelsUndistorted,
             rectangles: calibrationRectangles.map(r => ({
                 pixels: r.pixels,
                 side_lengths: r.side_lengths,
@@ -1268,9 +1265,8 @@ async function loadPerimeterSnapshot() {
     if (btn) btn.textContent = '⏳ Loading...';
     
     try {
-        // Check if user wants lens-corrected snapshot
-        const useUndistorted = document.getElementById('use-undistorted-snapshot')?.checked ? '1' : '0';
-        const response = await fetch(`/api/snapshot?undistort=${useUndistorted}`);
+        // Always use lens-corrected snapshot so clicks are in undistorted pixel space
+        const response = await fetch('/api/snapshot?undistort=1');
         const blob = await response.blob();
         
         perimeterImage = new Image();
