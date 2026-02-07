@@ -79,7 +79,7 @@ A real-time cat and ball detection system for Raspberry Pi Zero 2W with Camera M
 - **🔢 Object Tracking** - Consistent IDs across frames using centroid tracking
 - **📍 Detection Zones** - Draw perimeter on camera snapshot to limit detection area
 - **🗺️ Top-Down View** - Bird's eye view of detection zone with tracked objects (perspective transform)
-- **📏 Multi-Point Calibration** - 4+ point perspective mapping with side lengths; 5+ points use least-squares best-fit homography
+- **📏 Multi-Point Calibration** - Rectangle (4 points) + optional edge points (5+) for perspective mapping; least-squares best-fit homography
 - **⚡ Performance Controls** - Resolution, frame skip, threshold, and confirmation adjustment
 - **💾 Settings Persistence** - All settings saved and restored on reboot
 - **📊 System Monitoring** - RAM usage and CPU temperature display
@@ -238,32 +238,100 @@ Cat Dome uses a two-stage detection approach to save resources:
 
 ## 🗺️ Top-Down View & Perspective Calibration
 
-The system can show a **bird's eye view** of your detection zone with tracked objects, using perspective transformation.
+The system can show a **bird's eye view** of your detection zone with tracked objects, using perspective transformation (homography).
 
-### Multi-Point Calibration Setup
+### Why Calibration Matters
 
+The camera sees the world in **perspective** — far objects look smaller, parallel lines converge. Calibration teaches the system the real-world scale so it can:
+- Show a correct **top-down view** of your space
+- Measure real-world **distances** between detected objects
+- Display accurate **side lengths** on the zone polygon
+
+With a 120° wide-angle lens, there is also **barrel distortion** (straight lines curve at the edges). The system corrects this via **lens calibration** (separate step) before computing the perspective transform.
+
+### Calibration: Step by Step
+
+#### Stage A — Rectangle (Points 1–4)
+
+The first 4 points **must form a rectangle** with known dimensions. This establishes the perspective transform.
+
+**What you need:** A rectangle on the ground with measured width and height. Use tiles, a mat, tape marks, a doorway — anything with known dimensions and right angles.
+
+**Placement matters:**
+- Place the rectangle to **cover the main area** you want to track
+- Spread it out — a bigger rectangle gives better accuracy
+- Don't place all 4 points in one corner of the image
+
+**Steps:**
 1. Go to **Zone** tab → **Perspective Calibration**
 2. Click **Load Camera Frame**
-3. Click **4 or more points** on the ground in the camera view (up to 20)
-4. Enter the **side length** (meters) for each edge of the polygon
-5. Optionally enter a **diagonal** (P1→P3) for exact quadrilateral shape (4 points only)
-6. Click **Save Calibration**
+3. Click the **4 corners** of your rectangle on the image, going in order (clockwise or counterclockwise)
+4. Enter the **4 side lengths** in meters (opposite sides should be equal for a rectangle)
+5. Click **Save Calibration**
 
-**How it works:**
-- **4 points**: exact homography via `getPerspectiveTransform`
-  - Rectangle auto-detected (opposite sides equal)
-  - With diagonal: exact shape via SSS triangles
-  - Without diagonal for non-rectangles: heuristic placement
-- **5+ points**: least-squares best-fit homography via `findHomography`
-  - More points = better accuracy across the entire image
-  - World coordinates built as a chain from pixel directions + side lengths
+The system auto-detects rectangles (opposite sides equal within 1cm tolerance) and computes exact world coordinates.
 
-### Tips for Accurate Calibration
+#### Stage B — Additional Points (5+, optional)
 
-- Use markers on the ground (tape, cones, etc.) at known positions
-- Points should form a polygon covering your detection area
-- More points = more accurate transformation (especially for wide-angle lenses)
-- 5+ points recommended for best accuracy across the full image
+After the 4-point rectangle establishes the base calibration, you can add **more points** to improve accuracy across the full image — especially at the edges where the wide-angle lens causes the most distortion.
+
+**Steps:**
+1. Click additional points on the ground in the camera view
+2. Enter side lengths for each new edge
+3. Click **Save Calibration** again
+
+Points 5+ are projected through the preliminary homography from Stage A, giving them **perspective-correct** world positions. The final homography is recomputed with **all** points using least-squares best-fit (`findHomography`), which improves accuracy across the entire image.
+
+### Example: 7-Point Calibration
+
+```
+Camera view (120° wide angle):
+┌─────────────────────────────────────────────────────┐
+│                                                     │
+│         5───────────────6                           │
+│         │               │                           │
+│         │   1═══════2   │                           │
+│         │   ║       ║   │     (center = low         │
+│         │   ║ rect  ║   │      distortion)          │
+│         │   ║ 3x2m  ║   │                           │
+│         │   4═══════3   │                           │
+│         │               │                           │
+│         7───────────────┘                           │
+│                                          (edges =   │
+│                                           more      │
+│                                           distortion)│
+└─────────────────────────────────────────────────────┘
+
+Stage A — Rectangle (points 1-4):
+  Click corners 1→2→3→4 in order.
+  Side 1 (1→2): 3.00 m
+  Side 2 (2→3): 2.00 m
+  Side 3 (3→4): 3.00 m    ← opposite sides equal = rectangle detected
+  Side 4 (4→1): 2.00 m
+
+Stage B — Additional points (5, 6, 7):
+  Click points 5, 6, 7 at the edges of your detection area.
+  Side 5 (4→5): 1.50 m    ← measure the distance 4→5
+  Side 6 (5→6): 5.00 m    ← measure the distance 5→6
+  Side 7 (6→7): 4.00 m    ← measure the distance 6→7
+  (closing side 7→1 is computed automatically)
+```
+
+### How It Works (Under the Hood)
+
+| Points | Method | Accuracy |
+|--------|--------|----------|
+| **4 (rectangle)** | Exact `getPerspectiveTransform` — rectangle auto-detected, world coords computed geometrically | Excellent in the rectangle area |
+| **4 (with diagonal)** | Exact SSS triangles — works for any quadrilateral if you provide the diagonal P1→P3 | Excellent for that quad |
+| **5+** | 4-point bootstrap + `findHomography` least-squares — points 5+ projected through preliminary homography | Best overall accuracy |
+
+### Tips
+
+- **First 4 points = rectangle**: This is the most important part. Ensure opposite sides are truly equal and angles are 90°
+- **Bigger rectangle = better**: A 1m×1m square works, but a 3m×5m rectangle gives much better accuracy
+- **Add edge points (5+)**: If you need accuracy at the edges of the image (where the 120° lens distorts most), add points there
+- **Measure carefully**: The side lengths determine the real-world scale. An error of 5cm in measurement means 5cm error in tracking
+- **Do lens calibration first**: Go to Zone tab → Lens Calibration and calibrate barrel distortion before perspective calibration. This is especially important for the 120° wide-angle lens
 - The top-down view appears below the video stream once calibrated
 
 ---
