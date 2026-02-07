@@ -183,6 +183,8 @@ class VideoProcessor:
         # Motion detection stats
         self.motion_detected = False
         self.ai_detections_count = 0
+        self._last_motion_time = 0  # Time of last motion detection
+        self._tflite_idle_timeout = 10  # Seconds of no motion before unloading TFLite
         
         # Temporal confirmation - require detection in N consecutive frames
         self.confirm_frames = saved.get("confirm_frames", getattr(config, 'DETECTION_CONFIRM_FRAMES', 1))
@@ -345,6 +347,7 @@ class VideoProcessor:
                             self.motion_detected = False
                         
                         if self.motion_detected:
+                            self._last_motion_time = time.time()
                             # Get fixed 300x300 crop centered on motion (no scaling!)
                             # This preserves object pixel size for better detection
                             crop_size = getattr(config, 'MOTION_CROP_SIZE', (300, 300))
@@ -353,6 +356,10 @@ class VideoProcessor:
                                 crop_size=crop_size
                             )
                             run_ai_detection = True
+                        elif (self.detector.is_loaded() and 
+                              time.time() - self._last_motion_time > self._tflite_idle_timeout):
+                            # No motion for N seconds — unload TFLite to save CPU
+                            self.detector.unload_model()
                     else:
                         # Always-on mode: run AI on every frame
                         run_ai_detection = True

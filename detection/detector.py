@@ -49,7 +49,10 @@ class TFLiteDetector:
         self.target_class_id = config.COCO_CLASSES[self.detection_mode]
         
         self._ensure_model_exists()
-        self._load_model()
+        # Don't load model at startup — TFLite worker threads busy-wait (spin)
+        # even when idle, wasting ~100% of one CPU core.
+        # Model is loaded on motion detection and unloaded when idle.
+        print("TFLite model ready (will load on first motion detection)")
         
     def _ensure_model_exists(self):
         """Download model if not present"""
@@ -117,6 +120,19 @@ class TFLiteDetector:
             print(f"Error loading model: {e}")
             self.interpreter = None
             
+    def unload_model(self):
+        """Unload the TFLite model to free CPU (stops spin-wait worker threads).
+        Model will be reloaded automatically on next detect() call."""
+        if self.interpreter is not None:
+            self.interpreter = None
+            self.input_details = None
+            self.output_details = None
+            print("[DETECTOR] Model unloaded (TFLite threads stopped)")
+    
+    def is_loaded(self):
+        """Check if the TFLite model is currently loaded."""
+        return self.interpreter is not None
+    
     def set_detection_mode(self, mode):
         """
         Set the detection mode.
@@ -160,6 +176,10 @@ class TFLiteDetector:
         Returns:
             List of detections: [(x1, y1, x2, y2, confidence, class_id), ...]
         """
+        # Load model on demand (avoids TFLite spin-wait threads when idle)
+        if self.interpreter is None:
+            self._load_model()
+        
         if self.interpreter is None:
             return self._mock_detect(frame)
             
