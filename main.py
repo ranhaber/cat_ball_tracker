@@ -76,6 +76,16 @@ def print_banner():
 
 def main():
     """Main entry point"""
+    import threading
+    threading.current_thread().name = "CatDome-Main"
+    # Set OS thread name so it shows in top/htop
+    try:
+        import ctypes
+        libc = ctypes.CDLL('libc.so.6')
+        libc.prctl(15, b'CatDome-Main', 0, 0, 0)
+    except Exception:
+        pass
+    
     # Parse arguments
     args = parse_args()
     

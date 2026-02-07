@@ -164,7 +164,7 @@ class CameraHandler:
         
         # Only use threaded capture for mock camera (real camera uses callbacks)
         if config.USE_THREADED_CAPTURE and self.use_mock:
-            self.capture_thread = threading.Thread(target=self._capture_loop_mock, daemon=True)
+            self.capture_thread = threading.Thread(target=self._capture_loop_mock, daemon=True, name="CatDome-MockCam")
             self.capture_thread.start()
         
         # Camera warmup

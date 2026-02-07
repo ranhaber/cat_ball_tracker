@@ -248,7 +248,7 @@ class VideoProcessor:
         
         # Start processing thread
         self.running = True
-        self.process_thread = threading.Thread(target=self._process_loop, daemon=True)
+        self.process_thread = threading.Thread(target=self._process_loop, daemon=True, name="CatDome-Process")
         self.process_thread.start()
         
         mode_str = "MOTION-FIRST" if self.motion_first_enabled else "ALWAYS-ON"
@@ -267,6 +267,13 @@ class VideoProcessor:
         
     def _process_loop(self):
         """Main processing loop with motion-first detection"""
+        # Set OS thread name so it shows in top/htop
+        try:
+            import ctypes
+            libc = ctypes.CDLL('libc.so.6')
+            libc.prctl(15, b'CatDome-Proc', 0, 0, 0)
+        except Exception:
+            pass
         skip_counter = 0
         last_detections = []
         
