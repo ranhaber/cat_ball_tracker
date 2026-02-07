@@ -1864,9 +1864,10 @@ async function lensRunCalibration() {
         console.log('[LENS] Response:', response.status, data);
         if (response.ok && data.success) {
             const c = data.calibration;
-            let msg = `Lens calibration done!\n\n`;
-            msg += `k1 = ${c.k1}, k2 = ${c.k2}, k3 = ${c.k3}\n`;
-            msg += `p1 = ${c.p1}, p2 = ${c.p2}\n`;
+            let msg = `Lens calibration done! [${c.model || 'fisheye'}]\n\n`;
+            msg += `k1 = ${c.k1}, k2 = ${c.k2}, k3 = ${c.k3}`;
+            if (c.k4 !== undefined) msg += `, k4 = ${c.k4}`;
+            msg += `\n`;
             msg += `f = ${c.fx}, cx = ${c.cx}, cy = ${c.cy}\n\n`;
             msg += `Overall: ${c.overall_improvement_pct}% improvement\n`;
             msg += `  Before: ${c.overall_before_mean_px} px mean deviation\n`;
@@ -2152,8 +2153,9 @@ function updateLensStatusUI(data) {
         statusEl.style.color = '#3fb950';
         if (paramsEl) {
             paramsEl.style.display = 'block';
-            let info = `f=${data.fx} | k1=${data.k1}, k2=${data.k2}, k3=${data.k3 || 0}`;
-            if (data.p1 || data.p2) info += ` | p1=${data.p1}, p2=${data.p2}`;
+            const model = data.model || 'standard';
+            let info = `[${model}] f=${data.fx} | k1=${data.k1}, k2=${data.k2}, k3=${data.k3 || 0}`;
+            if (data.k4 !== undefined && data.k4 !== 0) info += `, k4=${data.k4}`;
             if (data.overall_before_mean_px !== undefined) {
                 info += ` | deviation: ${data.overall_before_mean_px}px → ${data.overall_after_mean_px}px`;
             }
