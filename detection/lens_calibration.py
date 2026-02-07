@@ -154,15 +154,25 @@ class LensCalibration:
             return np.concatenate(res)
 
         # 7-parameter optimisation: f, cx, cy, k1, k2, k3, k4
+        # Bounds ensure physically valid parameters:
+        #   f:  200 to 3000 pixels (wide-angle to narrow)
+        #   cx: image center ± 20% of width
+        #   cy: image center ± 20% of height
+        #   k1-k4: -1 to 1 (typical fisheye range)
         x0 = np.array([f0, cx0, cy0, 0.0, 0.0, 0.0, 0.0])
+        lower = [200, cx0 - image_width * 0.2, cy0 - image_height * 0.2, -1.0, -1.0, -1.0, -1.0]
+        upper = [3000, cx0 + image_width * 0.2, cy0 + image_height * 0.2, 1.0, 1.0, 1.0, 1.0]
+
         self.calibration_max_iterations = 20000
         self.calibration_iteration = 0
         self.calibration_in_progress = True
         print(f"[LENS] Starting FISHEYE optimizer: {len(self.lines)} lines, "
               f"{sum(len(l) for l in self.lines)} points, {image_width}x{image_height}")
+        print(f"[LENS] Initial: f={f0:.1f}, cx={cx0:.1f}, cy={cy0:.1f}")
         try:
-            result = least_squares(residuals, x0, method='lm',
-                                   max_nfev=20000, xtol=1e-14, ftol=1e-14)
+            result = least_squares(residuals, x0, method='trf',
+                                   bounds=(lower, upper),
+                                   max_nfev=20000, xtol=1e-12, ftol=1e-12)
         finally:
             self.calibration_in_progress = False
         f_opt, cx_opt, cy_opt, k1, k2, k3, k4 = result.x
