@@ -136,34 +136,42 @@ class LensCalibration:
             return (A @ abc) / norm
 
         eval_count = [0]
+        best_result = [None, np.inf]  # [params, cost]
+        prev_cost = [np.inf]  # for tracking convergence direction
 
         def residuals(params):
             """Residual vector: signed distance-to-line for every point."""
             eval_count[0] += 1
             self.calibration_iteration = eval_count[0]
-            if eval_count[0] % 100 == 0:
-                print(f"[LENS] Iteration {eval_count[0]}/{self.calibration_max_iterations}", flush=True)
             try:
                 undist_pts, _, _ = _undistort_fisheye(params)
             except cv2.error:
-                # Return large residuals if OpenCV rejects the params
                 return np.full(len(all_points), 1e6)
             res = []
             for mask in line_masks:
                 res.append(_line_distances(undist_pts, mask))
-            return np.concatenate(res)
+            r = np.concatenate(res)
+            cost = float(np.sum(r**2))
+            if cost < best_result[1]:
+                best_result[0] = params.copy()
+                best_result[1] = cost
+            if eval_count[0] % 200 == 0:
+                direction = "converging" if cost <= prev_cost[0] else "DIVERGING"
+                print(f"[LENS] Iter {eval_count[0]}/{self.calibration_max_iterations} "
+                      f"| cost={cost:.2f} (best={best_result[1]:.2f}) | {direction} "
+                      f"| f={params[0]:.1f} cx={params[1]:.1f} cy={params[2]:.1f} "
+                      f"| k1={params[3]:.6f} k2={params[4]:.6f} k3={params[5]:.6f} k4={params[6]:.6f}",
+                      flush=True)
+                prev_cost[0] = cost
+            return r
 
         # 7-parameter optimisation: f, cx, cy, k1, k2, k3, k4
-        # Bounds ensure physically valid parameters:
-        #   f:  200 to 3000 pixels (wide-angle to narrow)
-        #   cx: image center ± 20% of width
-        #   cy: image center ± 20% of height
-        #   k1-k4: -1 to 1 (typical fisheye range)
+        # Bounds ensure physically valid parameters
         x0 = np.array([f0, cx0, cy0, 0.0, 0.0, 0.0, 0.0])
         lower = [200, cx0 - image_width * 0.2, cy0 - image_height * 0.2, -5.0, -5.0, -5.0, -5.0]
         upper = [3000, cx0 + image_width * 0.2, cy0 + image_height * 0.2, 5.0, 5.0, 5.0, 5.0]
 
-        self.calibration_max_iterations = 20000
+        self.calibration_max_iterations = 5000
         self.calibration_iteration = 0
         self.calibration_in_progress = True
         print(f"[LENS] Starting FISHEYE optimizer: {len(self.lines)} lines, "
@@ -172,10 +180,14 @@ class LensCalibration:
         try:
             result = least_squares(residuals, x0, method='trf',
                                    bounds=(lower, upper),
-                                   max_nfev=20000, xtol=1e-12, ftol=1e-12)
+                                   max_nfev=5000, xtol=1e-10, ftol=1e-10)
         finally:
             self.calibration_in_progress = False
-        f_opt, cx_opt, cy_opt, k1, k2, k3, k4 = result.x
+        # Use best result found (in case optimizer overshot)
+        if best_result[0] is not None and best_result[1] < result.cost:
+            f_opt, cx_opt, cy_opt, k1, k2, k3, k4 = best_result[0]
+        else:
+            f_opt, cx_opt, cy_opt, k1, k2, k3, k4 = result.x
         print(f"[LENS] Optimizer done: {eval_count[0]} evaluations, cost={result.cost:.4f}")
 
         self.camera_matrix = np.array([
