@@ -2,7 +2,7 @@
 
 A real-time cat and ball detection system for Raspberry Pi Zero 2W with Camera Module 3. Features motion-first detection for efficiency, a web interface for live streaming, and zone-based tracking.
 
-**Version:** 2.5.3
+**Version:** 2.6.0
 
 ---
 
@@ -440,6 +440,7 @@ sudo journalctl -u cat_ball_tracker -n 50
 
 ## 📝 Version History
 
+- **v2.6.0** - Regional calibration: each rectangle gets its own local homography; pixel_to_world uses inverse-distance weighted interpolation across all rectangles; eliminates single-homography compromise for 120° wide-angle lens; accurate across full frame even with barrel distortion
 - **v2.5.3** - Fix multi-rectangle calibration accuracy: each rectangle's exact shape computed independently (SSS/rectangle geometry); preliminary homography used only for position and orientation, not shape; fixes severe distortion when rectangles are spread across 120° wide-angle frame; added /api/calibration/debug endpoint
 - **v2.5.2** - Fix: preserve original rectangle pixel positions after save (lens undistortion was shifting displayed rectangles on canvas); undistort copies for homography, keep originals for UI
 - **v2.5.1** - Clean up: update README for multi-rectangle calibration with 3-rectangle example; remove all legacy side-lengths references; update API docs

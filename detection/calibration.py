@@ -41,6 +41,9 @@ class CameraCalibration:
         # Rectangle definitions (for multi-rectangle calibration)
         self.rectangles = []
         
+        # Per-rectangle local homographies (for weighted interpolation)
+        self.rect_homographies = []  # [{H, center_px, world_pts}, ...]
+        
         # Real-world bounds (for mini-map scaling)
         self.world_bounds = {
             "min_x": 0, "max_x": 10,
@@ -298,7 +301,22 @@ class CameraCalibration:
         
         print(f"[CALIBRATION] Total: {len(all_pixel_pts)} points from {len(rectangles)} rectangle(s)")
         
-        # Build calibration points and compute homography
+        # --- Build per-rectangle local homographies for weighted interpolation ---
+        self.rect_homographies = []
+        for i in range(len(rectangles)):
+            start = i * 4
+            px_pts = np.float32(all_pixel_pts[start:start+4])
+            wd_pts = np.float32(all_world_pts[start:start+4])
+            H_local = cv2.getPerspectiveTransform(px_pts, wd_pts)
+            center_px = [float(np.mean(px_pts[:, 0])), float(np.mean(px_pts[:, 1]))]
+            self.rect_homographies.append({
+                "H": H_local,
+                "center_px": center_px,
+                "world_pts": [list(w) for w in wd_pts],
+            })
+            print(f"[CALIBRATION] Rect {i+1} local H built, center=({center_px[0]:.0f},{center_px[1]:.0f})")
+        
+        # Build global calibration points and compute global homography (fallback + world_to_pixel)
         points = [
             {"pixel": list(all_pixel_pts[i]), "world": all_world_pts[i]}
             for i in range(len(all_pixel_pts))
@@ -357,6 +375,13 @@ class CameraCalibration:
         """
         Convert pixel coordinates to real-world coordinates (meters).
         
+        Uses weighted interpolation of per-rectangle local homographies when
+        available (inverse-distance weighting from rectangle centers). This
+        gives accurate results across the full frame even with a wide-angle
+        lens, because each rectangle's homography is exact for its region.
+        
+        Falls back to the global homography if no per-rectangle data.
+        
         Args:
             pixel_x: X coordinate in pixels
             pixel_y: Y coordinate in pixels
@@ -364,20 +389,46 @@ class CameraCalibration:
         Returns:
             tuple: (world_x, world_y) in meters, or None if not calibrated
         """
-        if not self.is_calibrated or self.transform_matrix is None:
+        if not self.is_calibrated:
             return None
         
         try:
-            # Create point array for transformation
+            import math
             point = np.float32([[[pixel_x, pixel_y]]])
             
-            # Apply perspective transform
-            transformed = cv2.perspectiveTransform(point, self.transform_matrix)
+            # Use weighted interpolation of per-rectangle homographies
+            if self.rect_homographies and len(self.rect_homographies) > 0:
+                if len(self.rect_homographies) == 1:
+                    # Single rectangle: use directly (exact)
+                    transformed = cv2.perspectiveTransform(point, self.rect_homographies[0]["H"])
+                    return (float(transformed[0][0][0]), float(transformed[0][0][1]))
+                
+                # Multiple rectangles: inverse-distance weighted average
+                results = []
+                weights = []
+                for rh in self.rect_homographies:
+                    transformed = cv2.perspectiveTransform(point, rh["H"])
+                    wx = float(transformed[0][0][0])
+                    wy = float(transformed[0][0][1])
+                    results.append((wx, wy))
+                    
+                    # Inverse distance to rectangle center (in pixels)
+                    dx = pixel_x - rh["center_px"][0]
+                    dy = pixel_y - rh["center_px"][1]
+                    dist = math.sqrt(dx * dx + dy * dy) + 1.0  # +1 to avoid infinity
+                    weights.append(1.0 / (dist * dist))  # inverse square for stronger locality
+                
+                total_w = sum(weights)
+                world_x = sum(r[0] * w for r, w in zip(results, weights)) / total_w
+                world_y = sum(r[1] * w for r, w in zip(results, weights)) / total_w
+                return (world_x, world_y)
             
-            world_x = float(transformed[0][0][0])
-            world_y = float(transformed[0][0][1])
+            # Fallback: global homography
+            if self.transform_matrix is not None:
+                transformed = cv2.perspectiveTransform(point, self.transform_matrix)
+                return (float(transformed[0][0][0]), float(transformed[0][0][1]))
             
-            return (world_x, world_y)
+            return None
             
         except Exception as e:
             print(f"Error in pixel_to_world: {e}")
@@ -452,6 +503,7 @@ class CameraCalibration:
         self.inverse_matrix = None
         self.is_calibrated = False
         self.rectangles = []
+        self.rect_homographies = []
         
         # Delete saved file
         if os.path.exists(self.calibration_file):
@@ -486,7 +538,21 @@ class CameraCalibration:
                 self._compute_transform()
                 self.world_bounds = data.get("world_bounds", self.world_bounds)
                 self.rectangles = data.get("rectangles", [])
-                print(f"Calibration loaded from {self.calibration_file} ({len(points)} points, {len(self.rectangles)} rects)")
+                
+                # Rebuild per-rectangle local homographies from saved calibration points
+                n_rects = len(self.rectangles)
+                if n_rects > 0 and len(points) >= n_rects * 4:
+                    self.rect_homographies = []
+                    for i in range(n_rects):
+                        start = i * 4
+                        px_pts = np.float32([p["pixel"] for p in points[start:start+4]])
+                        wd_pts = np.float32([p["world"] for p in points[start:start+4]])
+                        H_local = cv2.getPerspectiveTransform(px_pts, wd_pts)
+                        center_px = [float(np.mean(px_pts[:, 0])), float(np.mean(px_pts[:, 1]))]
+                        self.rect_homographies.append({"H": H_local, "center_px": center_px})
+                    print(f"  Rebuilt {len(self.rect_homographies)} local homographies")
+                
+                print(f"Calibration loaded from {self.calibration_file} ({len(points)} points, {n_rects} rects)")
             else:
                 print(f"Invalid calibration file - need at least 4 points, got {len(points)}")
                 
