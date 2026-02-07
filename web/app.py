@@ -1391,13 +1391,13 @@ def create_app():
         points = data.get('points', [])
         side_lengths = data.get('side_lengths', [])
         
-        if len(points) != 4:
-            return jsonify({"error": "Exactly 4 calibration points required"}), 400
+        if len(points) < 4:
+            return jsonify({"error": "At least 4 calibration points required"}), 400
         
         if side_lengths:
             # Calibration from side lengths: points need only pixel coords; first point = (0,0), right = +X, up = +Y
-            if len(side_lengths) != 4:
-                return jsonify({"error": "Exactly 4 side lengths required (P0→P1, P1→P2, P2→P3, P3→P0)"}), 400
+            if len(side_lengths) != len(points):
+                return jsonify({"error": f"Need {len(points)} side lengths to match {len(points)} points"}), 400
             points_pixel = []
             for i, p in enumerate(points):
                 if "pixel" not in p:

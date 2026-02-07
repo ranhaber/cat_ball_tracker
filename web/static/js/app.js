@@ -478,7 +478,7 @@ async function loadMotionSettings() {
 let calibrationCanvas, calibrationCtx;
 let calibrationImage = null;
 let calibrationPoints = [];  // Array of { pixel: [x,y], world?: [x,y] } (world set from side lengths or loaded)
-let calibrationSideLengths = [null, null, null, null];  // [L01, L12, L23, L30] in meters
+let calibrationSideLengths = [];  // N side lengths in meters, dynamic size
 let calibrationDiagonal = null;  // Optional diagonal P0->P2 in meters (for non-rectangle quads)
 
 function initCalibration() {
@@ -546,8 +546,8 @@ function handleCalibrationClick(e) {
     }
     
     // Max 4 points
-    if (calibrationPoints.length >= 4) {
-        alert('Maximum 4 points. Clear to start over.');
+    if (calibrationPoints.length >= 20) {
+        alert('Maximum 20 points reached.');
         return;
     }
     
@@ -616,7 +616,7 @@ function drawCalibration() {
     
     // Draw hint if less than 4 points
     if (calibrationPoints.length < 4) {
-        const hint = `Click to add point ${calibrationPoints.length + 1}/4`;
+        const hint = `Click to add point ${calibrationPoints.length + 1} (need 4+)`;
         calibrationCtx.fillStyle = 'rgba(0,0,0,0.7)';
         calibrationCtx.fillRect(10, 10, 200, 25);
         calibrationCtx.fillStyle = '#fff';
@@ -634,10 +634,12 @@ function updateCalibrationPointsUI() {
     const saveBtn = document.getElementById('save-calibration');
     
     if (countEl) {
-        countEl.textContent = `${calibrationPoints.length}/4`;
+        countEl.textContent = calibrationPoints.length < 4 
+            ? `${calibrationPoints.length} (min 4)` 
+            : `${calibrationPoints.length} points`;
     }
     
-    const hasFour = calibrationPoints.length === 4;
+    const hasFour = calibrationPoints.length >= 4;
     if (saveBtn) {
         saveBtn.disabled = !hasFour || calibrationSideLengths.some(v => v === null || v === '' || isNaN(parseFloat(v)));
     }
@@ -660,24 +662,30 @@ function updateCalibrationPointsUI() {
             btn.addEventListener('click', (e) => {
                 const index = parseInt(e.target.dataset.index);
                 calibrationPoints.splice(index, 1);
-                calibrationSideLengths = [null, null, null, null];
+                calibrationSideLengths = [];
                 updateCalibrationPointsUI();
                 drawCalibration();
             });
         });
     }
     
-    // Side lengths (shown when 4 points)
+    // Side lengths (shown when 4+ points, dynamic count)
     if (sideLengthsEl) {
         if (hasFour) {
+            const nPts = calibrationPoints.length;
+            // Ensure calibrationSideLengths array matches point count
+            while (calibrationSideLengths.length < nPts) calibrationSideLengths.push(null);
+            while (calibrationSideLengths.length > nPts) calibrationSideLengths.pop();
+            
             sideLengthsEl.style.display = 'block';
             sideLengthsEl.innerHTML = '<p><strong>Side lengths (meters):</strong></p>' +
-                [1, 2, 3, 4].map(i => {
-                    const val = calibrationSideLengths[i - 1];
+                Array.from({length: nPts}, (_, i) => {
+                    const val = calibrationSideLengths[i];
                     const v = val !== null && val !== '' ? val : '';
+                    const next = i === nPts - 1 ? 1 : i + 2;
                     return `<div class="side-length-row">
-                        <label>Side ${i} (Point ${i}→${i === 4 ? 1 : i + 1})</label>
-                        <input type="number" step="0.01" min="0" data-side="${i - 1}" class="side-length-input" value="${v}" placeholder="meters">
+                        <label>Side ${i + 1} (Point ${i + 1}→${next})</label>
+                        <input type="number" step="0.01" min="0" data-side="${i}" class="side-length-input" value="${v}" placeholder="meters">
                     </div>`;
                 }).join('');
             sideLengthsEl.querySelectorAll('.side-length-input').forEach(input => {
@@ -693,10 +701,10 @@ function updateCalibrationPointsUI() {
             sideLengthsEl.innerHTML = '';
         }
     }
-    // Diagonal input (shown when 4 points)
+    // Diagonal input (shown when exactly 4 points)
     const diagContainer = document.getElementById('diagonal-container');
     if (diagContainer) {
-        diagContainer.style.display = hasFour ? 'block' : 'none';
+        diagContainer.style.display = (calibrationPoints.length === 4) ? 'block' : 'none';
         const diagInput = document.getElementById('calibration-diagonal');
         if (diagInput && calibrationDiagonal !== null && calibrationDiagonal !== '') {
             diagInput.value = calibrationDiagonal;
@@ -741,8 +749,8 @@ function updateCalibrationStatusUI(data) {
 }
 
 async function saveCalibrationPoints() {
-    if (calibrationPoints.length !== 4) {
-        alert('Need exactly 4 calibration points');
+    if (calibrationPoints.length < 4) {
+        alert('Need at least 4 calibration points');
         return;
     }
     const lengths = calibrationSideLengths.map(v => v === null || v === '' ? null : parseFloat(v));
@@ -795,7 +803,7 @@ async function saveCalibrationPoints() {
 
 async function clearCalibration() {
     calibrationPoints = [];
-    calibrationSideLengths = [null, null, null, null];
+    calibrationSideLengths = [];
     calibrationDiagonal = null;
     const diagInput = document.getElementById('calibration-diagonal');
     if (diagInput) diagInput.value = '';

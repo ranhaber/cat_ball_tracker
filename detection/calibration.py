@@ -51,17 +51,19 @@ class CameraCalibration:
     
     def set_calibration_points(self, points):
         """
-        Set the 4 calibration points and compute transformation.
+        Set calibration points and compute transformation.
         
         Args:
-            points: List of 4 dicts with "pixel" and "world" coordinates
+            points: List of 4+ dicts with "pixel" and "world" coordinates
                    [{"pixel": [px, py], "world": [wx, wy]}, ...]
+                   4 points: exact homography (getPerspectiveTransform)
+                   5+ points: least-squares best-fit homography (findHomography)
         
         Returns:
             bool: True if calibration successful
         """
-        if len(points) != 4:
-            print(f"Error: Need exactly 4 calibration points, got {len(points)}")
+        if len(points) < 4:
+            print(f"Error: Need at least 4 calibration points, got {len(points)}")
             return False
         
         # Validate points
@@ -81,40 +83,40 @@ class CameraCalibration:
         if success:
             self._update_world_bounds()
             self.save()
-            print("Calibration successful!")
+            print(f"Calibration successful! ({len(points)} points)")
         
         return success
     
     def set_calibration_from_side_lengths(self, points_pixel, side_lengths, diagonal=None):
         """
-        Set calibration from 4 pixel points, 4 side lengths, and optionally a diagonal.
+        Set calibration from N pixel points and N side lengths, optionally a diagonal.
         First point = origin (0, 0).  World axes: right = +X, up = +Y.
 
-        With a diagonal (P0->P2 distance) the world shape is fully determined for ANY
-        quadrilateral (SSS on two triangles).  Without a diagonal, rectangles (opposite
-        sides equal) are handled exactly; other shapes fall back to a heuristic.
+        For 4 points with a diagonal: exact shape via SSS triangles.
+        For 4 points without diagonal: rectangles detected; others use heuristic.
+        For 5+ points: world coords built as a chain (each point from previous + side length).
 
         Args:
-            points_pixel: List of 4 [x, y] pixel coordinates (same order as zone).
-            side_lengths: List of 4 lengths in meters: [P0->P1, P1->P2, P2->P3, P3->P0].
-            diagonal: Optional float -- length of diagonal P0->P2 in meters.
+            points_pixel: List of N [x, y] pixel coordinates (minimum 4).
+            side_lengths: List of N lengths in meters (sides in order, last closes the polygon).
+            diagonal: Optional float -- length of diagonal P0->P2 in meters (4 points only).
 
         Returns:
             bool: True if calibration successful
         """
         import math
 
-        if len(points_pixel) != 4 or len(side_lengths) != 4:
-            print(f"Error: Need exactly 4 pixel points and 4 side lengths")
+        n = len(points_pixel)
+        if n < 4 or len(side_lengths) != n:
+            print(f"Error: Need at least 4 points and matching side lengths (got {n} points, {len(side_lengths)} sides)")
             return False
 
-        L01, L12, L23, L30 = (float(side_lengths[i]) for i in range(4))
-        if L01 <= 0 or L12 <= 0 or L23 <= 0 or L30 <= 0:
+        lengths = [float(s) for s in side_lengths]
+        if any(l <= 0 for l in lengths):
             print("Error: All side lengths must be positive")
             return False
 
         # Pixel winding: cross product of P0P1 x P1P2 in image coords (y down).
-        # Positive = CW in image.
         cross_px = ((points_pixel[1][0] - points_pixel[0][0]) *
                     (points_pixel[2][1] - points_pixel[1][1]) -
                     (points_pixel[1][1] - points_pixel[0][1]) *
@@ -123,91 +125,118 @@ class CameraCalibration:
         # Pixel directions for orientation (only signs used, not magnitudes)
         dx01 = float(points_pixel[1][0] - points_pixel[0][0])
         dy01 = float(points_pixel[1][1] - points_pixel[0][1])
-        dx12 = float(points_pixel[2][0] - points_pixel[1][0])
-        dy12 = float(points_pixel[2][1] - points_pixel[1][1])
 
-        tol = 0.01  # 1 cm
+        if n == 4:
+            # ====== 4-POINT CALIBRATION ======
+            L01, L12, L23, L30 = lengths
 
-        # --- Determine diagonal d02 (P0->P2 distance) ---
-        if diagonal is not None and float(diagonal) > 0:
-            d02 = float(diagonal)
-            print(f"[CALIBRATION] Diagonal P0->P2 = {d02:.3f} m (user-provided)")
+            tol = 0.01  # 1 cm
+
+            # --- Determine diagonal d02 (P0->P2 distance) ---
+            if diagonal is not None and float(diagonal) > 0:
+                d02 = float(diagonal)
+                print(f"[CALIBRATION] Diagonal P0->P2 = {d02:.3f} m (user-provided)")
+            else:
+                # Check for rectangle (opposite sides equal)
+                is_rect = abs(L01 - L23) < tol and abs(L12 - L30) < tol
+                if is_rect:
+                    # Rectangle diagonal from Pythagoras
+                    d02 = math.sqrt(L01 * L01 + L12 * L12)
+                    print(f"[CALIBRATION] Rectangle detected ({L01}x{L12} m), diagonal = {d02:.3f} m")
+                else:
+                    d02 = None
+                    print(f"[CALIBRATION] General quad ({L01},{L12},{L23},{L30} m), no diagonal provided -- using heuristic")
+
+            if d02 is not None:
+                # ====== EXACT: two SSS triangles (P0-P1-P2) and (P0-P2-P3) ======
+                # Place P0 = (0,0), P1 = (L01, 0).
+                # Triangle P0-P1-P2: sides L01, L12, d02.
+                # Use law of cosines to find P2.
+                cos_a = (L01 * L01 + d02 * d02 - L12 * L12) / (2.0 * L01 * d02) if L01 > 0 and d02 > 0 else 0
+                cos_a = max(-1.0, min(1.0, cos_a))
+                sin_a = math.sqrt(max(0.0, 1.0 - cos_a * cos_a))
+                # P2 at distance d02 from P0, at angle a from X-axis.
+                # Two solutions: sin_a or -sin_a.  Pick based on pixel winding.
+                # In image CW (cross_px > 0) with y-down → world CCW with y-up → P2.y > 0.
+                # In image CCW (cross_px < 0) → world CW with y-up → P2.y < 0.
+                # Image CW (y-down) = visual CW; world y-up: visual CW = negative y.
+                # So: image CW (cross_px > 0) → world P2.y < 0; image CCW → P2.y > 0.
+                if cross_px > 0:
+                    p2y = -sin_a * d02
+                else:
+                    p2y = sin_a * d02
+                p2x = cos_a * d02
+
+                # Triangle P0-P2-P3: sides d02, L23, L30.  P0=(0,0), P2=(p2x,p2y).
+                # P3 at distance L30 from P0 and L23 from P2.  Two-circle intersection.
+                d = math.sqrt(p2x * p2x + p2y * p2y)  # should equal d02
+                if d < 1e-10:
+                    print("Error: P2 coincides with P0")
+                    return False
+                aa = (L30 * L30 - L23 * L23 + d * d) / (2.0 * d)
+                hh_sq = L30 * L30 - aa * aa
+                if hh_sq < -1e-6:
+                    print(f"Error: Side lengths + diagonal cannot form closed quad")
+                    return False
+                hh = math.sqrt(max(0.0, hh_sq))
+                ux, uy = p2x / d, p2y / d
+                p3_a = [aa * ux + hh * (-uy), aa * uy + hh * ux]
+                p3_b = [aa * ux - hh * (-uy), aa * uy - hh * ux]
+                # Pick the P3 that keeps the same winding as P0,P1,P2.
+                cross_a = (p2x - L01) * (p3_a[1] - p2y) - (p2y - 0) * (p3_a[0] - p2x)
+                cross_01_12 = (L01 - 0) * (p2y - 0) - (0 - 0) * (p2x - L01)
+                if cross_01_12 * cross_a >= 0:
+                    p3 = p3_a
+                else:
+                    p3 = p3_b
+
+                world_pts = [[0.0, 0.0], [L01, 0.0], [p2x, p2y], p3]
+
+                # Rotate so that image-right ≈ +X and image-up ≈ +Y.
+                # The layout above has P0→P1 along +X.  Check if that matches image direction.
+                if abs(dx01) < abs(dy01):
+                    # P0→P1 is mostly vertical in image, but we placed it on X-axis.
+                    # Rotate the world 90° so P0→P1 aligns with Y-axis instead.
+                    sy = -1.0 if dy01 >= 0 else 1.0  # image down = -Y
+                    world_pts = [[-sy * p[1], sy * p[0]] for p in world_pts]
+                else:
+                    # P0→P1 is mostly horizontal.  Flip X if it goes left in image.
+                    if dx01 < 0:
+                        world_pts = [[-p[0], p[1]] for p in world_pts]
+
+                print(f"[CALIBRATION] World points (exact): "
+                      f"{[f'({p[0]:.3f},{p[1]:.3f})' for p in world_pts]}")
+
+            else:
+                # ====== HEURISTIC: no diagonal, non-rectangle ======
+                # Use pixel directions to approximate.  Less accurate for oblique views.
+                world_pts = [[0.0, 0.0]]
+                for i in range(1, 4):
+                    px_prev = points_pixel[i - 1]
+                    px_curr = points_pixel[i]
+                    ddx = float(px_curr[0] - px_prev[0])
+                    ddy = float(px_curr[1] - px_prev[1])
+                    length_px = math.sqrt(ddx * ddx + ddy * ddy)
+                    if length_px < 1e-6:
+                        print(f"Error: Points {i} and {i+1} are too close together")
+                        return False
+                    length_m = float(side_lengths[i - 1])
+                    wx = world_pts[i - 1][0] + length_m * (ddx / length_px)
+                    wy = world_pts[i - 1][1] - length_m * (ddy / length_px)
+                    world_pts.append([wx, wy])
+
+                print(f"[CALIBRATION] World points (heuristic): "
+                      f"{[f'({p[0]:.3f},{p[1]:.3f})' for p in world_pts]}")
+
         else:
-            # Check for rectangle (opposite sides equal)
-            is_rect = abs(L01 - L23) < tol and abs(L12 - L30) < tol
-            if is_rect:
-                # Rectangle diagonal from Pythagoras
-                d02 = math.sqrt(L01 * L01 + L12 * L12)
-                print(f"[CALIBRATION] Rectangle detected ({L01}x{L12} m), diagonal = {d02:.3f} m")
-            else:
-                d02 = None
-                print(f"[CALIBRATION] General quad ({L01},{L12},{L23},{L30} m), no diagonal provided -- using heuristic")
+            # ====== N-POINT (5+): chain-based world coordinates ======
+            # P0 = (0,0). Each subsequent point placed using side length.
+            # Use pixel directions for orientation (heuristic).
+            # The homography is least-squares best-fit across all N points.
 
-        if d02 is not None:
-            # ====== EXACT: two SSS triangles (P0-P1-P2) and (P0-P2-P3) ======
-            # Place P0 = (0,0), P1 = (L01, 0).
-            # Triangle P0-P1-P2: sides L01, L12, d02.
-            # Use law of cosines to find P2.
-            cos_a = (L01 * L01 + d02 * d02 - L12 * L12) / (2.0 * L01 * d02) if L01 > 0 and d02 > 0 else 0
-            cos_a = max(-1.0, min(1.0, cos_a))
-            sin_a = math.sqrt(max(0.0, 1.0 - cos_a * cos_a))
-            # P2 at distance d02 from P0, at angle a from X-axis.
-            # Two solutions: sin_a or -sin_a.  Pick based on pixel winding.
-            # In image CW (cross_px > 0) with y-down → world CCW with y-up → P2.y > 0.
-            # In image CCW (cross_px < 0) → world CW with y-up → P2.y < 0.
-            # Image CW (y-down) = visual CW; world y-up: visual CW = negative y.
-            # So: image CW (cross_px > 0) → world P2.y < 0; image CCW → P2.y > 0.
-            if cross_px > 0:
-                p2y = -sin_a * d02
-            else:
-                p2y = sin_a * d02
-            p2x = cos_a * d02
-
-            # Triangle P0-P2-P3: sides d02, L23, L30.  P0=(0,0), P2=(p2x,p2y).
-            # P3 at distance L30 from P0 and L23 from P2.  Two-circle intersection.
-            d = math.sqrt(p2x * p2x + p2y * p2y)  # should equal d02
-            if d < 1e-10:
-                print("Error: P2 coincides with P0")
-                return False
-            aa = (L30 * L30 - L23 * L23 + d * d) / (2.0 * d)
-            hh_sq = L30 * L30 - aa * aa
-            if hh_sq < -1e-6:
-                print(f"Error: Side lengths + diagonal cannot form closed quad")
-                return False
-            hh = math.sqrt(max(0.0, hh_sq))
-            ux, uy = p2x / d, p2y / d
-            p3_a = [aa * ux + hh * (-uy), aa * uy + hh * ux]
-            p3_b = [aa * ux - hh * (-uy), aa * uy - hh * ux]
-            # Pick the P3 that keeps the same winding as P0,P1,P2.
-            cross_a = (p2x - L01) * (p3_a[1] - p2y) - (p2y - 0) * (p3_a[0] - p2x)
-            cross_01_12 = (L01 - 0) * (p2y - 0) - (0 - 0) * (p2x - L01)
-            if cross_01_12 * cross_a >= 0:
-                p3 = p3_a
-            else:
-                p3 = p3_b
-
-            world_pts = [[0.0, 0.0], [L01, 0.0], [p2x, p2y], p3]
-
-            # Rotate so that image-right ≈ +X and image-up ≈ +Y.
-            # The layout above has P0→P1 along +X.  Check if that matches image direction.
-            if abs(dx01) < abs(dy01):
-                # P0→P1 is mostly vertical in image, but we placed it on X-axis.
-                # Rotate the world 90° so P0→P1 aligns with Y-axis instead.
-                sy = -1.0 if dy01 >= 0 else 1.0  # image down = -Y
-                world_pts = [[-sy * p[1], sy * p[0]] for p in world_pts]
-            else:
-                # P0→P1 is mostly horizontal.  Flip X if it goes left in image.
-                if dx01 < 0:
-                    world_pts = [[-p[0], p[1]] for p in world_pts]
-
-            print(f"[CALIBRATION] World points (exact): "
-                  f"{[f'({p[0]:.3f},{p[1]:.3f})' for p in world_pts]}")
-
-        else:
-            # ====== HEURISTIC: no diagonal, non-rectangle ======
-            # Use pixel directions to approximate.  Less accurate for oblique views.
+            # Build world coords: P0 at origin, chain along polygon
             world_pts = [[0.0, 0.0]]
-            for i in range(1, 4):
+            for i in range(1, n):
                 px_prev = points_pixel[i - 1]
                 px_curr = points_pixel[i]
                 ddx = float(px_curr[0] - px_prev[0])
@@ -216,32 +245,43 @@ class CameraCalibration:
                 if length_px < 1e-6:
                     print(f"Error: Points {i} and {i+1} are too close together")
                     return False
-                length_m = float(side_lengths[i - 1])
+                length_m = lengths[i - 1]
+                # World direction: image right = +X, image up = +Y
                 wx = world_pts[i - 1][0] + length_m * (ddx / length_px)
                 wy = world_pts[i - 1][1] - length_m * (ddy / length_px)
                 world_pts.append([wx, wy])
 
-            print(f"[CALIBRATION] World points (heuristic): "
+            print(f"[CALIBRATION] {n}-point world coords: "
                   f"{[f'({p[0]:.3f},{p[1]:.3f})' for p in world_pts]}")
 
         points = [
             {"pixel": list(points_pixel[i]), "world": world_pts[i]}
-            for i in range(4)
+            for i in range(n)
         ]
         return self.set_calibration_points(points)
     
     def _compute_transform(self):
-        """Compute the perspective transformation matrix."""
+        """Compute the perspective transformation matrix.
+        4 points: exact (getPerspectiveTransform).
+        5+ points: least-squares best-fit (findHomography)."""
         try:
             # Extract pixel and world points
             pixel_pts = np.float32([p["pixel"] for p in self.calibration_points])
             world_pts = np.float32([p["world"] for p in self.calibration_points])
             
-            # Compute homography: pixel -> world
-            self.transform_matrix = cv2.getPerspectiveTransform(pixel_pts, world_pts)
-            
-            # Compute inverse: world -> pixel
-            self.inverse_matrix = cv2.getPerspectiveTransform(world_pts, pixel_pts)
+            if len(self.calibration_points) == 4:
+                # Exact: 4 points determine the homography uniquely
+                self.transform_matrix = cv2.getPerspectiveTransform(pixel_pts, world_pts)
+                self.inverse_matrix = cv2.getPerspectiveTransform(world_pts, pixel_pts)
+            else:
+                # Least-squares: 5+ points, best-fit homography
+                self.transform_matrix, _ = cv2.findHomography(pixel_pts, world_pts, method=0)
+                self.inverse_matrix, _ = cv2.findHomography(world_pts, pixel_pts, method=0)
+                if self.transform_matrix is None or self.inverse_matrix is None:
+                    print("Error: findHomography failed")
+                    self.is_calibrated = False
+                    return False
+                print(f"[CALIBRATION] findHomography with {len(self.calibration_points)} points")
             
             self.is_calibrated = True
             return True
@@ -363,14 +403,15 @@ class CameraCalibration:
     def get_side_lengths(self):
         """
         Get the length of each side in meters from current calibration.
-        Returns [L01, L12, L23, L30] or empty list if not calibrated.
+        Returns list of N lengths or empty list if not calibrated.
         """
-        if not self.calibration_points or len(self.calibration_points) != 4:
+        if not self.calibration_points or len(self.calibration_points) < 4:
             return []
         pts = [p["world"] for p in self.calibration_points]
+        n = len(pts)
         lengths = []
-        for i in range(4):
-            j = (i + 1) % 4
+        for i in range(n):
+            j = (i + 1) % n
             dx = pts[j][0] - pts[i][0]
             dy = pts[j][1] - pts[i][1]
             lengths.append(round((dx * dx + dy * dy) ** 0.5, 3))
@@ -410,13 +451,13 @@ class CameraCalibration:
                 data = json.load(f)
             
             points = data.get("points", [])
-            if len(points) == 4:
+            if len(points) >= 4:
                 self.calibration_points = points
                 self._compute_transform()
                 self.world_bounds = data.get("world_bounds", self.world_bounds)
-                print(f"Calibration loaded from {self.calibration_file}")
+                print(f"Calibration loaded from {self.calibration_file} ({len(points)} points)")
             else:
-                print("Invalid calibration file - need 4 points")
+                print(f"Invalid calibration file - need at least 4 points, got {len(points)}")
                 
         except Exception as e:
             print(f"Error loading calibration: {e}")

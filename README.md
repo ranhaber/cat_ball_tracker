@@ -2,7 +2,7 @@
 
 A real-time cat and ball detection system for Raspberry Pi Zero 2W with Camera Module 3. Features motion-first detection for efficiency, a web interface for live streaming, and zone-based tracking.
 
-**Version:** 2.0.0
+**Version:** 2.4.0
 
 ---
 
@@ -79,7 +79,7 @@ A real-time cat and ball detection system for Raspberry Pi Zero 2W with Camera M
 - **🔢 Object Tracking** - Consistent IDs across frames using centroid tracking
 - **📍 Detection Zones** - Draw perimeter on camera snapshot to limit detection area
 - **🗺️ Top-Down View** - Bird's eye view of detection zone with tracked objects (perspective transform)
-- **📏 4-Point Calibration** - Define real-world X,Y coordinates for perspective mapping
+- **📏 Multi-Point Calibration** - 4+ point perspective mapping with side lengths; 5+ points use least-squares best-fit homography
 - **⚡ Performance Controls** - Resolution, frame skip, threshold, and confirmation adjustment
 - **💾 Settings Persistence** - All settings saved and restored on reboot
 - **📊 System Monitoring** - RAM usage and CPU temperature display
@@ -94,9 +94,14 @@ cat_ball_tracker/
 ├── README.md                    # This file
 ├── requirements.txt             # Python dependencies
 ├── config.py                    # Configuration settings
-├── main.py                      # Application entry point (v1.5.0)
+├── main.py                      # Application entry point (v2.4.0)
 ├── settings.py                  # Settings persistence
 ├── cat_dome.service             # Systemd service file
+├── start_Cat_Dome.sh            # Startup wrapper with logging
+├── install_rpi.sh               # RPi installation script
+├── setup_car_dome.sh            # Full setup script (systemd, venv, model)
+├── test_installation.py         # Dependency verification tests
+├── test_lens_calibration.py     # Lens calibration unit tests
 │
 ├── camera/
 │   ├── __init__.py
@@ -108,7 +113,8 @@ cat_ball_tracker/
 │   ├── tracker.py               # Centroid-based tracking
 │   ├── perimeter.py             # Detection zone management
 │   ├── motion_detector.py       # Lightweight motion detection
-│   └── calibration.py           # Distance calibration
+│   ├── calibration.py           # Perspective calibration (4+ points)
+│   └── lens_calibration.py      # Plumb-line lens distortion correction
 │
 ├── web/
 │   ├── __init__.py
@@ -118,6 +124,12 @@ cat_ball_tracker/
 │   └── static/
 │       ├── css/style.css
 │       └── js/app.js
+│
+├── docs/
+│   └── cloudflared-low-ram-config.md  # Cloudflare Tunnel RAM optimization
+│
+├── scripts/
+│   └── README_LOGGING.md        # Logging system documentation
 │
 └── models/
     └── (downloaded on first run)
@@ -181,7 +193,7 @@ sudo systemctl start cat_dome
 sudo systemctl status cat_dome
 
 # View logs
-sudo journalctl -u cat_ball_tracker -f
+sudo journalctl -u cat_dome -f
 ```
 
 ---
@@ -208,7 +220,7 @@ Cat Dome uses a two-stage detection approach to save resources:
 
 **Benefits:**
 - ~30% less CPU usage during idle
-- Enables higher resolutions (up to 1536x864)
+- Enables higher resolutions (up to 2304x1296)
 - Better detection for small/distant objects (no scaling loss)
 - Reduced false positives with temporal confirmation
 
@@ -228,21 +240,30 @@ Cat Dome uses a two-stage detection approach to save resources:
 
 The system can show a **bird's eye view** of your detection zone with tracked objects, using perspective transformation.
 
-### 4-Point Calibration Setup
+### Multi-Point Calibration Setup
 
 1. Go to **Zone** tab → **Perspective Calibration**
 2. Click **Load Camera Frame**
-3. Click **4 points** on the ground in the camera view
-4. For each point, enter its real-world X,Y coordinates (in meters):
-   - **X** = left-right position (0 = camera center, positive = right)
-   - **Y** = near-far position (0 = camera position, positive = farther away)
-5. Click **Save Calibration**
+3. Click **4 or more points** on the ground in the camera view (up to 20)
+4. Enter the **side length** (meters) for each edge of the polygon
+5. Optionally enter a **diagonal** (P1→P3) for exact quadrilateral shape (4 points only)
+6. Click **Save Calibration**
+
+**How it works:**
+- **4 points**: exact homography via `getPerspectiveTransform`
+  - Rectangle auto-detected (opposite sides equal)
+  - With diagonal: exact shape via SSS triangles
+  - Without diagonal for non-rectangles: heuristic placement
+- **5+ points**: least-squares best-fit homography via `findHomography`
+  - More points = better accuracy across the entire image
+  - World coordinates built as a chain from pixel directions + side lengths
 
 ### Tips for Accurate Calibration
 
 - Use markers on the ground (tape, cones, etc.) at known positions
-- Points should form a quadrilateral covering your detection area
-- More spread-out points = more accurate transformation
+- Points should form a polygon covering your detection area
+- More points = more accurate transformation (especially for wide-angle lenses)
+- 5+ points recommended for best accuracy across the full image
 - The top-down view appears below the video stream once calibrated
 
 ---
@@ -251,7 +272,7 @@ The system can show a **bird's eye view** of your detection zone with tracked ob
 
 | Setting | Description | Recommended |
 |---------|-------------|-------------|
-| Resolution | Camera capture size | 1536x864 |
+| Resolution | Camera capture size | 2304x1296 |
 | Frame Skip | Skip N frames between AI runs | 1-2 |
 | Threshold | Detection confidence (10-90%) | 30% |
 | Confirm Frames | Consecutive frames for detection | 1-2 |
@@ -260,8 +281,8 @@ Access in **Settings** tab.
 
 **Memory Limits (RPi Zero 2W - 512MB RAM):**
 - 640x480: ~150MB
-- 1536x864: ~250MB
-- 1920x1080: May fail (too much RAM)
+- 2304x1296: ~190-210MB (default, dual-resolution system)
+- Stream resolution is separate (640x360 default)
 
 ---
 
@@ -299,15 +320,19 @@ DETECTION_THRESHOLD = 0.3           # Confidence threshold (0.1 - 0.9)
 DEFAULT_DETECTION_MODE = "cat"      # or "ball"
 DETECTION_CONFIRM_FRAMES = 1        # Require N consecutive frames (1-5)
 
-# Camera
-DEFAULT_RESOLUTION = (1536, 864)
+# Camera (dual-resolution system)
+DEFAULT_RESOLUTION = (2304, 1296)   # Capture resolution (13m detection range)
+DEFAULT_STREAM_RESOLUTION = (640, 360)  # Stream resolution (saves RAM)
 DEFAULT_FRAMERATE = 15
 DEFAULT_FRAME_SKIP = 2
 
+# Performance Profiles: balanced, performance (default), quality
+DEFAULT_PERFORMANCE_PROFILE = "performance"
+
 # Motion-First
 MOTION_FIRST_ENABLED = True
-MOTION_DETECTION_SCALE = 0.25
-MOTION_CROP_SIZE = (300, 300)       # Fixed crop size (matches AI input)
+MOTION_DETECTION_SCALE = 0.35
+MOTION_CROP_SIZE = (400, 400)       # Fixed crop size for AI
 
 # Server
 HOST = "0.0.0.0"
@@ -361,6 +386,7 @@ sudo journalctl -u cat_ball_tracker -n 50
 
 ## 📝 Version History
 
+- **v2.4.0** - Multi-point calibration: 4+ points with N side lengths; 5+ points use findHomography (least-squares best-fit); dynamic side length inputs in UI; better accuracy across entire image
 - **v2.3.3** - Fix: top-down view and calibration now consistently undistort pixels; homography computed in undistorted space; zone pixels undistorted before homography
 - **v2.3.2** - Lens Calibration: reverted to standard polynomial model (rectilinear lens, not fisheye); k1 negative for barrel; 8-param (f,cx,cy,k1,k2,k3,p1,p2) with bounds; convergence logging; test verified 98.2% improvement
 - **v2.3.1** - Lens Calibration: add parameter bounds (Trust Region optimizer) to prevent divergence; f=200-3000, cx/cy ±20%, k1-k4 ±1
