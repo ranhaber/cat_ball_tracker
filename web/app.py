@@ -1753,9 +1753,9 @@ def run_server():
         app.run(
             host=config.HOST,
             port=config.PORT,
-            debug=config.DEBUG,
+            debug=False,  # Always False in production — debug mode adds CPU overhead
             threaded=True,
-            use_reloader=False  # Disable reloader to avoid duplicate processes
+            use_reloader=False
         )
     finally:
         video_processor.stop()

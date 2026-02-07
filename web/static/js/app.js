@@ -906,8 +906,8 @@ function updateTopDownVisibility(isCalibrated) {
 function startTopDownUpdates() {
     if (topdownUpdateInterval) return;
     
-    // Update every 500ms
-    topdownUpdateInterval = setInterval(updateTopDownView, 500);
+    // Update every 2 seconds (saves CPU — cat doesn't move that fast)
+    topdownUpdateInterval = setInterval(updateTopDownView, 2000);
     updateTopDownView(); // Initial update
 }
 
@@ -1454,7 +1454,7 @@ async function loadPerimeter() {
 // Status Updates
 // ============================================================================
 function initStatusUpdates() {
-    setInterval(updateStatus, 1000);
+    setInterval(updateStatus, 3000);  // Every 3s (saves CPU, status doesn't change fast)
 }
 
 async function updateStatus() {
