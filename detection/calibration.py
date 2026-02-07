@@ -410,10 +410,10 @@ class CameraCalibration:
         """
         Convert pixel coordinates to real-world coordinates (meters).
         
-        Uses weighted interpolation of per-rectangle local homographies when
-        available (inverse-distance weighting from rectangle centers). This
-        gives accurate results across the full frame even with a wide-angle
-        lens, because each rectangle's homography is exact for its region.
+        Uses the nearest rectangle's local homography (Voronoi regions).
+        Each rectangle's homography is exact for its 4 corners, and accurate
+        for nearby pixels. The nearest rectangle gives the best result because
+        its homography captures the local perspective and distortion.
         
         Falls back to the global homography if no per-rectangle data.
         
@@ -428,35 +428,23 @@ class CameraCalibration:
             return None
         
         try:
-            import math
             point = np.float32([[[pixel_x, pixel_y]]])
             
-            # Use weighted interpolation of per-rectangle homographies
+            # Use nearest rectangle's homography
             if self.rect_homographies and len(self.rect_homographies) > 0:
-                if len(self.rect_homographies) == 1:
-                    # Single rectangle: use directly (exact)
-                    transformed = cv2.perspectiveTransform(point, self.rect_homographies[0]["H"])
-                    return (float(transformed[0][0][0]), float(transformed[0][0][1]))
-                
-                # Multiple rectangles: inverse-distance weighted average
-                results = []
-                weights = []
-                for rh in self.rect_homographies:
-                    transformed = cv2.perspectiveTransform(point, rh["H"])
-                    wx = float(transformed[0][0][0])
-                    wy = float(transformed[0][0][1])
-                    results.append((wx, wy))
-                    
-                    # Inverse distance to rectangle center (in pixels)
+                # Find the nearest rectangle by distance to center
+                best_idx = 0
+                best_dist = float('inf')
+                for i, rh in enumerate(self.rect_homographies):
                     dx = pixel_x - rh["center_px"][0]
                     dy = pixel_y - rh["center_px"][1]
-                    dist = math.sqrt(dx * dx + dy * dy) + 1.0  # +1 to avoid infinity
-                    weights.append(1.0 / (dist * dist))  # inverse square for stronger locality
+                    dist = dx * dx + dy * dy
+                    if dist < best_dist:
+                        best_dist = dist
+                        best_idx = i
                 
-                total_w = sum(weights)
-                world_x = sum(r[0] * w for r, w in zip(results, weights)) / total_w
-                world_y = sum(r[1] * w for r, w in zip(results, weights)) / total_w
-                return (world_x, world_y)
+                transformed = cv2.perspectiveTransform(point, self.rect_homographies[best_idx]["H"])
+                return (float(transformed[0][0][0]), float(transformed[0][0][1]))
             
             # Fallback: global homography
             if self.transform_matrix is not None:
