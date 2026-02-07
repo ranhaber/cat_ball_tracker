@@ -827,9 +827,8 @@ async function saveCalibrationRectangles() {
         
         if (response.ok) {
             const data = await response.json();
-            if (data.calibration && data.calibration.rectangles) {
-                calibrationRectangles = data.calibration.rectangles;
-            }
+            // Keep local rectangles (original pixel positions for display).
+            // Server returns undistorted pixels which would shift positions on canvas.
             updateCalibrationUI();
             drawCalibration();
             updateCalibrationStatusUI(data.calibration);

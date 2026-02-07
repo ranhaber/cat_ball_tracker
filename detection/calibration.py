@@ -204,8 +204,10 @@ class CameraCalibration:
             print("Error: Need at least 1 rectangle")
             return False
         
-        # Store rectangles for save/load
-        self.rectangles = rectangles
+        # Note: self.rectangles should be set by caller with original (display) pixels.
+        # The rectangles passed here may have undistorted pixels for homography computation.
+        if not self.rectangles:
+            self.rectangles = rectangles
         
         # --- Rectangle 0: exact world coords at origin ---
         r0 = rectangles[0]

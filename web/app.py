@@ -773,12 +773,18 @@ class VideoProcessor:
 
     def set_calibration_from_rectangles(self, rectangles):
         """Set calibration from multiple rectangles.
-        Undistorts pixels first if lens calibration is available."""
+        Undistorts pixels for homography computation but preserves
+        original pixel positions in the rectangle data for UI display."""
         if self.calibration:
-            # Undistort pixel points in each rectangle
+            # Build undistorted copies for the homography, keep originals for display
+            rects_for_homography = []
             for rect in rectangles:
-                rect["pixels"] = self._undistort_pixels(rect["pixels"])
-            return self.calibration.set_calibration_from_rectangles(rectangles)
+                r = dict(rect)
+                r["pixels"] = self._undistort_pixels(rect["pixels"])
+                rects_for_homography.append(r)
+            # Store original (display) rectangles, compute with undistorted
+            self.calibration.rectangles = rectangles  # originals for save/load/UI
+            return self.calibration.set_calibration_from_rectangles(rects_for_homography)
         return False
     
     def clear_calibration(self):
