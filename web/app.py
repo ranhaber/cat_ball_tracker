@@ -841,13 +841,14 @@ class VideoProcessor:
         
         # Get tracked objects with world coordinates
         for det in self.last_detections_with_world:
-            if det.get("world_pos"):
+            wp = det.get("world_position")
+            if wp:
                 result["objects"].append({
                     "id": det.get("track_id", 0),
                     "class": det.get("class_id", 0),
                     "confidence": det.get("confidence", 0),
-                    "world_x": det["world_pos"].get("world_x", 0),
-                    "world_y": det["world_pos"].get("world_y", 0)
+                    "world_x": wp.get("world_x", 0),
+                    "world_y": wp.get("world_y", 0)
                 })
         
         return result

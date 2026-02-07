@@ -235,38 +235,117 @@ class CameraCalibration:
                       f"{[f'({p[0]:.3f},{p[1]:.3f})' for p in world_pts]}")
 
         else:
-            # ====== N-POINT (5+): chain-based world coordinates ======
-            # P0 = (0,0). Each subsequent point placed using side length.
-            # Use pixel directions for orientation (heuristic).
-            # The homography is least-squares best-fit across all N points.
+            # ====== N-POINT (5+): 4-point bootstrap + homography projection ======
+            # Step 1: Use the first 4 points + their side lengths to compute exact
+            #         world coords via the 4-point method (rectangle/SSS/heuristic).
+            # Step 2: Compute a preliminary homography from these 4 points.
+            # Step 3: Project remaining pixel points through this homography to get
+            #         accurate world coordinates (perspective-correct).
+            # Step 4: Compute final homography with all N points for best accuracy.
+            #
+            # This avoids the chain method which uses pixel directions (perspective-
+            # distorted) and produces parallelograms instead of rectangles.
 
-            # Build world coords: P0 at origin, chain along polygon
-            world_pts = [[0.0, 0.0]]
-            for i in range(1, n):
-                px_prev = points_pixel[i - 1]
-                px_curr = points_pixel[i]
-                ddx = float(px_curr[0] - px_prev[0])
-                ddy = float(px_curr[1] - px_prev[1])
-                length_px = math.sqrt(ddx * ddx + ddy * ddy)
-                if length_px < 1e-6:
-                    print(f"Error: Points {i} and {i+1} are too close together")
+            # --- Step 1: Compute world coords for first 4 points ---
+            L01, L12, L23, L30 = lengths[0], lengths[1], lengths[2], lengths[3]
+            tol = 0.01
+
+            # Diagonal for first 4 points
+            if diagonal is not None and float(diagonal) > 0:
+                d02 = float(diagonal)
+                print(f"[CALIBRATION] Diagonal P0->P2 = {d02:.3f} m (user-provided)")
+            else:
+                is_rect = abs(L01 - L23) < tol and abs(L12 - L30) < tol
+                if is_rect:
+                    d02 = math.sqrt(L01 * L01 + L12 * L12)
+                    print(f"[CALIBRATION] First 4 pts: rectangle ({L01}x{L12} m)")
+                else:
+                    d02 = None
+                    print(f"[CALIBRATION] First 4 pts: general quad, no diagonal -- heuristic")
+
+            if d02 is not None:
+                # Exact SSS triangles for first 4 points
+                cos_a = (L01 * L01 + d02 * d02 - L12 * L12) / (2.0 * L01 * d02) if L01 > 0 and d02 > 0 else 0
+                cos_a = max(-1.0, min(1.0, cos_a))
+                sin_a = math.sqrt(max(0.0, 1.0 - cos_a * cos_a))
+                if cross_px > 0:
+                    p2y = -sin_a * d02
+                else:
+                    p2y = sin_a * d02
+                p2x = cos_a * d02
+
+                d = math.sqrt(p2x * p2x + p2y * p2y)
+                if d < 1e-10:
+                    print("Error: P2 coincides with P0")
                     return False
-                length_m = lengths[i - 1]
-                # World direction: image right = +X, image up = +Y
-                wx = world_pts[i - 1][0] + length_m * (ddx / length_px)
-                wy = world_pts[i - 1][1] - length_m * (ddy / length_px)
+                aa = (L30 * L30 - L23 * L23 + d * d) / (2.0 * d)
+                hh_sq = L30 * L30 - aa * aa
+                if hh_sq < -1e-6:
+                    print(f"Error: Side lengths + diagonal cannot form closed quad")
+                    return False
+                hh = math.sqrt(max(0.0, hh_sq))
+                ux, uy = p2x / d, p2y / d
+                p3_a = [aa * ux + hh * (-uy), aa * uy + hh * ux]
+                p3_b = [aa * ux - hh * (-uy), aa * uy - hh * ux]
+                cross_a = (p2x - L01) * (p3_a[1] - p2y) - (p2y - 0) * (p3_a[0] - p2x)
+                cross_01_12 = (L01 - 0) * (p2y - 0) - (0 - 0) * (p2x - L01)
+                if cross_01_12 * cross_a >= 0:
+                    p3 = p3_a
+                else:
+                    p3 = p3_b
+
+                world_pts_4 = [[0.0, 0.0], [L01, 0.0], [p2x, p2y], p3]
+
+                if abs(dx01) < abs(dy01):
+                    sy = -1.0 if dy01 >= 0 else 1.0
+                    world_pts_4 = [[-sy * p[1], sy * p[0]] for p in world_pts_4]
+                else:
+                    if dx01 < 0:
+                        world_pts_4 = [[-p[0], p[1]] for p in world_pts_4]
+            else:
+                # Heuristic for first 4 points
+                world_pts_4 = [[0.0, 0.0]]
+                for i in range(1, 4):
+                    px_prev = points_pixel[i - 1]
+                    px_curr = points_pixel[i]
+                    ddx = float(px_curr[0] - px_prev[0])
+                    ddy = float(px_curr[1] - px_prev[1])
+                    length_px = math.sqrt(ddx * ddx + ddy * ddy)
+                    if length_px < 1e-6:
+                        print(f"Error: Points {i} and {i+1} are too close together")
+                        return False
+                    length_m = float(lengths[i - 1])
+                    wx = world_pts_4[i - 1][0] + length_m * (ddx / length_px)
+                    wy = world_pts_4[i - 1][1] - length_m * (ddy / length_px)
+                    world_pts_4.append([wx, wy])
+
+            print(f"[CALIBRATION] Bootstrap 4-point world: "
+                  f"{[f'({p[0]:.3f},{p[1]:.3f})' for p in world_pts_4]}")
+
+            # --- Step 2: Compute preliminary homography from first 4 points ---
+            pixel_pts_4 = np.float32([points_pixel[i] for i in range(4)])
+            world_pts_4_np = np.float32(world_pts_4)
+            H_prelim = cv2.getPerspectiveTransform(pixel_pts_4, world_pts_4_np)
+
+            # --- Step 3: Project remaining pixel points through preliminary H ---
+            world_pts = list(world_pts_4)
+            for i in range(4, n):
+                px_pt = np.float32([[[points_pixel[i][0], points_pixel[i][1]]]])
+                projected = cv2.perspectiveTransform(px_pt, H_prelim)
+                wx = float(projected[0][0][0])
+                wy = float(projected[0][0][1])
                 world_pts.append([wx, wy])
 
-            # Check closure: distance from last point back to P0 vs user's last side length
-            closing_dx = world_pts[0][0] - world_pts[-1][0]
-            closing_dy = world_pts[0][1] - world_pts[-1][1]
-            closing_computed = math.sqrt(closing_dx * closing_dx + closing_dy * closing_dy)
-            closing_user = lengths[-1]
-            closure_error = abs(closing_computed - closing_user)
-            print(f"[CALIBRATION] {n}-point world coords: "
+            print(f"[CALIBRATION] {n}-point world coords (bootstrap): "
                   f"{[f'({p[0]:.3f},{p[1]:.3f})' for p in world_pts]}")
-            print(f"[CALIBRATION] Closing side: user={closing_user:.3f}m, "
-                  f"computed={closing_computed:.3f}m, error={closure_error:.3f}m")
+
+            # Log computed side lengths vs user's for verification
+            for i in range(n):
+                j = (i + 1) % n
+                dx_s = world_pts[j][0] - world_pts[i][0]
+                dy_s = world_pts[j][1] - world_pts[i][1]
+                computed = math.sqrt(dx_s * dx_s + dy_s * dy_s)
+                print(f"[CALIBRATION]   Side {i+1}→{j+1}: user={lengths[i]:.3f}m, computed={computed:.3f}m")
 
         points = [
             {"pixel": list(points_pixel[i]), "world": world_pts[i]}

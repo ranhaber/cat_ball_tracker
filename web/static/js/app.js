@@ -545,7 +545,16 @@ function handleCalibrationClick(e) {
         return;
     }
     
-    // Max 4 points
+    // If the current points are from a saved calibration (have world coords),
+    // clear them so the user starts fresh with new clicks.
+    if (calibrationPoints.length > 0 && calibrationPoints[0].world) {
+        calibrationPoints = [];
+        calibrationSideLengths = [];
+        calibrationDiagonal = null;
+        const diagInput = document.getElementById('calibration-diagonal');
+        if (diagInput) diagInput.value = '';
+    }
+    
     if (calibrationPoints.length >= 20) {
         alert('Maximum 20 points reached.');
         return;
@@ -576,8 +585,27 @@ function drawCalibration() {
         calibrationCtx.fillRect(0, 0, calibrationCanvas.width, calibrationCanvas.height);
     }
     
+    // Draw polygon outline connecting points (if 2+ points)
+    if (calibrationPoints.length >= 2) {
+        calibrationCtx.strokeStyle = 'rgba(255, 255, 0, 0.6)';
+        calibrationCtx.lineWidth = 2;
+        calibrationCtx.setLineDash([6, 4]);
+        calibrationCtx.beginPath();
+        const [sx, sy] = calibrationPoints[0].pixel;
+        calibrationCtx.moveTo(sx, sy);
+        for (let i = 1; i < calibrationPoints.length; i++) {
+            const [cx, cy] = calibrationPoints[i].pixel;
+            calibrationCtx.lineTo(cx, cy);
+        }
+        if (calibrationPoints.length >= 3) {
+            calibrationCtx.closePath();
+        }
+        calibrationCtx.stroke();
+        calibrationCtx.setLineDash([]);
+    }
+    
     // Colors for each point
-    const colors = ['#ff0000', '#00ff00', '#0000ff', '#ffff00'];
+    const colors = ['#ff0000', '#00ff00', '#0000ff', '#ffff00', '#ff00ff', '#00ffff', '#ff8800'];
     
     // Draw calibration points
     calibrationPoints.forEach((point, index) => {
