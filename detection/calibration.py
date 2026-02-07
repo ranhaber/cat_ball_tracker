@@ -186,9 +186,11 @@ class CameraCalibration:
         """
         Set calibration from one or more rectangles.
         
-        Rectangle 0: world coords computed exactly at origin.
-        Rectangles 1+: pixel points projected through preliminary homography
-        from rectangle 0 to get world positions.
+        Each rectangle's exact shape is computed independently from its side lengths
+        (using SSS triangles / rectangle geometry). Rectangle 0 is placed at the origin.
+        Rectangles 1+ are positioned using a preliminary homography from rect 0, but
+        their SHAPE is preserved exactly (only position and orientation from H).
+        
         Final homography computed from ALL points (findHomography).
         
         Args:
@@ -200,12 +202,13 @@ class CameraCalibration:
         Returns:
             bool: True if calibration successful
         """
+        import math
+        
         if not rectangles or len(rectangles) < 1:
             print("Error: Need at least 1 rectangle")
             return False
         
         # Note: self.rectangles should be set by caller with original (display) pixels.
-        # The rectangles passed here may have undistorted pixels for homography computation.
         if not self.rectangles:
             self.rectangles = rectangles
         
@@ -228,17 +231,70 @@ class CameraCalibration:
             world_pts_0_np = np.float32(world_pts_0)
             H_prelim = cv2.getPerspectiveTransform(pixel_pts_0, world_pts_0_np)
             
-            # Project remaining rectangles through preliminary H
             for idx, rect in enumerate(rectangles[1:], start=2):
-                for px_pt in rect["pixels"]:
-                    pt = np.float32([[[px_pt[0], px_pt[1]]]])
-                    projected = cv2.perspectiveTransform(pt, H_prelim)
-                    wx = float(projected[0][0][0])
-                    wy = float(projected[0][0][1])
-                    all_pixel_pts.append(px_pt)
-                    all_world_pts.append([wx, wy])
+                # Step 1: Compute this rectangle's exact local shape
+                local_world = self._compute_rect_world_pts(
+                    rect["pixels"], rect["side_lengths"], rect.get("diagonal"))
+                if local_world is None:
+                    print(f"Error: Failed to compute world coords for rectangle {idx}")
+                    return False
                 
-                print(f"[CALIBRATION] Rect {idx} projected through H_prelim")
+                # Step 2: Project this rectangle's pixel center through H_prelim
+                # to get approximate world position
+                px_center = np.mean([p[0] for p in rect["pixels"]])
+                py_center = np.mean([p[1] for p in rect["pixels"]])
+                pt_center = np.float32([[[px_center, py_center]]])
+                proj_center = cv2.perspectiveTransform(pt_center, H_prelim)
+                world_cx = float(proj_center[0][0][0])
+                world_cy = float(proj_center[0][0][1])
+                
+                # Step 3: Get approximate orientation by projecting P0→P1 direction
+                p0_proj = cv2.perspectiveTransform(
+                    np.float32([[[rect["pixels"][0][0], rect["pixels"][0][1]]]]), H_prelim)
+                p1_proj = cv2.perspectiveTransform(
+                    np.float32([[[rect["pixels"][1][0], rect["pixels"][1][1]]]]), H_prelim)
+                proj_dx = float(p1_proj[0][0][0] - p0_proj[0][0][0])
+                proj_dy = float(p1_proj[0][0][1] - p0_proj[0][0][1])
+                proj_angle = math.atan2(proj_dy, proj_dx)
+                
+                # Local shape P0→P1 angle
+                local_dx = local_world[1][0] - local_world[0][0]
+                local_dy = local_world[1][1] - local_world[0][1]
+                local_angle = math.atan2(local_dy, local_dx)
+                
+                # Rotation needed to align local shape with projected orientation
+                rot = proj_angle - local_angle
+                cos_r = math.cos(rot)
+                sin_r = math.sin(rot)
+                
+                # Step 4: Rotate local shape and translate to projected center
+                local_cx = np.mean([p[0] for p in local_world])
+                local_cy = np.mean([p[1] for p in local_world])
+                
+                placed_world = []
+                for lp in local_world:
+                    # Center, rotate, translate
+                    dx = lp[0] - local_cx
+                    dy = lp[1] - local_cy
+                    rx = dx * cos_r - dy * sin_r
+                    ry = dx * sin_r + dy * cos_r
+                    placed_world.append([rx + world_cx, ry + world_cy])
+                
+                print(f"[CALIBRATION] Rect {idx} exact shape placed at ({world_cx:.3f},{world_cy:.3f}), "
+                      f"rot={math.degrees(rot):.1f}°")
+                print(f"[CALIBRATION]   world: {[f'({p[0]:.3f},{p[1]:.3f})' for p in placed_world]}")
+                
+                # Verify side lengths
+                for i in range(4):
+                    j = (i + 1) % 4
+                    dx_s = placed_world[j][0] - placed_world[i][0]
+                    dy_s = placed_world[j][1] - placed_world[i][1]
+                    computed = math.sqrt(dx_s * dx_s + dy_s * dy_s)
+                    expected = rect["side_lengths"][i]
+                    print(f"[CALIBRATION]   side {i+1}→{(i+1)%4+1}: expected={expected:.3f}m, got={computed:.3f}m")
+                
+                all_pixel_pts.extend(rect["pixels"])
+                all_world_pts.extend(placed_world)
         
         print(f"[CALIBRATION] Total: {len(all_pixel_pts)} points from {len(rectangles)} rectangle(s)")
         
