@@ -166,10 +166,11 @@ class LensCalibration:
             return r
 
         # 7-parameter optimisation: f, cx, cy, k1, k2, k3, k4
-        # Bounds ensure physically valid parameters
-        x0 = np.array([f0, cx0, cy0, 0.0, 0.0, 0.0, 0.0])
-        lower = [200, cx0 - image_width * 0.2, cy0 - image_height * 0.2, -5.0, -5.0, -5.0, -5.0]
-        upper = [3000, cx0 + image_width * 0.2, cy0 + image_height * 0.2, 5.0, 5.0, 5.0, 5.0]
+        # Bounds ensure physically valid parameters.
+        # k1 MUST be negative for barrel distortion (wide-angle lens).
+        x0 = np.array([f0, cx0, cy0, -0.1, 0.0, 0.0, 0.0])
+        lower = [200, cx0 - image_width * 0.1, cy0 - image_height * 0.1, -5.0, -5.0, -5.0, -5.0]
+        upper = [3000, cx0 + image_width * 0.1, cy0 + image_height * 0.1, 0.0, 5.0, 5.0, 5.0]
 
         self.calibration_max_iterations = 5000
         self.calibration_iteration = 0
