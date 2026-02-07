@@ -276,6 +276,8 @@ class VideoProcessor:
             libc.prctl(15, b'CatDome-Proc', 0, 0, 0)
         except Exception:
             pass
+        # Start with single-threaded OpenCV to avoid spin-wait threads when idle
+        cv2.setNumThreads(1)
         skip_counter = 0
         last_detections = []
         
@@ -348,6 +350,8 @@ class VideoProcessor:
                         
                         if self.motion_detected:
                             self._last_motion_time = time.time()
+                            # Enable multi-threaded OpenCV for faster processing during tracking
+                            cv2.setNumThreads(4)
                             # Get fixed 300x300 crop centered on motion (no scaling!)
                             # This preserves object pixel size for better detection
                             crop_size = getattr(config, 'MOTION_CROP_SIZE', (300, 300))
@@ -358,8 +362,9 @@ class VideoProcessor:
                             run_ai_detection = True
                         elif (self.detector.is_loaded() and 
                               time.time() - self._last_motion_time > self._tflite_idle_timeout):
-                            # No motion for N seconds — unload TFLite to save CPU
+                            # No motion for N seconds — unload TFLite and reduce OpenCV threads
                             self.detector.unload_model()
+                            cv2.setNumThreads(1)  # Back to single-thread to stop spin-wait
                     else:
                         # Always-on mode: run AI on every frame
                         run_ai_detection = True
