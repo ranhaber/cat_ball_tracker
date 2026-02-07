@@ -841,15 +841,10 @@ class VideoProcessor:
                 self._topdown_debug_done = True
             
             for idx, point in enumerate(perimeter_points):
-                px_orig, py_orig = point
-                px, py = px_orig, py_orig
-                if frame_res and hasattr(self.perimeter, 'saved_resolution') and self.perimeter.saved_resolution:
-                    saved_w, saved_h = self.perimeter.saved_resolution
-                    curr_w, curr_h = frame_res
-                    if saved_w > 0 and saved_h > 0:
-                        px = px_orig * curr_w / saved_w
-                        py = py_orig * curr_h / saved_h
-                # Perimeter pixels are from lens-corrected snapshot → already undistorted
+                px, py = float(point[0]), float(point[1])
+                # Perimeter pixels are from lens-corrected+cropped snapshot.
+                # They are already in the same undistorted coordinate space as
+                # the calibration rectangles. No resolution scaling needed.
                 world_pos = self.pixel_to_world(px, py, already_undistorted=True)
                 if world_pos:
                     result["perimeter_world"].append({
@@ -1500,18 +1495,10 @@ def create_app():
         debug["perimeter_points"] = []
         if perim_points and video_processor.calibration and video_processor.calibration.is_calibrated:
             for i, point in enumerate(perim_points):
-                px_orig, py_orig = point
-                px, py = float(px_orig), float(py_orig)
+                px, py = float(point[0]), float(point[1])
                 
-                # Apply resolution scaling (same as get_topdown_data)
-                if frame_res and perim_saved_res:
-                    saved_w, saved_h = perim_saved_res
-                    curr_w, curr_h = frame_res
-                    if saved_w > 0 and saved_h > 0:
-                        px = px_orig * curr_w / saved_w
-                        py = py_orig * curr_h / saved_h
-                
-                # Perimeter pixels are from lens-corrected snapshot → already undistorted
+                # Perimeter pixels are from lens-corrected+cropped snapshot.
+                # No resolution scaling needed — same coordinate space as calibration.
                 world_pos = video_processor.calibration.pixel_to_world(px, py)
                 
                 debug["perimeter_points"].append({
