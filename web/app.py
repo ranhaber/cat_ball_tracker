@@ -827,20 +827,39 @@ class VideoProcessor:
             frame_res = None
             if self.camera and self.camera.running:
                 frame_res = self.camera.get_resolution()
-            for point in perimeter_points:
-                px, py = point
+            
+            # Debug: log resolution info on first call
+            if not hasattr(self, '_topdown_debug_done'):
+                saved_res = self.perimeter.saved_resolution if hasattr(self.perimeter, 'saved_resolution') else 'N/A'
+                print(f"[TOPDOWN DEBUG] frame_res={frame_res}, perimeter saved_res={saved_res}, "
+                      f"perimeter points={len(perimeter_points)}, "
+                      f"lens_cal={'ON' if self.lens_calibration and self.lens_calibration.is_calibrated else 'OFF'}")
+                print(f"[TOPDOWN DEBUG] calibration points={len(self.calibration.calibration_points)}, "
+                      f"rectangles={len(self.calibration.rectangles)}")
+                # Log first few calibration points
+                for i, cp in enumerate(self.calibration.calibration_points[:4]):
+                    print(f"[TOPDOWN DEBUG]   cal point {i}: pixel={cp['pixel']}, world={cp['world']}")
+                self._topdown_debug_done = True
+            
+            for idx, point in enumerate(perimeter_points):
+                px_orig, py_orig = point
+                px, py = px_orig, py_orig
                 if frame_res and hasattr(self.perimeter, 'saved_resolution') and self.perimeter.saved_resolution:
                     saved_w, saved_h = self.perimeter.saved_resolution
                     curr_w, curr_h = frame_res
                     if saved_w > 0 and saved_h > 0:
-                        px = px * curr_w / saved_w
-                        py = py * curr_h / saved_h
+                        px = px_orig * curr_w / saved_w
+                        py = py_orig * curr_h / saved_h
                 world_pos = self.pixel_to_world(px, py)
                 if world_pos:
                     result["perimeter_world"].append({
                         "x": round(world_pos[0], 2),
                         "y": round(world_pos[1], 2)
                     })
+                    # Debug: log each point transformation
+                    if idx < 6:
+                        print(f"[TOPDOWN DEBUG]   perim {idx}: orig=({px_orig:.0f},{py_orig:.0f}) "
+                              f"scaled=({px:.0f},{py:.0f}) → world=({world_pos[0]:.3f},{world_pos[1]:.3f})")
         
         # Get tracked objects with world coordinates
         for det in self.last_detections_with_world:
@@ -1432,6 +1451,93 @@ def create_app():
         settings.update_setting("calibration_lines", [])
         print("[SETTING] Calibration cleared")
         return jsonify({"success": True, "calibration": video_processor.get_calibration()})
+    
+    @app.route('/api/calibration/debug', methods=['GET'])
+    def calibration_debug():
+        """Diagnostic: compare calibration rectangles, perimeter, and world coords."""
+        import math
+        debug = {
+            "lens_calibration": "ON" if video_processor.lens_calibration and video_processor.lens_calibration.is_calibrated else "OFF",
+            "is_calibrated": video_processor.calibration.is_calibrated if video_processor.calibration else False,
+        }
+        
+        # Camera resolution
+        frame_res = None
+        if video_processor.camera and video_processor.camera.running:
+            frame_res = video_processor.camera.get_resolution()
+        debug["camera_resolution"] = list(frame_res) if frame_res else None
+        
+        # Perimeter info
+        perim_saved_res = None
+        if hasattr(video_processor.perimeter, 'saved_resolution'):
+            perim_saved_res = list(video_processor.perimeter.saved_resolution)
+        debug["perimeter_saved_resolution"] = perim_saved_res
+        
+        # Calibration rectangles (original pixels)
+        rects = video_processor.calibration.rectangles if video_processor.calibration else []
+        debug["rectangles"] = []
+        for i, rect in enumerate(rects):
+            debug["rectangles"].append({
+                "index": i + 1,
+                "pixels": rect.get("pixels", []),
+                "side_lengths": rect.get("side_lengths", []),
+                "diagonal": rect.get("diagonal"),
+            })
+        
+        # Calibration points (pixel + world, as used by homography)
+        cal_pts = video_processor.calibration.calibration_points if video_processor.calibration else []
+        debug["calibration_points"] = []
+        for i, cp in enumerate(cal_pts):
+            debug["calibration_points"].append({
+                "index": i,
+                "pixel": [round(cp["pixel"][0], 1), round(cp["pixel"][1], 1)],
+                "world": [round(cp["world"][0], 4), round(cp["world"][1], 4)],
+            })
+        
+        # Perimeter points and their world transformations
+        perim_points = video_processor.get_perimeter()
+        debug["perimeter_points"] = []
+        if perim_points and video_processor.calibration and video_processor.calibration.is_calibrated:
+            for i, point in enumerate(perim_points):
+                px_orig, py_orig = point
+                px, py = float(px_orig), float(py_orig)
+                
+                # Apply resolution scaling (same as get_topdown_data)
+                if frame_res and perim_saved_res:
+                    saved_w, saved_h = perim_saved_res
+                    curr_w, curr_h = frame_res
+                    if saved_w > 0 and saved_h > 0:
+                        px = px_orig * curr_w / saved_w
+                        py = py_orig * curr_h / saved_h
+                
+                # Undistort (same as pixel_to_world)
+                ux, uy = px, py
+                if video_processor.lens_calibration and video_processor.lens_calibration.is_calibrated:
+                    ux, uy = video_processor.lens_calibration.undistort_point(px, py)
+                
+                # Apply homography
+                world_pos = video_processor.calibration.pixel_to_world(ux, uy)
+                
+                debug["perimeter_points"].append({
+                    "index": i,
+                    "raw_pixel": [round(float(px_orig), 1), round(float(py_orig), 1)],
+                    "scaled_pixel": [round(px, 1), round(py, 1)],
+                    "undistorted_pixel": [round(ux, 1), round(uy, 1)],
+                    "world": [round(world_pos[0], 4), round(world_pos[1], 4)] if world_pos else None,
+                })
+            
+            # Compute side lengths in top-down view
+            world_pts = [p["world"] for p in debug["perimeter_points"] if p["world"]]
+            n = len(world_pts)
+            sides = []
+            for i in range(n):
+                j = (i + 1) % n
+                dx = world_pts[j][0] - world_pts[i][0]
+                dy = world_pts[j][1] - world_pts[i][1]
+                sides.append(round(math.sqrt(dx*dx + dy*dy), 4))
+            debug["topdown_side_lengths"] = sides
+        
+        return jsonify(debug)
     
     @app.route('/api/calibration/lines', methods=['GET'])
     def get_calibration_lines():
