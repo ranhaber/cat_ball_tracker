@@ -2,7 +2,7 @@
 
 A real-time cat and ball detection system for Raspberry Pi Zero 2W with Camera Module 3. Features motion-first detection for efficiency, a web interface for live streaming, and zone-based tracking.
 
-**Version:** 2.7.5
+**Version:** 3.1.0
 
 ---
 
@@ -315,29 +315,44 @@ Rectangle 3 (far end):
 
 The correct order matters:
 
-1. **Lens Calibration** (do this first, once per lens)
-   - Corrects barrel distortion from the 120° wide-angle lens
-   - Mark straight lines in the image → optimizer finds distortion parameters
-   
-2. **Perspective Calibration** (after lens cal, redo if camera moves)
-   - Click "Load Camera Frame" → you see the **lens-corrected** image (straight lines are straight)
-   - Click rectangle corners on the corrected image → pixels are already undistorted
-   - Homography computed directly from what you see — no hidden corrections
-   
-3. **Detection Zone** (after lens cal, redo if camera moves)
-   - Same lens-corrected snapshot → zone pixels match calibration pixels
+```
+Step 1: Lens Calibration (once per lens)
+  Mark straight lines on raw image → rational model optimizer (k1-k6)
+  → corrects barrel distortion (94% improvement, 0.8px residual)
 
-4. **Cat/Ball Tracking** (automatic)
-   - Camera frame → detect object at raw pixel → undistort → apply homography → world (x,y)
+Step 2: Perspective Calibration (redo if camera moves)
+  Load Camera Frame → lens-corrected snapshot (straight lines visible)
+  → click rectangle corners on corrected image
+  → pixels are in undistorted space → findHomography → world coords
+  → Detection Zone perimeter → redistorted to raw for streaming overlay
+
+Step 3: Cat/Ball Tracking (automatic, every frame)
+  Raw camera frame → detect object at raw pixel
+  → undistort_point() → same space as calibration
+  → apply homography → world (x,y) position
+```
+
+**Why this order matters:**
+- Lens calibration makes the image "pinhole-like" — a single homography can then accurately map the entire flat ground plane
+- Without lens correction, the 120° barrel distortion means no single homography can be accurate across the full frame
+- The rational distortion model (k1-k6) achieves 0.8px residual, enabling **1-4% world-coordinate accuracy** across the full FOV
+
+### Accuracy Achieved
+
+| Test Area | Location | Error |
+|-----------|----------|-------|
+| 1.2×1.8m | center-right | **0.7-1.0%** |
+| 1.32×0.65m | far left edge | **0.5-2.1%** |
+| 0.63×0.48m | between rects | **1.6-3.9%** |
+| 0.93×0.83m | upper-right | **1-6%** |
 
 ### Tips for Accurate X,Y Tracking
 
-- **Do lens calibration first**: The calibration and zone editors show lens-corrected snapshots. Without lens calibration, the snapshots are raw (barrel-distorted)
-- **Place rectangles across the frame**: Each rectangle gets its own local homography. The nearest rectangle is used for any pixel — more rectangles = better coverage
-- **Adjacent rectangles are best**: Rectangles that share corners give the most consistent results across the frame
-- **Measure carefully**: Width and height define the real-world scale. A 5cm error = 5cm tracking error. Use a tape measure
+- **Do lens calibration first**: Use 6+ straight lines across the image (edges of tiles, walls, door frames). The rational model (k1-k6) needs good edge coverage
+- **Place 3-4 rectangles** spread across the visible floor. More rectangles = more calibration points = better homography fit
+- **Measure carefully**: Width and height define the real-world scale. Use a tape measure, not estimates
 - **Rectangle 1 = origin (0,0)**: All world coordinates are relative to the first corner of rectangle 1
-- **Verify with a known object**: After calibrating, place an object at different positions and check if the top-down view shows it in the correct location
+- **Verify**: Place a known-size object at different positions and check the top-down view dimensions
 - The top-down view appears below the video stream once calibrated
 
 ---
@@ -371,6 +386,8 @@ Access in **Settings** tab.
 | `/api/mode` | GET/POST | Detection mode (cat/ball) |
 | `/api/perimeter` | GET/POST/DELETE | Detection zone |
 | `/api/calibration` | GET/POST/DELETE | Calibration (rectangles-based) |
+| `/api/calibration/debug` | GET | Calibration diagnostics (pixels, world coords, side lengths) |
+| `/api/snapshot?undistort=1` | GET | Lens-corrected snapshot |
 | `/api/motion` | GET | Motion detection status |
 | `/api/motion/toggle` | POST | Toggle motion-first mode |
 | `/api/motion/show_regions` | POST | Toggle motion region display |
@@ -459,13 +476,13 @@ sudo journalctl -u cat_ball_tracker -n 50
 
 ## 📝 Version History
 
-- **v2.7.5** - Remove Snapshot Mode toggle; always show lens-corrected image in calibration/zone editors; clean up toggle flag from calibration pipeline
-- **v2.7.4** - Fix camera color swap: picamera2 format names are reversed ("RGB888" = BGR in memory, "BGR888" = RGB in memory); use "RGB888" with no conversion for correct OpenCV BGR input; removes unnecessary cvtColor overhead
-- **v2.7.3** - Fix camera color channel swap (incomplete): changed format to RGB888 but incorrectly added cvtColor conversion causing double-swap
-- **v2.7.0** - Undistorted snapshots: calibration and zone editors now show lens-corrected images; user clicks on corrected pixels directly; proper pipeline: lens cal → corrected snapshot → click rectangles/zone → homography from undistorted pixels; cat detection still undistorts raw camera pixels; nearest-rectangle Voronoi approach for pixel_to_world
-- **v2.6.2** - Use nearest rectangle only (no weighted blending) for pixel_to_world
-- **v2.6.1** - Fix: squares (all sides equal) caused degenerate P3=P1 in SSS solver due to floating point zero cross product; rectangles now use direct geometry (P0,P1,P2,P3 = corners) instead of SSS; SSS kept only for non-rectangle quads with diagonal; also added degeneracy check for SSS solver
-- **v2.6.0** - Regional calibration: each rectangle gets its own local homography; pixel_to_world uses inverse-distance weighted interpolation across all rectangles; eliminates single-homography compromise for 120° wide-angle lens; accurate across full frame even with barrel distortion
+- **v3.1.0** - Rational distortion model (k1-k6): upgrade from standard polynomial (3 radial coeffs) to rational model (6 radial + 2 tangential = 11 params). Residual error dropped from 2.63px to 0.80px (94.4% improvement). World-coordinate accuracy improved from 3-8% to 1-4% across the full 120° FOV
+- **v3.0.1** - Revert joint optimization (changed lens params mid-session breaking UI consistency); fix alpha=1.0 for undistorted snapshots
+- **v3.0.0** - Joint distortion+homography optimization (experimental, reverted in v3.0.1)
+- **v2.8.x** - Fix perimeter coordinate pipeline: redistort perimeter points to raw for streaming overlay; fix top-down view crash (undefined variable); use global findHomography instead of nearest-rectangle
+- **v2.7.x** - Undistorted snapshots for calibration/zone editors; full pipeline: lens cal → corrected snapshot → click → homography; fix camera color swap; optimal camera matrix for FOV retention
+- **v2.6.x** - Regional calibration with per-rectangle homographies; fix square degenerate P3; nearest-rectangle Voronoi approach
+- **v2.5.x** - Multi-rectangle calibration system; exact rectangle geometry; remove legacy side-lengths code
 - **v2.5.3** - Fix multi-rectangle calibration accuracy: each rectangle's exact shape computed independently (SSS/rectangle geometry); preliminary homography used only for position and orientation, not shape; fixes severe distortion when rectangles are spread across 120° wide-angle frame; added /api/calibration/debug endpoint
 - **v2.5.2** - Fix: preserve original rectangle pixel positions after save (lens undistortion was shifting displayed rectangles on canvas); undistort copies for homography, keep originals for UI
 - **v2.5.1** - Clean up: update README for multi-rectangle calibration with 3-rectangle example; remove all legacy side-lengths references; update API docs
