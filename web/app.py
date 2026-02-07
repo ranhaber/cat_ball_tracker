@@ -842,10 +842,9 @@ class VideoProcessor:
             
             for idx, point in enumerate(perimeter_points):
                 px, py = float(point[0]), float(point[1])
-                # Perimeter pixels are stored in raw camera resolution space
-                # (set_perimeter scales from snapshot to camera resolution).
-                # pixel_to_world will undistort them before applying the homography.
-                world_pos = self.pixel_to_world(px, py, already_undistorted=False)
+                # Perimeter pixels are stored at undistorted+cropped snapshot resolution —
+                # same coordinate space as calibration rectangles. No undistortion needed.
+                world_pos = self.pixel_to_world(px, py, already_undistorted=True)
                 if world_pos:
                     result["perimeter_world"].append({
                         "x": round(world_pos[0], 2),
@@ -1101,7 +1100,9 @@ def create_app():
         
     @app.route('/api/perimeter', methods=['POST'])
     def set_perimeter():
-        """Set perimeter points"""
+        """Set perimeter points.
+        Points are stored at the source snapshot resolution (undistorted+cropped).
+        draw_perimeter scales them to the video frame resolution automatically."""
         data = request.get_json()
         points = data.get('points', [])
         source_width = data.get('source_width')
@@ -1110,40 +1111,23 @@ def create_app():
         if len(points) < 3:
             return jsonify({"error": "Need at least 3 points"}), 400
         
-        cam_width, cam_height = video_processor.current_resolution
+        # Store points at source (snapshot) resolution — no scaling
+        saved_points = [[int(p[0]), int(p[1])] for p in points]
         
-        # If source dimensions provided and different from camera, scale the points
-        if source_width and source_height and (source_width != cam_width or source_height != cam_height):
-            scale_x = cam_width / source_width
-            scale_y = cam_height / source_height
-            
-            scaled_points = []
-            for p in points:
-                x = int(p[0] * scale_x)
-                y = int(p[1] * scale_y)
-                scaled_points.append([x, y])
-            
-            print(f"Perimeter: scaled from {source_width}x{source_height} to {cam_width}x{cam_height}")
-            print(f"  Original first point: {points[0]}, Scaled: {scaled_points[0]}")
-        else:
-            # Points already at camera resolution
-            scaled_points = [[int(p[0]), int(p[1])] for p in points]
-            print(f"Perimeter: saved at camera resolution {cam_width}x{cam_height}")
-            print(f"  First point: {scaled_points[0]}")
-        
-        # Set perimeter with resolution info
+        # Save with source resolution so draw_perimeter can scale to video frame
+        save_w = source_width if source_width else video_processor.current_resolution[0]
+        save_h = source_height if source_height else video_processor.current_resolution[1]
         if video_processor.perimeter:
-            video_processor.perimeter.set_saved_resolution(cam_width, cam_height)
-        success = video_processor.set_perimeter(scaled_points)
+            video_processor.perimeter.set_saved_resolution(save_w, save_h)
+        success = video_processor.set_perimeter(saved_points)
         
         if success:
-            print(f"[SETTING] Perimeter updated: {len(scaled_points)} points at {cam_width}x{cam_height}")
+            print(f"[SETTING] Perimeter updated: {len(saved_points)} points at {save_w}x{save_h} (snapshot resolution)")
         
         return jsonify({
             "success": success, 
             "points": video_processor.get_perimeter(),
-            "camera_resolution": [cam_width, cam_height],
-            "source_resolution": [source_width, source_height] if source_width else None
+            "saved_resolution": [save_w, save_h]
         })
         
     @app.route('/api/perimeter', methods=['DELETE'])
@@ -1497,9 +1481,8 @@ def create_app():
             for i, point in enumerate(perim_points):
                 px, py = float(point[0]), float(point[1])
                 
-                # Perimeter pixels are in raw camera space (scaled by set_perimeter).
-                # Undistort before applying homography.
-                world_pos = video_processor.pixel_to_world(px, py, already_undistorted=False)
+                # Perimeter pixels are in undistorted+cropped space (same as calibration).
+                world_pos = video_processor.pixel_to_world(px, py, already_undistorted=True)
                 
                 debug["perimeter_points"].append({
                     "index": i,
