@@ -44,8 +44,9 @@ class LensCalibration:
         self.image_height = 0
         self.is_calibrated = False
         self.model_type = "fisheye"  # "fisheye" or "standard" (legacy)
-        # Optimal camera matrix for undistortion (retains all pixels)
+        # Optimal camera matrix and crop ROI for undistortion
         self.optimal_camera_matrix = None
+        self.undistort_roi = None
         # Quality stats (saved for display on reload)
         self.overall_before_mean_px = 0.0
         self.overall_after_mean_px = 0.0
@@ -277,34 +278,48 @@ class LensCalibration:
     # ------------------------------------------------------------------
 
     def _compute_optimal_matrix(self):
-        """Compute optimal camera matrix that retains all pixels after undistortion."""
+        """Compute optimal camera matrix that crops to clean rectangle (no black borders)."""
         if self.camera_matrix is not None and self.image_width > 0 and self.image_height > 0:
-            self.optimal_camera_matrix, _ = cv2.getOptimalNewCameraMatrix(
+            self.optimal_camera_matrix, self.undistort_roi = cv2.getOptimalNewCameraMatrix(
                 self.camera_matrix, self.dist_coeffs,
                 (self.image_width, self.image_height),
-                alpha=1.0,  # 1.0 = retain all pixels (some black borders)
+                alpha=0.0,  # 0.0 = crop to largest clean rectangle (no black borders)
                 newImgSize=(self.image_width, self.image_height))
-            print(f"[LENS] Optimal camera matrix computed (alpha=1, full FOV retained)")
+            rx, ry, rw, rh = self.undistort_roi
+            print(f"[LENS] Optimal camera matrix computed (alpha=0, crop ROI={rx},{ry},{rw}x{rh})")
         else:
             self.optimal_camera_matrix = self.camera_matrix
+            self.undistort_roi = (0, 0, self.image_width, self.image_height)
     
     def undistort_point(self, px, py):
         """Undistort a single pixel coordinate. Returns (ux, uy).
-        Uses optimal camera matrix so coordinates match undistorted frames."""
+        Uses optimal camera matrix and subtracts ROI offset so coordinates
+        match the cropped undistorted frame."""
         if not self.is_calibrated:
             return (px, py)
         P = self.optimal_camera_matrix if self.optimal_camera_matrix is not None else self.camera_matrix
         pt = np.array([[[px, py]]], dtype=np.float64)
         out = cv2.undistortPoints(pt, self.camera_matrix, self.dist_coeffs, P=P)
-        return (float(out[0, 0, 0]), float(out[0, 0, 1]))
+        ux, uy = float(out[0, 0, 0]), float(out[0, 0, 1])
+        # Subtract ROI offset to match cropped frame coordinates
+        if self.undistort_roi:
+            ux -= self.undistort_roi[0]
+            uy -= self.undistort_roi[1]
+        return (ux, uy)
     
     def undistort_frame(self, frame):
-        """Undistort an entire image frame. Returns the corrected frame.
-        Uses optimal camera matrix so the full FOV is retained (no cropped edges)."""
+        """Undistort an entire image frame and crop to clean rectangle.
+        No black borders — edges are cropped to the valid region."""
         if not self.is_calibrated:
             return frame
         new_cam = self.optimal_camera_matrix if self.optimal_camera_matrix is not None else self.camera_matrix
-        return cv2.undistort(frame, self.camera_matrix, self.dist_coeffs, None, new_cam)
+        undistorted = cv2.undistort(frame, self.camera_matrix, self.dist_coeffs, None, new_cam)
+        # Crop to ROI (remove any remaining black borders)
+        if self.undistort_roi:
+            rx, ry, rw, rh = self.undistort_roi
+            if rw > 0 and rh > 0:
+                undistorted = undistorted[ry:ry+rh, rx:rx+rw]
+        return undistorted
 
     # ------------------------------------------------------------------
     # Persistence
