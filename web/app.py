@@ -853,8 +853,8 @@ class VideoProcessor:
                     })
                     # Debug: log each point transformation
                     if idx < 6:
-                        print(f"[TOPDOWN DEBUG]   perim {idx}: orig=({px_orig:.0f},{py_orig:.0f}) "
-                              f"scaled=({px:.0f},{py:.0f}) → world=({world_pos[0]:.3f},{world_pos[1]:.3f})")
+                        print(f"[TOPDOWN DEBUG]   perim {idx}: pixel=({px:.0f},{py:.0f}) "
+                              f"→ world=({world_pos[0]:.3f},{world_pos[1]:.3f})")
         
         # Get tracked objects with world coordinates
         for det in self.last_detections_with_world:
