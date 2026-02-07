@@ -255,12 +255,9 @@ With a 120° wide-angle lens, there is also **barrel distortion** (straight line
 
 The first 4 points **must form a rectangle** with known dimensions. This establishes the perspective transform.
 
-**What you need:** A rectangle on the ground with measured width and height. Use tiles, a mat, tape marks, a doorway — anything with known dimensions and right angles.
+**What you need:** A rectangle on the ground with measured width and height. Use tiles, tape marks, cones — anything with known dimensions and right angles.
 
-**Placement matters:**
-- Place the rectangle to **cover the main area** you want to track
-- Spread it out — a bigger rectangle gives better accuracy
-- Don't place all 4 points in one corner of the image
+**The rectangle should be as LARGE as possible**, spanning the full area you want to track. The homography (perspective transform) is most accurate **between** the calibration points. A small rectangle in the center would only be accurate near the center — areas outside it (especially at the edges of the 120° lens) would have increasing error.
 
 **Steps:**
 1. Go to **Zone** tab → **Perspective Calibration**
@@ -271,51 +268,64 @@ The first 4 points **must form a rectangle** with known dimensions. This establi
 
 The system auto-detects rectangles (opposite sides equal within 1cm tolerance) and computes exact world coordinates.
 
-#### Stage B — Additional Points (5+, optional)
+#### Stage B — Additional Points (5+, recommended)
 
-After the 4-point rectangle establishes the base calibration, you can add **more points** to improve accuracy across the full image — especially at the edges where the wide-angle lens causes the most distortion.
+After the 4-point rectangle establishes the base calibration, add **more points** to improve accuracy — especially at the edges where residual lens distortion is highest.
 
 **Steps:**
 1. Click additional points on the ground in the camera view
 2. Enter side lengths for each new edge
 3. Click **Save Calibration** again
 
-Points 5+ are projected through the preliminary homography from Stage A, giving them **perspective-correct** world positions. The final homography is recomputed with **all** points using least-squares best-fit (`findHomography`), which improves accuracy across the entire image.
+Points 5+ are projected through the preliminary homography from Stage A, giving them **perspective-correct** world positions. The final homography is recomputed with **all** points using least-squares best-fit (`findHomography`), which reduces measurement error and improves accuracy across the entire frame.
 
-### Example: 7-Point Calibration
+### Example: 7-Point Calibration (Full-Frame Coverage)
+
+The goal is to track cat/ball x,y position accurately across the **entire** camera frame.
 
 ```
-Camera view (120° wide angle):
+Camera view (120° wide-angle, looking down at the floor):
 ┌─────────────────────────────────────────────────────┐
 │                                                     │
-│         5───────────────6                           │
-│         │               │                           │
-│         │   1═══════2   │                           │
-│         │   ║       ║   │     (center = low         │
-│         │   ║ rect  ║   │      distortion)          │
-│         │   ║ 3x2m  ║   │                           │
-│         │   4═══════3   │                           │
-│         │               │                           │
-│         7───────────────┘                           │
-│                                          (edges =   │
-│                                           more      │
-│                                           distortion)│
+│  1══════════════════════════════════════2            │
+│  ║                                     ║            │
+│  ║    Rectangle (Stage A)              ║            │
+│  ║    Spans most of the visible floor  ║            │
+│  ║                                     ║            │
+│  ║              5                      ║            │
+│  ║              ·                      ║            │
+│  ║          6···         ···7          ║            │
+│  ║    (extra points at                 ║            │
+│  ║     mid-range, Stage B)             ║            │
+│  ║                                     ║            │
+│  4══════════════════════════════════════3            │
+│                                                     │
 └─────────────────────────────────────────────────────┘
 
 Stage A — Rectangle (points 1-4):
+  Place markers at the 4 farthest corners of the floor area
+  visible by the camera. Measure the sides.
+
   Click corners 1→2→3→4 in order.
-  Side 1 (1→2): 3.00 m
-  Side 2 (2→3): 2.00 m
-  Side 3 (3→4): 3.00 m    ← opposite sides equal = rectangle detected
-  Side 4 (4→1): 2.00 m
+  Side 1 (1→2): 6.50 m    ← width of the room/area
+  Side 2 (2→3): 4.00 m    ← depth of the room/area
+  Side 3 (3→4): 6.50 m    ← opposite sides equal = rectangle
+  Side 4 (4→1): 4.00 m
+  → Save Calibration
 
 Stage B — Additional points (5, 6, 7):
-  Click points 5, 6, 7 at the edges of your detection area.
-  Side 5 (4→5): 1.50 m    ← measure the distance 4→5
-  Side 6 (5→6): 5.00 m    ← measure the distance 5→6
-  Side 7 (6→7): 4.00 m    ← measure the distance 6→7
+  Place markers at mid-range positions (between near/far edges).
+  This helps the homography handle the 120° lens distortion.
+
+  Click points 5, 6, 7 on the ground.
+  Side 5 (4→5): 2.80 m    ← measure distance from point 4 to point 5
+  Side 6 (5→6): 2.50 m    ← measure distance from point 5 to point 6
+  Side 7 (6→7): 3.00 m    ← measure distance from point 6 to point 7
   (closing side 7→1 is computed automatically)
+  → Save Calibration
 ```
+
+**Why this works:** The large rectangle (1-2-3-4) covers the full detection area, so the perspective transform is accurate everywhere. Points 5-6-7 at intermediate positions help the least-squares homography compensate for any residual lens distortion that the plumb-line calibration didn't fully correct.
 
 ### How It Works (Under the Hood)
 
@@ -325,13 +335,14 @@ Stage B — Additional points (5, 6, 7):
 | **4 (with diagonal)** | Exact SSS triangles — works for any quadrilateral if you provide the diagonal P1→P3 | Excellent for that quad |
 | **5+** | 4-point bootstrap + `findHomography` least-squares — points 5+ projected through preliminary homography | Best overall accuracy |
 
-### Tips
+### Tips for Accurate X,Y Tracking
 
-- **First 4 points = rectangle**: This is the most important part. Ensure opposite sides are truly equal and angles are 90°
-- **Bigger rectangle = better**: A 1m×1m square works, but a 3m×5m rectangle gives much better accuracy
-- **Add edge points (5+)**: If you need accuracy at the edges of the image (where the 120° lens distorts most), add points there
-- **Measure carefully**: The side lengths determine the real-world scale. An error of 5cm in measurement means 5cm error in tracking
-- **Do lens calibration first**: Go to Zone tab → Lens Calibration and calibrate barrel distortion before perspective calibration. This is especially important for the 120° wide-angle lens
+- **Do lens calibration first**: Go to Zone tab → Lens Calibration and calibrate barrel distortion **before** perspective calibration. With a 120° wide-angle lens, this is critical — barrel distortion bends straight lines at the edges, and if uncorrected, the homography will be inaccurate there
+- **Rectangle must span the full area**: Place the 4 corners at the farthest points of the floor visible to the camera. The homography is most accurate **between** the calibration points — anything outside the rectangle has extrapolation error
+- **First 4 points = rectangle**: Ensure opposite sides are truly equal and angles are 90°. This gives the system an exact geometric solution
+- **Measure carefully**: The side lengths define the real-world scale. A 5cm measurement error = 5cm tracking error. Use a tape measure, not estimates
+- **Add mid-range points (5+)**: These help `findHomography` average out measurement errors and residual lens distortion, improving accuracy across the whole frame
+- **Verify with a known object**: After calibrating, place an object at different positions and check if the top-down view shows it in the correct location. If the edges are off, add more points there
 - The top-down view appears below the video stream once calibrated
 
 ---
