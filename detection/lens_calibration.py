@@ -160,8 +160,8 @@ class LensCalibration:
         #   cy: image center ± 20% of height
         #   k1-k4: -1 to 1 (typical fisheye range)
         x0 = np.array([f0, cx0, cy0, 0.0, 0.0, 0.0, 0.0])
-        lower = [200, cx0 - image_width * 0.2, cy0 - image_height * 0.2, -1.0, -1.0, -1.0, -1.0]
-        upper = [3000, cx0 + image_width * 0.2, cy0 + image_height * 0.2, 1.0, 1.0, 1.0, 1.0]
+        lower = [200, cx0 - image_width * 0.2, cy0 - image_height * 0.2, -5.0, -5.0, -5.0, -5.0]
+        upper = [3000, cx0 + image_width * 0.2, cy0 + image_height * 0.2, 5.0, 5.0, 5.0, 5.0]
 
         self.calibration_max_iterations = 20000
         self.calibration_iteration = 0
