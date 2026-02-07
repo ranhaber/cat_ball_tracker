@@ -1076,7 +1076,7 @@ def create_app():
                 return Response(jpeg, mimetype='image/jpeg')
             return Response(status=503)
         
-        # Otherwise stream continuously
+        # Otherwise stream continuously (rate-limited to save CPU)
         def generate():
             while True:
                 jpeg = video_processor.get_frame_jpeg()
@@ -1085,8 +1085,8 @@ def create_app():
                         b'--frame\r\n'
                         b'Content-Type: image/jpeg\r\n\r\n' + jpeg + b'\r\n'
                     )
-                else:
-                    time.sleep(0.05)
+                # Limit stream to ~10 FPS max — saves CPU on JPEG encoding
+                time.sleep(0.1)
                     
         return Response(
             generate(),
