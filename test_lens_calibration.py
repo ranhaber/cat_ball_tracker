@@ -197,7 +197,8 @@ def test_optimizer():
     k1_opt = result["k1"]
     k2_opt = result["k2"]
     k3_opt = result["k3"]
-    k4_opt = result["k4"]
+    p1_opt = result.get("p1", 0)
+    p2_opt = result.get("p2", 0)
     
     print(f"\n{'Parameter':<10} {'True':>12} {'Recovered':>12} {'Error':>12} {'Error%':>8}")
     print("-" * 56)
@@ -208,7 +209,8 @@ def test_optimizer():
         ("k1", k1_true, k1_opt),
         ("k2", k2_true, k2_opt),
         ("k3", k3_true, k3_opt),
-        ("k4", k4_true, k4_opt),
+        ("p1", 0, p1_opt),
+        ("p2", 0, p2_opt),
     ]:
         err = abs(opt_val - true_val)
         pct = abs(err / true_val * 100) if abs(true_val) > 1e-10 else 0
@@ -227,7 +229,7 @@ def test_optimizer():
     max_residual = 0
     for i, line in enumerate(lines_distorted):
         pts = np.array(line, dtype=np.float64).reshape(-1, 1, 2)
-        undist = cv2.fisheye.undistortPoints(pts, cam_opt, dist_opt, P=cam_opt)
+        undist = cv2.undistortPoints(pts, cam_opt, dist_opt, P=cam_opt)
         undist = undist.reshape(-1, 2)
         dev = max_line_deviation(undist)
         max_residual = max(max_residual, dev)

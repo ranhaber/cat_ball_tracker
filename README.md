@@ -361,6 +361,7 @@ sudo journalctl -u cat_ball_tracker -n 50
 
 ## 📝 Version History
 
+- **v2.3.2** - Lens Calibration: reverted to standard polynomial model (rectilinear lens, not fisheye); k1 negative for barrel; 8-param (f,cx,cy,k1,k2,k3,p1,p2) with bounds; convergence logging; test verified 98.2% improvement
 - **v2.3.1** - Lens Calibration: add parameter bounds (Trust Region optimizer) to prevent divergence; f=200-3000, cx/cy ±20%, k1-k4 ±1
 - **v2.3.0** - Lens Calibration: switched to OpenCV FISHEYE model (angle-based θ_d = θ(1+k1θ²+k2θ⁴+k3θ⁶+k4θ⁸)) for accurate wide-angle 120° FOV correction; 7 params (f, cx, cy, k1-k4); backward compatible with legacy standard model
 - **v2.2.6** - Lens Calibration: Delete Line button (by number) in UI, Analyze Lines button, line recovery from calibration file, delete lines API

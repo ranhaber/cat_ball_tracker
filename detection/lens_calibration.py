@@ -1,14 +1,14 @@
 """
-Lens Distortion Calibration (Plumb-Line / Fisheye Model)
+Lens Distortion Calibration (Plumb-Line Method)
 
 The user marks 3+ points on each of several straight lines visible in the
-camera image.  The optimizer finds fisheye distortion coefficients (k1, k2, k3, k4)
+camera image.  The optimizer finds distortion coefficients (k1, k2, k3, p1, p2)
 and the camera matrix (f, cx, cy) that make those points as collinear as
 possible after undistortion.
 
-Uses OpenCV's FISHEYE model (angle-based: θ_d = θ(1 + k1θ² + k2θ⁴ + k3θ⁶ + k4θ⁸))
-which is designed for wide-angle lenses (100°+ FOV). This is more accurate than
-the standard polynomial model for the RPi Camera Module 3 Wide (120° diagonal FOV).
+Uses OpenCV's standard distortion model (polynomial in r) which is suitable for
+rectilinear wide-angle lenses like the RPi Camera Module 3 Wide (120° diagonal FOV).
+k1 is constrained negative for barrel distortion.
 
 Results are saved to lens_calibration.json and loaded automatically on startup.
 pixel_to_world() uses these to undistort points before the homography.
@@ -64,17 +64,16 @@ class LensCalibration:
 
     def calibrate(self, lines, image_width, image_height):
         """
-        Run the plumb-line calibration using the OpenCV FISHEYE model.
+        Run the plumb-line calibration using the OpenCV standard distortion model.
 
-        Fisheye model: θ_d = θ(1 + k1·θ² + k2·θ⁴ + k3·θ⁶ + k4·θ⁸)
-        where θ = atan(r) is the angle from the optical axis.
-        This is more accurate than the standard polynomial model for wide-angle
-        lenses (100°+ FOV) because it operates on angles, not radii.
+        Standard model: x_d = x(1 + k1·r² + k2·r⁴ + k3·r⁶) + tangential(p1,p2)
+        Suitable for rectilinear wide-angle lenses (like RPi Camera Module 3 Wide).
 
-        Optimises 7 parameters jointly using Levenberg-Marquardt:
+        Optimises 8 parameters jointly using Trust Region Reflective:
           - f       (focal length in pixels, square pixels)
           - cx, cy  (principal point)
-          - k1, k2, k3, k4  (fisheye distortion coefficients)
+          - k1, k2, k3  (radial distortion, k1 constrained negative for barrel)
+          - p1, p2  (tangential distortion, small bounds)
 
         Args:
             lines: list of lines, each line is a list of [x, y] pixel coords
@@ -115,14 +114,14 @@ class LensCalibration:
             line_masks.append(mask)
         all_points = np.array(all_points, dtype=np.float64)
 
-        def _undistort_fisheye(params):
-            """Undistort all points with fisheye model. Returns (N,2) array."""
-            f, cx, cy, k1, k2, k3, k4 = params
+        def _undistort(params):
+            """Undistort all points with standard model. Returns (N,2) array."""
+            f, cx, cy, k1, k2, p1, p2, k3 = params
             cam = np.array([[f, 0, cx], [0, f, cy], [0, 0, 1]], dtype=np.float64)
-            D = np.array([[k1], [k2], [k3], [k4]], dtype=np.float64)
+            dist = np.array([[k1, k2, p1, p2, k3]], dtype=np.float64)
             pts = all_points.reshape(-1, 1, 2)
-            out = cv2.fisheye.undistortPoints(pts, cam, D, P=cam)
-            return out.reshape(-1, 2), cam, D
+            out = cv2.undistortPoints(pts, cam, dist, P=cam)
+            return out.reshape(-1, 2), cam, dist
 
         def _line_distances(undist_pts, mask):
             """Signed distance of each point from the best-fit line (SVD)."""
@@ -144,7 +143,7 @@ class LensCalibration:
             eval_count[0] += 1
             self.calibration_iteration = eval_count[0]
             try:
-                undist_pts, _, _ = _undistort_fisheye(params)
+                undist_pts, _, _ = _undistort(params)
             except cv2.error:
                 return np.full(len(all_points), 1e6)
             res = []
@@ -165,12 +164,13 @@ class LensCalibration:
                 prev_cost[0] = cost
             return r
 
-        # 7-parameter optimisation: f, cx, cy, k1, k2, k3, k4
-        # Bounds ensure physically valid parameters.
-        # k1 MUST be negative for barrel distortion (wide-angle lens).
-        x0 = np.array([f0, cx0, cy0, -0.1, 0.0, 0.0, 0.0])
-        lower = [200, cx0 - image_width * 0.1, cy0 - image_height * 0.1, -5.0, -5.0, -5.0, -5.0]
-        upper = [3000, cx0 + image_width * 0.1, cy0 + image_height * 0.1, 0.0, 5.0, 5.0, 5.0]
+        # 8 parameters: f, cx, cy, k1, k2, p1, p2, k3 (standard OpenCV model)
+        # k1 MUST be negative for barrel distortion (wide-angle rectilinear lens).
+        x0 = np.array([f0, cx0, cy0, -0.1, 0.0, 0.0, 0.0, 0.0])
+        lower = [200, cx0 - image_width * 0.1, cy0 - image_height * 0.1,
+                 -5.0, -5.0, -0.01, -0.01, -5.0]
+        upper = [3000, cx0 + image_width * 0.1, cy0 + image_height * 0.1,
+                 0.0, 5.0, 0.01, 0.01, 5.0]
 
         self.calibration_max_iterations = 5000
         self.calibration_iteration = 0
@@ -186,9 +186,9 @@ class LensCalibration:
             self.calibration_in_progress = False
         # Use best result found (in case optimizer overshot)
         if best_result[0] is not None and best_result[1] < result.cost:
-            f_opt, cx_opt, cy_opt, k1, k2, k3, k4 = best_result[0]
+            f_opt, cx_opt, cy_opt, k1, k2, p1, p2, k3 = best_result[0]
         else:
-            f_opt, cx_opt, cy_opt, k1, k2, k3, k4 = result.x
+            f_opt, cx_opt, cy_opt, k1, k2, p1, p2, k3 = result.x
         print(f"[LENS] Optimizer done: {eval_count[0]} evaluations, cost={result.cost:.4f}")
 
         self.camera_matrix = np.array([
@@ -196,15 +196,16 @@ class LensCalibration:
             [    0, f_opt, cy_opt],
             [    0,  0,  1]
         ], dtype=np.float64)
-        # Fisheye dist_coeffs: shape (4,1) for cv2.fisheye functions
-        self.dist_coeffs = np.array([[k1], [k2], [k3], [k4]], dtype=np.float64)
+        # Standard dist_coeffs: [k1, k2, p1, p2, k3]
+        self.dist_coeffs = np.array([[k1, k2, p1, p2, k3]], dtype=np.float64)
         self.is_calibrated = True
-        self.model_type = "fisheye"
+        self.model_type = "standard"
 
         # ---- Compute before/after stats ----
         line_errors = []
         raw_pts = all_points  # before = raw pixels
-        undist, _, _ = _undistort_fisheye(result.x)  # after = undistorted
+        best_params = best_result[0] if best_result[0] is not None and best_result[1] < result.cost else result.x
+        undist, _, _ = _undistort(best_params)  # after = undistorted
 
         total_before = 0.0
         total_after = 0.0
@@ -241,18 +242,20 @@ class LensCalibration:
         self.overall_improvement_pct = overall_improvement
         self.save()
 
-        print(f"[LENS] Calibration done (fisheye 7-param): f={f_opt:.1f}, "
+        print(f"[LENS] Calibration done (standard 8-param): f={f_opt:.1f}, "
               f"cx={cx_opt:.1f}, cy={cy_opt:.1f}, "
-              f"k1={k1:.6f}, k2={k2:.6f}, k3={k3:.6f}, k4={k4:.6f}")
+              f"k1={k1:.6f}, k2={k2:.6f}, k3={k3:.6f}, "
+              f"p1={p1:.6f}, p2={p2:.6f}")
         print(f"[LENS] Overall: before={overall_before:.2f}px, after={overall_after:.2f}px, "
               f"improvement={overall_improvement}%")
 
         return {
-            "model": "fisheye",
+            "model": "standard",
             "k1": round(k1, 8),
             "k2": round(k2, 8),
             "k3": round(k3, 8),
-            "k4": round(k4, 8),
+            "p1": round(p1, 8),
+            "p2": round(p2, 8),
             "fx": round(f_opt, 2),
             "fy": round(f_opt, 2),
             "cx": round(cx_opt, 2),
@@ -268,17 +271,12 @@ class LensCalibration:
     # ------------------------------------------------------------------
 
     def undistort_point(self, px, py):
-        """Undistort a single pixel coordinate using fisheye model.  Returns (ux, uy)."""
+        """Undistort a single pixel coordinate.  Returns (ux, uy)."""
         if not self.is_calibrated:
             return (px, py)
         pt = np.array([[[px, py]]], dtype=np.float64)
-        if self.model_type == "fisheye":
-            out = cv2.fisheye.undistortPoints(pt, self.camera_matrix, self.dist_coeffs,
-                                              P=self.camera_matrix)
-        else:
-            # Legacy: standard model (for old calibration files)
-            out = cv2.undistortPoints(pt, self.camera_matrix, self.dist_coeffs,
-                                      P=self.camera_matrix)
+        out = cv2.undistortPoints(pt, self.camera_matrix, self.dist_coeffs,
+                                  P=self.camera_matrix)
         return (float(out[0, 0, 0]), float(out[0, 0, 1]))
 
     # ------------------------------------------------------------------
@@ -286,14 +284,15 @@ class LensCalibration:
     # ------------------------------------------------------------------
 
     def save(self):
-        # Fisheye dist_coeffs: shape (4,1) = [[k1],[k2],[k3],[k4]]
+        # Standard dist_coeffs: [k1, k2, p1, p2, k3]
         dc = self.dist_coeffs.flatten()
         data = {
             "model_type": self.model_type,
             "k1": float(dc[0]),
             "k2": float(dc[1]),
-            "k3": float(dc[2]) if len(dc) > 2 else 0.0,
-            "k4": float(dc[3]) if len(dc) > 3 else 0.0,
+            "p1": float(dc[2]) if len(dc) > 2 else 0.0,
+            "p2": float(dc[3]) if len(dc) > 3 else 0.0,
+            "k3": float(dc[4]) if len(dc) > 4 else 0.0,
             "camera_matrix": self.camera_matrix.tolist(),
             "image_width": self.image_width,
             "image_height": self.image_height,
@@ -312,18 +311,13 @@ class LensCalibration:
             with open(self.calibration_file, 'r') as f:
                 data = json.load(f)
             self.camera_matrix = np.array(data["camera_matrix"], dtype=np.float64)
-            self.model_type = data.get("model_type", "standard")
+            self.model_type = "standard"
             k1 = data.get("k1", 0)
             k2 = data.get("k2", 0)
+            p1 = data.get("p1", 0)
+            p2 = data.get("p2", 0)
             k3 = data.get("k3", 0)
-            k4 = data.get("k4", 0)
-            if self.model_type == "fisheye":
-                self.dist_coeffs = np.array([[k1], [k2], [k3], [k4]], dtype=np.float64)
-            else:
-                # Legacy standard model
-                p1 = data.get("p1", 0)
-                p2 = data.get("p2", 0)
-                self.dist_coeffs = np.array([[k1, k2, p1, p2, k3]], dtype=np.float64)
+            self.dist_coeffs = np.array([[k1, k2, p1, p2, k3]], dtype=np.float64)
             self.image_width = data.get("image_width", 0)
             self.image_height = data.get("image_height", 0)
             self.lines = data.get("lines", [])
@@ -333,8 +327,9 @@ class LensCalibration:
             self.overall_improvement_pct = data.get("overall_improvement_pct", 0.0)
             if self.is_calibrated:
                 f = self.camera_matrix[0, 0]
-                print(f"[LENS] Loaded ({self.model_type}): f={f:.1f}, "
-                      f"k1={k1:.6f}, k2={k2:.6f}, k3={k3:.6f}, k4={k4:.6f}, "
+                print(f"[LENS] Loaded: f={f:.1f}, "
+                      f"k1={k1:.6f}, k2={k2:.6f}, k3={k3:.6f}, "
+                      f"p1={p1:.6f}, p2={p2:.6f}, "
                       f"{self.image_width}x{self.image_height}")
         except Exception as e:
             print(f"[LENS] Error loading {self.calibration_file}: {e}")
@@ -613,11 +608,12 @@ class LensCalibration:
         dc = self.dist_coeffs.flatten()
         return {
             "is_calibrated": True,
-            "model": self.model_type,
+            "model": "standard",
             "k1": round(float(dc[0]), 8),
             "k2": round(float(dc[1]), 8),
-            "k3": round(float(dc[2]), 8) if len(dc) > 2 else 0,
-            "k4": round(float(dc[3]), 8) if len(dc) > 3 else 0,
+            "p1": round(float(dc[2]), 8) if len(dc) > 2 else 0,
+            "p2": round(float(dc[3]), 8) if len(dc) > 3 else 0,
+            "k3": round(float(dc[4]), 8) if len(dc) > 4 else 0,
             "fx": round(float(self.camera_matrix[0, 0]), 2),
             "fy": round(float(self.camera_matrix[1, 1]), 2),
             "cx": round(float(self.camera_matrix[0, 2]), 2),
