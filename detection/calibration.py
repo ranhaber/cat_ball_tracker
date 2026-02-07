@@ -39,6 +39,9 @@ class CameraCalibration:
         # Calibration status
         self.is_calibrated = False
         
+        # Original user-entered side lengths (preserved for UI)
+        self.user_side_lengths = []
+        
         # Real-world bounds (for mini-map scaling)
         self.world_bounds = {
             "min_x": 0, "max_x": 10,
@@ -115,6 +118,9 @@ class CameraCalibration:
         if any(l <= 0 for l in lengths):
             print("Error: All side lengths must be positive")
             return False
+
+        # Store original user-entered side lengths for UI restoration
+        self.user_side_lengths = lengths.copy()
 
         # Pixel winding: cross product of P0P1 x P1P2 in image coords (y down).
         cross_px = ((points_pixel[1][0] - points_pixel[0][0]) *
@@ -251,8 +257,16 @@ class CameraCalibration:
                 wy = world_pts[i - 1][1] - length_m * (ddy / length_px)
                 world_pts.append([wx, wy])
 
+            # Check closure: distance from last point back to P0 vs user's last side length
+            closing_dx = world_pts[0][0] - world_pts[-1][0]
+            closing_dy = world_pts[0][1] - world_pts[-1][1]
+            closing_computed = math.sqrt(closing_dx * closing_dx + closing_dy * closing_dy)
+            closing_user = lengths[-1]
+            closure_error = abs(closing_computed - closing_user)
             print(f"[CALIBRATION] {n}-point world coords: "
                   f"{[f'({p[0]:.3f},{p[1]:.3f})' for p in world_pts]}")
+            print(f"[CALIBRATION] Closing side: user={closing_user:.3f}m, "
+                  f"computed={closing_computed:.3f}m, error={closure_error:.3f}m")
 
         points = [
             {"pixel": list(points_pixel[i]), "world": world_pts[i]}
@@ -423,6 +437,7 @@ class CameraCalibration:
         self.transform_matrix = None
         self.inverse_matrix = None
         self.is_calibrated = False
+        self.user_side_lengths = []
         
         # Delete saved file
         if os.path.exists(self.calibration_file):
@@ -436,7 +451,8 @@ class CameraCalibration:
             data = {
                 "points": self.calibration_points,
                 "world_bounds": self.world_bounds,
-                "is_calibrated": self.is_calibrated
+                "is_calibrated": self.is_calibrated,
+                "user_side_lengths": self.user_side_lengths
             }
             with open(self.calibration_file, 'w') as f:
                 json.dump(data, f, indent=2)
@@ -455,6 +471,7 @@ class CameraCalibration:
                 self.calibration_points = points
                 self._compute_transform()
                 self.world_bounds = data.get("world_bounds", self.world_bounds)
+                self.user_side_lengths = data.get("user_side_lengths", [])
                 print(f"Calibration loaded from {self.calibration_file} ({len(points)} points)")
             else:
                 print(f"Invalid calibration file - need at least 4 points, got {len(points)}")
@@ -518,5 +535,6 @@ class CameraCalibration:
         return {
             "is_calibrated": self.is_calibrated,
             "points": self.calibration_points,
-            "world_bounds": self.world_bounds
+            "world_bounds": self.world_bounds,
+            "user_side_lengths": self.user_side_lengths
         }

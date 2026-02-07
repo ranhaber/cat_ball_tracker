@@ -2,7 +2,7 @@
 
 A real-time cat and ball detection system for Raspberry Pi Zero 2W with Camera Module 3. Features motion-first detection for efficiency, a web interface for live streaming, and zone-based tracking.
 
-**Version:** 2.4.0
+**Version:** 2.4.1
 
 ---
 
@@ -94,7 +94,7 @@ cat_ball_tracker/
 ├── README.md                    # This file
 ├── requirements.txt             # Python dependencies
 ├── config.py                    # Configuration settings
-├── main.py                      # Application entry point (v2.4.0)
+├── main.py                      # Application entry point (v2.4.1)
 ├── settings.py                  # Settings persistence
 ├── cat_dome.service             # Systemd service file
 ├── start_Cat_Dome.sh            # Startup wrapper with logging
@@ -386,6 +386,7 @@ sudo journalctl -u cat_ball_tracker -n 50
 
 ## 📝 Version History
 
+- **v2.4.1** - Fix: preserve user-entered side lengths (no longer replaced by recomputed values); persist original side lengths in calibration file; fix N-point side length restore on page reload; closure error diagnostic logging
 - **v2.4.0** - Multi-point calibration: 4+ points with N side lengths; 5+ points use findHomography (least-squares best-fit); dynamic side length inputs in UI; better accuracy across entire image
 - **v2.3.3** - Fix: top-down view and calibration now consistently undistort pixels; homography computed in undistorted space; zone pixels undistorted before homography
 - **v2.3.2** - Lens Calibration: reverted to standard polynomial model (rectilinear lens, not fisheye); k1 negative for barrel; 8-param (f,cx,cy,k1,k2,k3,p1,p2) with bounds; convergence logging; test verified 98.2% improvement

@@ -719,8 +719,10 @@ async function loadCalibrationStatus() {
         
         if (data.points && Array.isArray(data.points) && data.points.length > 0) {
             calibrationPoints = data.points;
-            if (data.side_lengths && Array.isArray(data.side_lengths) && data.side_lengths.length === 4) {
-                calibrationSideLengths = data.side_lengths.map(v => v);
+            // Prefer original user-entered side lengths over recomputed ones
+            const savedLengths = data.user_side_lengths || data.side_lengths;
+            if (savedLengths && Array.isArray(savedLengths) && savedLengths.length >= 4) {
+                calibrationSideLengths = savedLengths.map(v => v);
             }
             updateCalibrationPointsUI();
         }
@@ -736,10 +738,11 @@ function updateCalibrationStatusUI(data) {
     const statusEl = document.getElementById('calibration-status');
     if (statusEl) {
         if (data.is_calibrated) {
-            statusEl.textContent = 'Calibrated (4 points)';
+            const nPts = data.points ? data.points.length : calibrationPoints.length;
+            statusEl.textContent = `Calibrated (${nPts} points)`;
             statusEl.style.color = '#3fb950';
         } else if (calibrationPoints.length > 0) {
-            statusEl.textContent = `${calibrationPoints.length}/4 points defined`;
+            statusEl.textContent = `${calibrationPoints.length} points (need 4+)`;
             statusEl.style.color = '#d29922';
         } else {
             statusEl.textContent = 'Not calibrated';
@@ -755,7 +758,7 @@ async function saveCalibrationPoints() {
     }
     const lengths = calibrationSideLengths.map(v => v === null || v === '' ? null : parseFloat(v));
     if (lengths.some(v => v === null || isNaN(v) || v < 0)) {
-        alert('Please enter all 4 side lengths (positive numbers in meters)');
+        alert('Please enter all side lengths (positive numbers in meters)');
         return;
     }
     
@@ -781,8 +784,10 @@ async function saveCalibrationPoints() {
             const data = await response.json();
             if (data.calibration && data.calibration.points) {
                 calibrationPoints = data.calibration.points;
-                if (data.calibration.side_lengths) {
-                    calibrationSideLengths = data.calibration.side_lengths.map(v => v);
+                // Prefer original user-entered side lengths over recomputed ones
+                const savedLengths = data.calibration.user_side_lengths || data.calibration.side_lengths;
+                if (savedLengths && savedLengths.length > 0) {
+                    calibrationSideLengths = savedLengths.map(v => v);
                 }
             }
             updateCalibrationPointsUI();

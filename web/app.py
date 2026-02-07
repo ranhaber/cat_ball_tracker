@@ -748,8 +748,10 @@ class VideoProcessor:
         if self.calibration:
             out = self.calibration.to_json()
             out["side_lengths"] = self.calibration.get_side_lengths()
+            # Return original user-entered side lengths if available
+            out["user_side_lengths"] = self.calibration.user_side_lengths
             return out
-        return {"is_calibrated": False, "points": [], "world_bounds": config.DEFAULT_WORLD_BOUNDS, "side_lengths": []}
+        return {"is_calibrated": False, "points": [], "world_bounds": config.DEFAULT_WORLD_BOUNDS, "side_lengths": [], "user_side_lengths": []}
     
     def _undistort_pixels(self, points_pixel):
         """Undistort pixel coordinates if lens calibration is available.
