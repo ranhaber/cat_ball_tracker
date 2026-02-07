@@ -287,38 +287,51 @@
                         </div>
                     </div>
 
-                    <!-- 4-Point Calibration for Perspective Transform -->
+                    <!-- Multi-Rectangle Calibration for Perspective Transform -->
                     <div class="control-section">
                         <h2>Perspective Calibration</h2>
-                        <p>Click the same 4 corners as the Detection Zone, in the same order. Then enter the <strong>length of each side of the polygon</strong> in meters (sides: 1→2, 2→3, 3→4, 4→1).</p>
+                        <p>Add one or more <strong>rectangles</strong> with known dimensions. Place the first rectangle spanning the full detection area. Add more at different positions for better accuracy.</p>
                         <div class="calibration-editor">
                             <div class="editor-toolbar">
                                 <button id="load-snapshot-calibration" class="btn btn-primary">📷 Load Camera Frame</button>
+                                <button id="add-rectangle" class="btn btn-success" disabled>➕ Add Rectangle</button>
                                 <button id="save-calibration" class="btn btn-success" disabled>💾 Save Calibration</button>
-                                <button id="clear-calibration" class="btn btn-secondary">🗑️ Clear</button>
+                                <button id="clear-calibration" class="btn btn-secondary">🗑️ Clear All</button>
                             </div>
                             <div class="canvas-container">
                                 <canvas id="calibration-canvas" width="640" height="480"></canvas>
                                 <p class="canvas-hint" id="calibration-hint">Click "Load Camera Frame" to start</p>
                             </div>
                             
-                            <!-- Calibration Points List -->
-                            <div class="calibration-points-list" id="calibration-points-list">
-                                <p><strong>Calibration Points:</strong> <span id="calibration-points-count">0 (min 4)</span></p>
-                                <div id="points-container"></div>
-                                <div id="side-lengths-container" class="side-lengths-container" style="display: none;"></div>
-                                <div id="diagonal-container" class="side-lengths-container" style="display: none;">
+                            <!-- Current rectangle being defined -->
+                            <div id="current-rect-panel">
+                                <p><strong>Current Rectangle:</strong> <span id="current-rect-points">Click 4 corners</span></p>
+                                <div id="rect-dimensions" style="display: none;">
                                     <div class="side-length-row">
-                                        <label>Diagonal (Point 1→3) <small style="color:#aaa;">(optional, for non-rectangles)</small></label>
-                                        <input type="number" id="calibration-diagonal" class="side-length-input" step="0.01" min="0" placeholder="meters">
+                                        <label>Width (Side 1→2 and 3→4)</label>
+                                        <input type="number" id="rect-width" class="side-length-input" step="0.01" min="0" placeholder="meters">
+                                    </div>
+                                    <div class="side-length-row">
+                                        <label>Height (Side 2→3 and 4→1)</label>
+                                        <input type="number" id="rect-height" class="side-length-input" step="0.01" min="0" placeholder="meters">
+                                    </div>
+                                    <div class="side-length-row">
+                                        <label>Diagonal 1→3 <small style="color:#aaa;">(optional, for non-rectangles)</small></label>
+                                        <input type="number" id="rect-diagonal" class="side-length-input" step="0.01" min="0" placeholder="meters">
                                     </div>
                                 </div>
+                            </div>
+                            
+                            <!-- List of added rectangles -->
+                            <div id="rectangles-list">
+                                <p><strong>Rectangles:</strong> <span id="rectangles-count">0</span></p>
+                                <div id="rectangles-container"></div>
                             </div>
                             
                             <div class="calibration-info">
                                 <p>Status: <strong id="calibration-status">Not calibrated</strong></p>
                             </div>
-                            <p class="hint">Click 4 points (same order as Detection Zone). Enter side lengths in meters. For non-rectangle polygons, also enter the diagonal (Point 1→3) for exact accuracy.</p>
+                            <p class="hint">Click 4 corners of a rectangle → enter width &amp; height → "Add Rectangle". Repeat for more rectangles. Then "Save Calibration".</p>
                         </div>
                     </div>
 

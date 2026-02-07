@@ -784,6 +784,16 @@ class VideoProcessor:
             return self.calibration.set_calibration_from_side_lengths(points_pixel, side_lengths, diagonal=diagonal)
         return False
     
+    def set_calibration_from_rectangles(self, rectangles):
+        """Set calibration from multiple rectangles.
+        Undistorts pixels first if lens calibration is available."""
+        if self.calibration:
+            # Undistort pixel points in each rectangle
+            for rect in rectangles:
+                rect["pixels"] = self._undistort_pixels(rect["pixels"])
+            return self.calibration.set_calibration_from_rectangles(rectangles)
+        return False
+    
     def clear_calibration(self):
         """Clear calibration"""
         if self.calibration:
@@ -1389,40 +1399,60 @@ def create_app():
     
     @app.route('/api/calibration', methods=['POST'])
     def set_calibration():
-        """Set calibration: either (points with pixel+world) or (points with pixel only + side_lengths)."""
+        """Set calibration from rectangles, side_lengths, or full points."""
         data = request.get_json()
-        points = data.get('points', [])
-        side_lengths = data.get('side_lengths', [])
+        rectangles = data.get('rectangles', [])
         
-        if len(points) < 4:
-            return jsonify({"error": "At least 4 calibration points required"}), 400
-        
-        if side_lengths:
-            # Calibration from side lengths: points need only pixel coords; first point = (0,0), right = +X, up = +Y
-            if len(side_lengths) != len(points):
-                return jsonify({"error": f"Need {len(points)} side lengths to match {len(points)} points"}), 400
-            points_pixel = []
-            for i, p in enumerate(points):
-                if "pixel" not in p:
-                    return jsonify({"error": f"Point {i+1} missing 'pixel' coordinates"}), 400
-                points_pixel.append(p["pixel"] if len(p["pixel"]) == 2 else [float(p["pixel"][0]), float(p["pixel"][1])])
-            try:
-                side_lengths = [float(x) for x in side_lengths]
-            except (TypeError, ValueError):
-                return jsonify({"error": "Side lengths must be numbers (meters)"}), 400
-            diagonal = data.get('diagonal', None)
-            if diagonal is not None:
+        if rectangles:
+            # Multi-rectangle calibration
+            for i, rect in enumerate(rectangles):
+                if not rect.get("pixels") or len(rect["pixels"]) != 4:
+                    return jsonify({"error": f"Rectangle {i+1} needs exactly 4 pixel points"}), 400
+                if not rect.get("side_lengths") or len(rect["side_lengths"]) != 4:
+                    return jsonify({"error": f"Rectangle {i+1} needs exactly 4 side lengths"}), 400
                 try:
-                    diagonal = float(diagonal)
-                except (TypeError, ValueError):
-                    return jsonify({"error": "Diagonal must be a number (meters)"}), 400
-            success = video_processor.set_calibration_from_side_lengths(points_pixel, side_lengths, diagonal=diagonal)
+                    rect["side_lengths"] = [float(x) for x in rect["side_lengths"]]
+                    rect["pixels"] = [[float(p[0]), float(p[1])] for p in rect["pixels"]]
+                except (TypeError, ValueError, IndexError):
+                    return jsonify({"error": f"Rectangle {i+1} has invalid data"}), 400
+                if rect.get("diagonal") is not None:
+                    try:
+                        rect["diagonal"] = float(rect["diagonal"])
+                    except (TypeError, ValueError):
+                        rect["diagonal"] = None
+            success = video_processor.set_calibration_from_rectangles(rectangles)
         else:
-            # Legacy: full points with pixel and world
-            for i, p in enumerate(points):
-                if "pixel" not in p or "world" not in p:
-                    return jsonify({"error": f"Point {i+1} missing 'pixel' or 'world' coordinates"}), 400
-            success = video_processor.set_calibration(points)
+            # Legacy: side_lengths or full points
+            points = data.get('points', [])
+            side_lengths = data.get('side_lengths', [])
+            
+            if len(points) < 4:
+                return jsonify({"error": "At least 4 calibration points or 1 rectangle required"}), 400
+            
+            if side_lengths:
+                if len(side_lengths) != len(points):
+                    return jsonify({"error": f"Need {len(points)} side lengths to match {len(points)} points"}), 400
+                points_pixel = []
+                for i, p in enumerate(points):
+                    if "pixel" not in p:
+                        return jsonify({"error": f"Point {i+1} missing 'pixel' coordinates"}), 400
+                    points_pixel.append(p["pixel"] if len(p["pixel"]) == 2 else [float(p["pixel"][0]), float(p["pixel"][1])])
+                try:
+                    side_lengths = [float(x) for x in side_lengths]
+                except (TypeError, ValueError):
+                    return jsonify({"error": "Side lengths must be numbers (meters)"}), 400
+                diagonal = data.get('diagonal', None)
+                if diagonal is not None:
+                    try:
+                        diagonal = float(diagonal)
+                    except (TypeError, ValueError):
+                        return jsonify({"error": "Diagonal must be a number (meters)"}), 400
+                success = video_processor.set_calibration_from_side_lengths(points_pixel, side_lengths, diagonal=diagonal)
+            else:
+                for i, p in enumerate(points):
+                    if "pixel" not in p or "world" not in p:
+                        return jsonify({"error": f"Point {i+1} missing 'pixel' or 'world' coordinates"}), 400
+                success = video_processor.set_calibration(points)
         
         if success:
             return jsonify({

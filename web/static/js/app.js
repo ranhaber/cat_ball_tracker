@@ -473,13 +473,12 @@ async function loadMotionSettings() {
 }
 
 // ============================================================================
-// Calibration Controls
+// Calibration Controls (Multi-Rectangle)
 // ============================================================================
 let calibrationCanvas, calibrationCtx;
 let calibrationImage = null;
-let calibrationPoints = [];  // Array of { pixel: [x,y], world?: [x,y] } (world set from side lengths or loaded)
-let calibrationSideLengths = [];  // N side lengths in meters, dynamic size
-let calibrationDiagonal = null;  // Optional diagonal P0->P2 in meters (for non-rectangle quads)
+let currentRectPoints = [];     // Points being clicked for current rectangle (up to 4)
+let calibrationRectangles = []; // Array of saved rectangles: {pixels, side_lengths, diagonal}
 
 function initCalibration() {
     calibrationCanvas = document.getElementById('calibration-canvas');
@@ -487,23 +486,16 @@ function initCalibration() {
     
     calibrationCtx = calibrationCanvas.getContext('2d');
     
-    // Load snapshot button
     document.getElementById('load-snapshot-calibration')?.addEventListener('click', loadCalibrationSnapshot);
-    
-    // Save button
-    document.getElementById('save-calibration')?.addEventListener('click', saveCalibrationPoints);
-    
-    // Clear button
+    document.getElementById('add-rectangle')?.addEventListener('click', addCurrentRectangle);
+    document.getElementById('save-calibration')?.addEventListener('click', saveCalibrationRectangles);
     document.getElementById('clear-calibration')?.addEventListener('click', clearCalibration);
     
-    // Canvas click handler
     calibrationCanvas.addEventListener('click', handleCalibrationClick);
     
-    // Load saved calibration
     loadCalibrationStatus();
 }
 
-// Store the actual calibration image resolution
 let calibrationImageWidth = 640;
 let calibrationImageHeight = 480;
 
@@ -517,17 +509,11 @@ async function loadCalibrationSnapshot() {
         
         calibrationImage = new Image();
         calibrationImage.onload = () => {
-            // Store actual image dimensions (camera resolution)
             calibrationImageWidth = calibrationImage.width;
             calibrationImageHeight = calibrationImage.height;
-            
-            // Set canvas to actual image size for full resolution
             calibrationCanvas.width = calibrationImageWidth;
             calibrationCanvas.height = calibrationImageHeight;
-            
-            // Mark container as having image
             calibrationCanvas.parentElement.classList.add('has-image');
-            
             drawCalibration();
             if (btn) btn.textContent = `📷 Refresh (${calibrationImageWidth}x${calibrationImageHeight})`;
         };
@@ -545,18 +531,8 @@ function handleCalibrationClick(e) {
         return;
     }
     
-    // If the current points are from a saved calibration (have world coords),
-    // clear them so the user starts fresh with new clicks.
-    if (calibrationPoints.length > 0 && calibrationPoints[0].world) {
-        calibrationPoints = [];
-        calibrationSideLengths = [];
-        calibrationDiagonal = null;
-        const diagInput = document.getElementById('calibration-diagonal');
-        if (diagInput) diagInput.value = '';
-    }
-    
-    if (calibrationPoints.length >= 20) {
-        alert('Maximum 20 points reached.');
+    if (currentRectPoints.length >= 4) {
+        alert('Already have 4 corners. Click "Add Rectangle" to save it, or clear.');
         return;
     }
     
@@ -567,177 +543,229 @@ function handleCalibrationClick(e) {
     const px = Math.round((e.clientX - rect.left) * scaleX);
     const py = Math.round((e.clientY - rect.top) * scaleY);
     
-    // Add point (pixel only; world derived from side lengths when saving)
-    calibrationPoints.push({ pixel: [px, py] });
+    currentRectPoints.push([px, py]);
     
-    updateCalibrationPointsUI();
+    updateCalibrationUI();
     drawCalibration();
 }
 
 function drawCalibration() {
     if (!calibrationCtx) return;
+    const ctx = calibrationCtx;
+    const canvas = calibrationCanvas;
     
-    // Draw background image or black
+    // Background
     if (calibrationImage) {
-        calibrationCtx.drawImage(calibrationImage, 0, 0, calibrationCanvas.width, calibrationCanvas.height);
+        ctx.drawImage(calibrationImage, 0, 0, canvas.width, canvas.height);
     } else {
-        calibrationCtx.fillStyle = '#000';
-        calibrationCtx.fillRect(0, 0, calibrationCanvas.width, calibrationCanvas.height);
+        ctx.fillStyle = '#000';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
     }
     
-    // Draw polygon outline connecting points (if 2+ points)
-    if (calibrationPoints.length >= 2) {
-        calibrationCtx.strokeStyle = 'rgba(255, 255, 0, 0.6)';
-        calibrationCtx.lineWidth = 2;
-        calibrationCtx.setLineDash([6, 4]);
-        calibrationCtx.beginPath();
-        const [sx, sy] = calibrationPoints[0].pixel;
-        calibrationCtx.moveTo(sx, sy);
-        for (let i = 1; i < calibrationPoints.length; i++) {
-            const [cx, cy] = calibrationPoints[i].pixel;
-            calibrationCtx.lineTo(cx, cy);
-        }
-        if (calibrationPoints.length >= 3) {
-            calibrationCtx.closePath();
-        }
-        calibrationCtx.stroke();
-        calibrationCtx.setLineDash([]);
-    }
+    // Rectangle colors
+    const rectColors = ['#00ff00', '#00bfff', '#ff8800', '#ff00ff', '#ffff00'];
     
-    // Colors for each point
-    const colors = ['#ff0000', '#00ff00', '#0000ff', '#ffff00', '#ff00ff', '#00ffff', '#ff8800'];
-    
-    // Draw calibration points
-    calibrationPoints.forEach((point, index) => {
-        const [px, py] = point.pixel;
-        const hasWorld = point.world && point.world.length === 2;
-        const label = hasWorld ? `(${point.world[0].toFixed(1)}m, ${point.world[1].toFixed(1)}m)` : (index === 0 ? '0,0' : `Point ${index + 1}`);
-        const color = colors[index % colors.length];
+    // Draw saved rectangles
+    calibrationRectangles.forEach((rect, rIdx) => {
+        const color = rectColors[rIdx % rectColors.length];
+        const pts = rect.pixels;
         
-        // Draw point circle
-        calibrationCtx.fillStyle = color;
-        calibrationCtx.beginPath();
-        calibrationCtx.arc(px, py, 10, 0, Math.PI * 2);
-        calibrationCtx.fill();
+        // Draw rectangle outline
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 2;
+        ctx.setLineDash([]);
+        ctx.beginPath();
+        ctx.moveTo(pts[0][0], pts[0][1]);
+        for (let i = 1; i < 4; i++) ctx.lineTo(pts[i][0], pts[i][1]);
+        ctx.closePath();
+        ctx.stroke();
         
-        // Draw white border
-        calibrationCtx.strokeStyle = '#fff';
-        calibrationCtx.lineWidth = 2;
-        calibrationCtx.stroke();
+        // Fill translucent
+        ctx.fillStyle = color.replace(')', ', 0.1)').replace('rgb', 'rgba').replace('#', '');
+        // Use hex to rgba
+        const r = parseInt(color.slice(1,3), 16), g = parseInt(color.slice(3,5), 16), b = parseInt(color.slice(5,7), 16);
+        ctx.fillStyle = `rgba(${r},${g},${b},0.1)`;
+        ctx.fill();
         
-        // Draw point number
-        calibrationCtx.fillStyle = '#fff';
-        calibrationCtx.font = 'bold 14px sans-serif';
-        calibrationCtx.textAlign = 'center';
-        calibrationCtx.textBaseline = 'middle';
-        calibrationCtx.fillText(String(index + 1), px, py);
+        // Draw corner numbers
+        pts.forEach((pt, pIdx) => {
+            ctx.fillStyle = color;
+            ctx.beginPath();
+            ctx.arc(pt[0], pt[1], 8, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.strokeStyle = '#fff';
+            ctx.lineWidth = 2;
+            ctx.stroke();
+            ctx.fillStyle = '#fff';
+            ctx.font = 'bold 12px sans-serif';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(String(pIdx + 1), pt[0], pt[1]);
+        });
         
-        // Draw label (world coords or "0,0" / "Point N")
-        calibrationCtx.font = 'bold 12px sans-serif';
-        calibrationCtx.textBaseline = 'top';
-        const metrics = calibrationCtx.measureText(label);
-        calibrationCtx.fillStyle = 'rgba(0,0,0,0.7)';
-        calibrationCtx.fillRect(px - metrics.width/2 - 3, py + 15, metrics.width + 6, 18);
-        calibrationCtx.fillStyle = color;
-        calibrationCtx.fillText(label, px, py + 17);
+        // Label
+        const cx = (pts[0][0] + pts[2][0]) / 2;
+        const cy = (pts[0][1] + pts[2][1]) / 2;
+        const w = rect.side_lengths[0], h = rect.side_lengths[1];
+        const label = `Rect ${rIdx + 1}: ${w}×${h}m`;
+        ctx.font = 'bold 13px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        const m = ctx.measureText(label);
+        ctx.fillStyle = 'rgba(0,0,0,0.75)';
+        ctx.fillRect(cx - m.width/2 - 5, cy - 10, m.width + 10, 20);
+        ctx.fillStyle = color;
+        ctx.fillText(label, cx, cy);
     });
     
-    // Draw hint if less than 4 points
-    if (calibrationPoints.length < 4) {
-        const hint = `Click to add point ${calibrationPoints.length + 1} (need 4+)`;
-        calibrationCtx.fillStyle = 'rgba(0,0,0,0.7)';
-        calibrationCtx.fillRect(10, 10, 200, 25);
-        calibrationCtx.fillStyle = '#fff';
-        calibrationCtx.font = '14px sans-serif';
-        calibrationCtx.textAlign = 'left';
-        calibrationCtx.textBaseline = 'middle';
-        calibrationCtx.fillText(hint, 20, 22);
+    // Draw current rectangle in progress (yellow dashed)
+    if (currentRectPoints.length > 0) {
+        ctx.strokeStyle = 'rgba(255, 255, 0, 0.8)';
+        ctx.lineWidth = 2;
+        ctx.setLineDash([6, 4]);
+        ctx.beginPath();
+        ctx.moveTo(currentRectPoints[0][0], currentRectPoints[0][1]);
+        for (let i = 1; i < currentRectPoints.length; i++) {
+            ctx.lineTo(currentRectPoints[i][0], currentRectPoints[i][1]);
+        }
+        if (currentRectPoints.length === 4) ctx.closePath();
+        ctx.stroke();
+        ctx.setLineDash([]);
+        
+        // Draw current points
+        currentRectPoints.forEach((pt, i) => {
+            ctx.fillStyle = '#ffff00';
+            ctx.beginPath();
+            ctx.arc(pt[0], pt[1], 10, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.strokeStyle = '#fff';
+            ctx.lineWidth = 2;
+            ctx.stroke();
+            ctx.fillStyle = '#000';
+            ctx.font = 'bold 14px sans-serif';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(String(i + 1), pt[0], pt[1]);
+        });
     }
+    
+    // Hint
+    const hintText = currentRectPoints.length < 4
+        ? `Click corner ${currentRectPoints.length + 1}/4 for rectangle ${calibrationRectangles.length + 1}`
+        : `Enter dimensions → "Add Rectangle"`;
+    ctx.fillStyle = 'rgba(0,0,0,0.7)';
+    ctx.fillRect(10, 10, ctx.measureText(hintText).width + 20, 25);
+    ctx.fillStyle = '#fff';
+    ctx.font = '14px sans-serif';
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(hintText, 20, 22);
 }
 
-function updateCalibrationPointsUI() {
-    const countEl = document.getElementById('calibration-points-count');
-    const containerEl = document.getElementById('points-container');
-    const sideLengthsEl = document.getElementById('side-lengths-container');
+function updateCalibrationUI() {
+    const countEl = document.getElementById('current-rect-points');
+    const dimsEl = document.getElementById('rect-dimensions');
+    const addBtn = document.getElementById('add-rectangle');
     const saveBtn = document.getElementById('save-calibration');
+    const rectsCountEl = document.getElementById('rectangles-count');
+    const rectsContainer = document.getElementById('rectangles-container');
     
+    // Current rectangle status
     if (countEl) {
-        countEl.textContent = calibrationPoints.length < 4 
-            ? `${calibrationPoints.length} (min 4)` 
-            : `${calibrationPoints.length} points`;
+        if (currentRectPoints.length < 4) {
+            countEl.textContent = `${currentRectPoints.length}/4 corners clicked`;
+        } else {
+            countEl.textContent = '4 corners ✓ — enter dimensions below';
+        }
     }
     
-    const hasFour = calibrationPoints.length >= 4;
+    // Show dimensions inputs when 4 points clicked
+    if (dimsEl) {
+        dimsEl.style.display = currentRectPoints.length === 4 ? 'block' : 'none';
+    }
+    
+    // Add Rectangle button
+    if (addBtn) {
+        const w = parseFloat(document.getElementById('rect-width')?.value);
+        const h = parseFloat(document.getElementById('rect-height')?.value);
+        addBtn.disabled = currentRectPoints.length !== 4 || !w || w <= 0 || !h || h <= 0;
+    }
+    
+    // Save button enabled when at least 1 rectangle exists
     if (saveBtn) {
-        saveBtn.disabled = !hasFour || calibrationSideLengths.some(v => v === null || v === '' || isNaN(parseFloat(v)));
+        saveBtn.disabled = calibrationRectangles.length === 0;
     }
     
-    // Points list: short labels (Point 1 = 0,0, Point 2, 3, 4) with remove
-    if (containerEl) {
-        containerEl.innerHTML = '';
-        const colors = ['#ff0000', '#00ff00', '#0000ff', '#ffff00'];
-        calibrationPoints.forEach((point, index) => {
-            const label = index === 0 ? 'Point 1 (origin 0,0)' : `Point ${index + 1}`;
+    // Rectangles list
+    if (rectsCountEl) {
+        rectsCountEl.textContent = calibrationRectangles.length === 0
+            ? '0 — add at least one rectangle'
+            : `${calibrationRectangles.length} rectangle(s)`;
+    }
+    if (rectsContainer) {
+        rectsContainer.innerHTML = '';
+        calibrationRectangles.forEach((rect, i) => {
+            const w = rect.side_lengths[0], h = rect.side_lengths[1];
+            const diag = rect.diagonal ? `, diag=${rect.diagonal}m` : '';
             const div = document.createElement('div');
             div.className = 'calibration-point-item';
             div.innerHTML = `
-                <span class="point-label" style="color: ${colors[index]}">${label}</span>
-                <button class="remove-point" data-index="${index}">✕</button>
+                <span class="point-label" style="color: ${['#00ff00','#00bfff','#ff8800','#ff00ff','#ffff00'][i % 5]}">
+                    Rect ${i + 1}: ${w}×${h}m${diag}
+                </span>
+                <button class="remove-point" data-index="${i}">✕</button>
             `;
-            containerEl.appendChild(div);
-        });
-        containerEl.querySelectorAll('.remove-point').forEach(btn => {
-            btn.addEventListener('click', (e) => {
-                const index = parseInt(e.target.dataset.index);
-                calibrationPoints.splice(index, 1);
-                calibrationSideLengths = [];
-                updateCalibrationPointsUI();
+            div.querySelector('.remove-point').addEventListener('click', () => {
+                calibrationRectangles.splice(i, 1);
+                updateCalibrationUI();
                 drawCalibration();
             });
+            rectsContainer.appendChild(div);
         });
     }
     
-    // Side lengths (shown when 4+ points, dynamic count)
-    if (sideLengthsEl) {
-        if (hasFour) {
-            const nPts = calibrationPoints.length;
-            // Ensure calibrationSideLengths array matches point count
-            while (calibrationSideLengths.length < nPts) calibrationSideLengths.push(null);
-            while (calibrationSideLengths.length > nPts) calibrationSideLengths.pop();
-            
-            sideLengthsEl.style.display = 'block';
-            sideLengthsEl.innerHTML = '<p><strong>Side lengths (meters):</strong></p>' +
-                Array.from({length: nPts}, (_, i) => {
-                    const val = calibrationSideLengths[i];
-                    const v = val !== null && val !== '' ? val : '';
-                    const next = i === nPts - 1 ? 1 : i + 2;
-                    return `<div class="side-length-row">
-                        <label>Side ${i + 1} (Point ${i + 1}→${next})</label>
-                        <input type="number" step="0.01" min="0" data-side="${i}" class="side-length-input" value="${v}" placeholder="meters">
-                    </div>`;
-                }).join('');
-            sideLengthsEl.querySelectorAll('.side-length-input').forEach(input => {
-                input.addEventListener('input', (e) => {
-                    const idx = parseInt(e.target.dataset.side);
-                    const v = e.target.value.trim();
-                    calibrationSideLengths[idx] = v === '' ? null : parseFloat(v);
-                    if (saveBtn) saveBtn.disabled = calibrationSideLengths.some(v => v === null || v === '' || isNaN(parseFloat(v)));
-                });
-            });
-        } else {
-            sideLengthsEl.style.display = 'none';
-            sideLengthsEl.innerHTML = '';
+    // Wire up dimension inputs for live Add button state
+    ['rect-width', 'rect-height'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el && !el.dataset.listening) {
+            el.addEventListener('input', () => updateCalibrationUI());
+            el.dataset.listening = '1';
         }
+    });
+}
+
+function addCurrentRectangle() {
+    if (currentRectPoints.length !== 4) {
+        alert('Click 4 corners first');
+        return;
     }
-    // Diagonal input (shown when exactly 4 points)
-    const diagContainer = document.getElementById('diagonal-container');
-    if (diagContainer) {
-        diagContainer.style.display = (calibrationPoints.length === 4) ? 'block' : 'none';
-        const diagInput = document.getElementById('calibration-diagonal');
-        if (diagInput && calibrationDiagonal !== null && calibrationDiagonal !== '') {
-            diagInput.value = calibrationDiagonal;
-        }
+    const w = parseFloat(document.getElementById('rect-width')?.value);
+    const h = parseFloat(document.getElementById('rect-height')?.value);
+    if (!w || w <= 0 || !h || h <= 0) {
+        alert('Enter width and height (positive meters)');
+        return;
     }
+    
+    const diagVal = parseFloat(document.getElementById('rect-diagonal')?.value);
+    const diagonal = (!isNaN(diagVal) && diagVal > 0) ? diagVal : null;
+    
+    calibrationRectangles.push({
+        pixels: currentRectPoints.slice(),
+        side_lengths: [w, h, w, h],
+        diagonal: diagonal
+    });
+    
+    // Clear current points and inputs for next rectangle
+    currentRectPoints = [];
+    const wEl = document.getElementById('rect-width');
+    const hEl = document.getElementById('rect-height');
+    const dEl = document.getElementById('rect-diagonal');
+    if (wEl) wEl.value = '';
+    if (hEl) hEl.value = '';
+    if (dEl) dEl.value = '';
+    
+    updateCalibrationUI();
+    drawCalibration();
 }
 
 async function loadCalibrationStatus() {
@@ -745,16 +773,12 @@ async function loadCalibrationStatus() {
         const response = await fetch('/api/calibration');
         const data = await response.json();
         
-        if (data.points && Array.isArray(data.points) && data.points.length > 0) {
-            calibrationPoints = data.points;
-            // Prefer original user-entered side lengths over recomputed ones
-            const savedLengths = data.user_side_lengths || data.side_lengths;
-            if (savedLengths && Array.isArray(savedLengths) && savedLengths.length >= 4) {
-                calibrationSideLengths = savedLengths.map(v => v);
-            }
-            updateCalibrationPointsUI();
+        // Load saved rectangles if available
+        if (data.rectangles && Array.isArray(data.rectangles) && data.rectangles.length > 0) {
+            calibrationRectangles = data.rectangles;
         }
         
+        updateCalibrationUI();
         updateCalibrationStatusUI(data);
         updateTopDownVisibility(data.is_calibrated);
     } catch (error) {
@@ -766,11 +790,12 @@ function updateCalibrationStatusUI(data) {
     const statusEl = document.getElementById('calibration-status');
     if (statusEl) {
         if (data.is_calibrated) {
-            const nPts = data.points ? data.points.length : calibrationPoints.length;
-            statusEl.textContent = `Calibrated (${nPts} points)`;
+            const nPts = data.points ? data.points.length : 0;
+            const nRects = data.rectangles ? data.rectangles.length : calibrationRectangles.length;
+            statusEl.textContent = `Calibrated (${nRects} rect, ${nPts} points)`;
             statusEl.style.color = '#3fb950';
-        } else if (calibrationPoints.length > 0) {
-            statusEl.textContent = `${calibrationPoints.length} points (need 4+)`;
+        } else if (calibrationRectangles.length > 0) {
+            statusEl.textContent = `${calibrationRectangles.length} rect(s) — click Save`;
             statusEl.style.color = '#d29922';
         } else {
             statusEl.textContent = 'Not calibrated';
@@ -779,28 +804,20 @@ function updateCalibrationStatusUI(data) {
     }
 }
 
-async function saveCalibrationPoints() {
-    if (calibrationPoints.length < 4) {
-        alert('Need at least 4 calibration points');
+async function saveCalibrationRectangles() {
+    if (calibrationRectangles.length === 0) {
+        alert('Add at least one rectangle first');
         return;
     }
-    const lengths = calibrationSideLengths.map(v => v === null || v === '' ? null : parseFloat(v));
-    if (lengths.some(v => v === null || isNaN(v) || v < 0)) {
-        alert('Please enter all side lengths (positive numbers in meters)');
-        return;
-    }
-    
-    // Read diagonal (optional)
-    const diagInput = document.getElementById('calibration-diagonal');
-    const diagVal = diagInput ? parseFloat(diagInput.value) : NaN;
-    const diagonal = (!isNaN(diagVal) && diagVal > 0) ? diagVal : null;
     
     try {
         const payload = {
-            points: calibrationPoints.map(p => ({ pixel: p.pixel })),
-            side_lengths: lengths
+            rectangles: calibrationRectangles.map(r => ({
+                pixels: r.pixels,
+                side_lengths: r.side_lengths,
+                diagonal: r.diagonal
+            }))
         };
-        if (diagonal !== null) payload.diagonal = diagonal;
         
         const response = await fetch('/api/calibration', {
             method: 'POST',
@@ -810,20 +827,14 @@ async function saveCalibrationPoints() {
         
         if (response.ok) {
             const data = await response.json();
-            if (data.calibration && data.calibration.points) {
-                calibrationPoints = data.calibration.points;
-                // Prefer original user-entered side lengths over recomputed ones
-                const savedLengths = data.calibration.user_side_lengths || data.calibration.side_lengths;
-                if (savedLengths && savedLengths.length > 0) {
-                    calibrationSideLengths = savedLengths.map(v => v);
-                }
+            if (data.calibration && data.calibration.rectangles) {
+                calibrationRectangles = data.calibration.rectangles;
             }
-            updateCalibrationPointsUI();
+            updateCalibrationUI();
             drawCalibration();
             updateCalibrationStatusUI(data.calibration);
             updateTopDownVisibility(data.calibration.is_calibrated);
             alert('Calibration saved successfully!');
-            console.log('Calibration saved');
         } else {
             const err = await response.json();
             alert('Calibration failed: ' + (err.error || 'Unknown error'));
@@ -835,12 +846,15 @@ async function saveCalibrationPoints() {
 }
 
 async function clearCalibration() {
-    calibrationPoints = [];
-    calibrationSideLengths = [];
-    calibrationDiagonal = null;
-    const diagInput = document.getElementById('calibration-diagonal');
-    if (diagInput) diagInput.value = '';
-    updateCalibrationPointsUI();
+    currentRectPoints = [];
+    calibrationRectangles = [];
+    const wEl = document.getElementById('rect-width');
+    const hEl = document.getElementById('rect-height');
+    const dEl = document.getElementById('rect-diagonal');
+    if (wEl) wEl.value = '';
+    if (hEl) hEl.value = '';
+    if (dEl) dEl.value = '';
+    updateCalibrationUI();
     drawCalibration();
     
     try {

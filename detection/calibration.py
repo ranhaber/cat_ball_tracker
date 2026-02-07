@@ -42,6 +42,9 @@ class CameraCalibration:
         # Original user-entered side lengths (preserved for UI)
         self.user_side_lengths = []
         
+        # Rectangle definitions (for multi-rectangle calibration)
+        self.rectangles = []
+        
         # Real-world bounds (for mini-map scaling)
         self.world_bounds = {
             "min_x": 0, "max_x": 10,
@@ -89,6 +92,164 @@ class CameraCalibration:
             print(f"Calibration successful! ({len(points)} points)")
         
         return success
+    
+    def _compute_rect_world_pts(self, points_pixel, side_lengths, diagonal=None):
+        """
+        Compute world coordinates for 4 pixel points given side lengths.
+        Places P0 at origin, orients based on pixel directions.
+        
+        Args:
+            points_pixel: List of 4 [x, y] pixel coordinates.
+            side_lengths: List of 4 side lengths in meters.
+            diagonal: Optional diagonal P0->P2 in meters.
+            
+        Returns:
+            list of 4 [wx, wy] world coordinates, or None on error.
+        """
+        import math
+        
+        L01, L12, L23, L30 = [float(s) for s in side_lengths]
+        
+        # Pixel winding
+        cross_px = ((points_pixel[1][0] - points_pixel[0][0]) *
+                    (points_pixel[2][1] - points_pixel[1][1]) -
+                    (points_pixel[1][1] - points_pixel[0][1]) *
+                    (points_pixel[2][0] - points_pixel[1][0]))
+        
+        dx01 = float(points_pixel[1][0] - points_pixel[0][0])
+        dy01 = float(points_pixel[1][1] - points_pixel[0][1])
+        
+        tol = 0.01  # 1 cm
+        
+        # Determine diagonal
+        if diagonal is not None and float(diagonal) > 0:
+            d02 = float(diagonal)
+        else:
+            is_rect = abs(L01 - L23) < tol and abs(L12 - L30) < tol
+            if is_rect:
+                d02 = math.sqrt(L01 * L01 + L12 * L12)
+            else:
+                d02 = None
+        
+        if d02 is not None:
+            # Exact SSS triangles
+            cos_a = (L01 * L01 + d02 * d02 - L12 * L12) / (2.0 * L01 * d02) if L01 > 0 and d02 > 0 else 0
+            cos_a = max(-1.0, min(1.0, cos_a))
+            sin_a = math.sqrt(max(0.0, 1.0 - cos_a * cos_a))
+            if cross_px > 0:
+                p2y = -sin_a * d02
+            else:
+                p2y = sin_a * d02
+            p2x = cos_a * d02
+            
+            d = math.sqrt(p2x * p2x + p2y * p2y)
+            if d < 1e-10:
+                return None
+            aa = (L30 * L30 - L23 * L23 + d * d) / (2.0 * d)
+            hh_sq = L30 * L30 - aa * aa
+            if hh_sq < -1e-6:
+                return None
+            hh = math.sqrt(max(0.0, hh_sq))
+            ux, uy = p2x / d, p2y / d
+            p3_a = [aa * ux + hh * (-uy), aa * uy + hh * ux]
+            p3_b = [aa * ux - hh * (-uy), aa * uy - hh * ux]
+            cross_a = (p2x - L01) * (p3_a[1] - p2y) - (p2y - 0) * (p3_a[0] - p2x)
+            cross_01_12 = (L01 - 0) * (p2y - 0) - (0 - 0) * (p2x - L01)
+            if cross_01_12 * cross_a >= 0:
+                p3 = p3_a
+            else:
+                p3 = p3_b
+            
+            world_pts = [[0.0, 0.0], [L01, 0.0], [p2x, p2y], p3]
+            
+            if abs(dx01) < abs(dy01):
+                sy = -1.0 if dy01 >= 0 else 1.0
+                world_pts = [[-sy * p[1], sy * p[0]] for p in world_pts]
+            else:
+                if dx01 < 0:
+                    world_pts = [[-p[0], p[1]] for p in world_pts]
+        else:
+            # Heuristic fallback
+            world_pts = [[0.0, 0.0]]
+            for i in range(1, 4):
+                px_prev = points_pixel[i - 1]
+                px_curr = points_pixel[i]
+                ddx = float(px_curr[0] - px_prev[0])
+                ddy = float(px_curr[1] - px_prev[1])
+                length_px = math.sqrt(ddx * ddx + ddy * ddy)
+                if length_px < 1e-6:
+                    return None
+                length_m = float(side_lengths[i - 1])
+                wx = world_pts[i - 1][0] + length_m * (ddx / length_px)
+                wy = world_pts[i - 1][1] - length_m * (ddy / length_px)
+                world_pts.append([wx, wy])
+        
+        return world_pts
+    
+    def set_calibration_from_rectangles(self, rectangles):
+        """
+        Set calibration from one or more rectangles.
+        
+        Rectangle 0: world coords computed exactly at origin.
+        Rectangles 1+: pixel points projected through preliminary homography
+        from rectangle 0 to get world positions.
+        Final homography computed from ALL points (findHomography).
+        
+        Args:
+            rectangles: List of dicts, each with:
+                - "pixels": [[x,y], [x,y], [x,y], [x,y]]
+                - "side_lengths": [L01, L12, L23, L30]
+                - "diagonal": optional float
+                
+        Returns:
+            bool: True if calibration successful
+        """
+        if not rectangles or len(rectangles) < 1:
+            print("Error: Need at least 1 rectangle")
+            return False
+        
+        # Store rectangles for save/load
+        self.rectangles = rectangles
+        
+        # --- Rectangle 0: exact world coords at origin ---
+        r0 = rectangles[0]
+        world_pts_0 = self._compute_rect_world_pts(
+            r0["pixels"], r0["side_lengths"], r0.get("diagonal"))
+        if world_pts_0 is None:
+            print("Error: Failed to compute world coords for rectangle 1")
+            return False
+        
+        print(f"[CALIBRATION] Rect 1 world: {[f'({p[0]:.3f},{p[1]:.3f})' for p in world_pts_0]}")
+        
+        all_pixel_pts = list(r0["pixels"])
+        all_world_pts = list(world_pts_0)
+        
+        if len(rectangles) > 1:
+            # Compute preliminary homography from rectangle 0
+            pixel_pts_0 = np.float32(r0["pixels"])
+            world_pts_0_np = np.float32(world_pts_0)
+            H_prelim = cv2.getPerspectiveTransform(pixel_pts_0, world_pts_0_np)
+            
+            # Project remaining rectangles through preliminary H
+            for idx, rect in enumerate(rectangles[1:], start=2):
+                for px_pt in rect["pixels"]:
+                    pt = np.float32([[[px_pt[0], px_pt[1]]]])
+                    projected = cv2.perspectiveTransform(pt, H_prelim)
+                    wx = float(projected[0][0][0])
+                    wy = float(projected[0][0][1])
+                    all_pixel_pts.append(px_pt)
+                    all_world_pts.append([wx, wy])
+                
+                print(f"[CALIBRATION] Rect {idx} projected through H_prelim")
+        
+        print(f"[CALIBRATION] Total: {len(all_pixel_pts)} points from {len(rectangles)} rectangle(s)")
+        
+        # Build calibration points and compute homography
+        points = [
+            {"pixel": list(all_pixel_pts[i]), "world": all_world_pts[i]}
+            for i in range(len(all_pixel_pts))
+        ]
+        return self.set_calibration_points(points)
     
     def set_calibration_from_side_lengths(self, points_pixel, side_lengths, diagonal=None):
         """
@@ -517,6 +678,7 @@ class CameraCalibration:
         self.inverse_matrix = None
         self.is_calibrated = False
         self.user_side_lengths = []
+        self.rectangles = []
         
         # Delete saved file
         if os.path.exists(self.calibration_file):
@@ -531,7 +693,8 @@ class CameraCalibration:
                 "points": self.calibration_points,
                 "world_bounds": self.world_bounds,
                 "is_calibrated": self.is_calibrated,
-                "user_side_lengths": self.user_side_lengths
+                "user_side_lengths": self.user_side_lengths,
+                "rectangles": self.rectangles
             }
             with open(self.calibration_file, 'w') as f:
                 json.dump(data, f, indent=2)
@@ -551,7 +714,8 @@ class CameraCalibration:
                 self._compute_transform()
                 self.world_bounds = data.get("world_bounds", self.world_bounds)
                 self.user_side_lengths = data.get("user_side_lengths", [])
-                print(f"Calibration loaded from {self.calibration_file} ({len(points)} points)")
+                self.rectangles = data.get("rectangles", [])
+                print(f"Calibration loaded from {self.calibration_file} ({len(points)} points, {len(self.rectangles)} rects)")
             else:
                 print(f"Invalid calibration file - need at least 4 points, got {len(points)}")
                 
@@ -615,5 +779,6 @@ class CameraCalibration:
             "is_calibrated": self.is_calibrated,
             "points": self.calibration_points,
             "world_bounds": self.world_bounds,
-            "user_side_lengths": self.user_side_lengths
+            "user_side_lengths": self.user_side_lengths,
+            "rectangles": self.rectangles
         }
