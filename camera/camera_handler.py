@@ -186,11 +186,10 @@ class CameraHandler:
             print(f"Found camera(s): {cameras}")
             
             # Configure for video capture optimized for RPi Zero 2W
-            # OPTIMIZATION D: Use BGR888 directly to avoid RGB->BGR conversion
             camera_config = self.camera.create_video_configuration(
                 main={
                     "size": (self.width, self.height),
-                    "format": "BGR888"  # Direct BGR output (no conversion needed)
+                    "format": "RGB888"  # RGB output; converted to BGR after capture for OpenCV
                 },
                 controls={
                     "FrameRate": self.fps
@@ -267,7 +266,6 @@ class CameraHandler:
         if config.USE_THREADED_CAPTURE:
             with self.frame_lock:
                 if self.frame is not None:
-                    # OPTIMIZATION A & D: No conversion needed, camera outputs BGR directly
                     # Return reference instead of copy (caller will copy if needed)
                     return self.frame
                 return None
@@ -276,7 +274,9 @@ class CameraHandler:
             try:
                 frame = self.camera.capture_array()
                 self._frame_count += 1
-                # OPTIMIZATION D: No conversion needed, camera outputs BGR directly
+                # picamera2 capture_array returns RGB; convert to BGR for OpenCV
+                if not self.use_mock:
+                    frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
                 return frame
             except Exception as e:
                 print(f"Frame capture error: {e}")

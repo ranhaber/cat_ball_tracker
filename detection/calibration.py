@@ -40,6 +40,7 @@ class CameraCalibration:
         
         # Rectangle definitions (for multi-rectangle calibration)
         self.rectangles = []
+        self.pixels_undistorted = True  # Whether pixel coords are in undistorted space
         
         # Per-rectangle local homographies (for weighted interpolation)
         self.rect_homographies = []  # [{H, center_px, world_pts}, ...]
@@ -527,6 +528,7 @@ class CameraCalibration:
         self.is_calibrated = False
         self.rectangles = []
         self.rect_homographies = []
+        self.pixels_undistorted = True
         
         # Delete saved file
         if os.path.exists(self.calibration_file):
@@ -541,7 +543,8 @@ class CameraCalibration:
                 "points": self.calibration_points,
                 "world_bounds": self.world_bounds,
                 "is_calibrated": self.is_calibrated,
-                "rectangles": self.rectangles
+                "rectangles": self.rectangles,
+                "pixels_undistorted": self.pixels_undistorted
             }
             with open(self.calibration_file, 'w') as f:
                 json.dump(data, f, indent=2)
@@ -561,6 +564,7 @@ class CameraCalibration:
                 self._compute_transform()
                 self.world_bounds = data.get("world_bounds", self.world_bounds)
                 self.rectangles = data.get("rectangles", [])
+                self.pixels_undistorted = data.get("pixels_undistorted", True)
                 
                 # Rebuild per-rectangle local homographies from saved calibration points
                 n_rects = len(self.rectangles)
@@ -639,5 +643,6 @@ class CameraCalibration:
             "is_calibrated": self.is_calibrated,
             "points": self.calibration_points,
             "world_bounds": self.world_bounds,
-            "rectangles": self.rectangles
+            "rectangles": self.rectangles,
+            "pixels_undistorted": self.pixels_undistorted
         }
