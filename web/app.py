@@ -1743,7 +1743,7 @@ def create_app():
 
 
 def run_server():
-    """Run the web server (development mode — werkzeug)"""
+    """Run the web server"""
     # Start video processor
     video_processor.start()
     
@@ -1753,36 +1753,12 @@ def run_server():
         app.run(
             host=config.HOST,
             port=config.PORT,
-            debug=False,
+            debug=False,  # Always False in production — debug mode adds CPU overhead
             threaded=True,
             use_reloader=False
         )
     finally:
         video_processor.stop()
-
-
-# --- Gunicorn entry point ---
-# Usage: gunicorn -w 1 --threads 4 --timeout 0 -b 0.0.0.0:5000 'web.app:gunicorn_app'
-def _start_video_processor():
-    """Start video processor once (gunicorn may import multiple times)."""
-    if not hasattr(video_processor, '_started') or not video_processor._started:
-        import signal
-        import atexit
-        
-        video_processor.start()
-        video_processor._started = True
-        
-        # Clean shutdown on SIGTERM (systemd sends this)
-        def _shutdown(signum, frame):
-            print("\n🛑 Shutting down video processor...")
-            video_processor.stop()
-        signal.signal(signal.SIGTERM, _shutdown)
-        atexit.register(video_processor.stop)
-        
-        print(f"📍 Cat Dome video processor started (gunicorn mode)")
-
-_start_video_processor()
-gunicorn_app = create_app()
 
 
 if __name__ == '__main__':

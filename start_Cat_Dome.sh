@@ -34,8 +34,9 @@ ln -sf "$LOG_FILE" "$LOG_DIR/latest.log"
 # Keep old logs for 7 days, delete older
 find "$LOG_DIR" -name "journal_*.log" -type f -mtime +7 -delete 2>/dev/null || true
 
-# Start the application with Flask/werkzeug (lower CPU than gunicorn for this use case)
-# werkzeug with threaded=True handles MJPEG + API well for single-camera setups
+# Start the application with output redirected to log file AND stdout (for systemd journal)
+# Use -u flag to force unbuffered output so logs appear immediately
+# Add timestamp to each line using awk with line buffering
 cd /home/ranhaber/cat_ball_tracker
 exec /home/ranhaber/cat_ball_tracker/venv/bin/python -u main.py 2>&1 | \
   awk '{ print strftime("[%Y-%m-%d %H:%M:%S]"), $0; fflush(); }' | \
