@@ -459,6 +459,7 @@ sudo journalctl -u cat_ball_tracker -n 50
 
 ## 📝 Version History
 
+- **v2.7.3** - Fix camera color channel swap: picamera2 outputs RGB but code assumed BGR, causing blue to appear orange. Changed format to RGB888 with explicit RGB→BGR conversion for correct colors in streaming, snapshots, and detection
 - **v2.7.0** - Undistorted snapshots: calibration and zone editors now show lens-corrected images; user clicks on corrected pixels directly; proper pipeline: lens cal → corrected snapshot → click rectangles/zone → homography from undistorted pixels; cat detection still undistorts raw camera pixels; nearest-rectangle Voronoi approach for pixel_to_world
 - **v2.6.2** - Use nearest rectangle only (no weighted blending) for pixel_to_world
 - **v2.6.1** - Fix: squares (all sides equal) caused degenerate P3=P1 in SSS solver due to floating point zero cross product; rectangles now use direct geometry (P0,P1,P2,P3 = corners) instead of SSS; SSS kept only for non-rectangle quads with diagonal; also added degeneracy check for SSS solver
