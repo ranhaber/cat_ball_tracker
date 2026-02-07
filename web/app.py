@@ -764,6 +764,16 @@ class VideoProcessor:
                 undistorted.append([ux, uy])
             return undistorted
         return points_pixel
+    
+    def _redistort_pixels(self, points_pixel):
+        """Convert undistorted+cropped pixels back to raw (distorted) pixels."""
+        if self.lens_calibration and self.lens_calibration.is_calibrated:
+            raw = []
+            for p in points_pixel:
+                rx, ry = self.lens_calibration.redistort_point(float(p[0]), float(p[1]))
+                raw.append([int(round(rx)), int(round(ry))])
+            return raw
+        return [[int(p[0]), int(p[1])] for p in points_pixel]
 
     def set_calibration(self, points):
         """Set calibration points (undistorts pixels if lens calibration available)"""
@@ -842,9 +852,9 @@ class VideoProcessor:
             
             for idx, point in enumerate(perimeter_points):
                 px, py = float(point[0]), float(point[1])
-                # Perimeter pixels are stored at undistorted+cropped snapshot resolution —
-                # same coordinate space as calibration rectangles. No undistortion needed.
-                world_pos = self.pixel_to_world(px, py, already_undistorted=True)
+                # Perimeter pixels are in raw camera space (redistorted at save time).
+                # pixel_to_world undistorts them to match the calibration space.
+                world_pos = self.pixel_to_world(px, py, already_undistorted=False)
                 if world_pos:
                     result["perimeter_world"].append({
                         "x": round(world_pos[0], 2),
@@ -1101,33 +1111,33 @@ def create_app():
     @app.route('/api/perimeter', methods=['POST'])
     def set_perimeter():
         """Set perimeter points.
-        Points are stored at the source snapshot resolution (undistorted+cropped).
-        draw_perimeter scales them to the video frame resolution automatically."""
+        Points are clicked on the undistorted+cropped snapshot.
+        They are converted to raw camera pixel space for:
+        - Streaming overlay (draw_perimeter on raw frame)
+        - Detection filtering (is_inside check on raw detection pixels)
+        The top-down view re-undistorts them via pixel_to_world."""
         data = request.get_json()
         points = data.get('points', [])
-        source_width = data.get('source_width')
-        source_height = data.get('source_height')
         
         if len(points) < 3:
             return jsonify({"error": "Need at least 3 points"}), 400
         
-        # Store points at source (snapshot) resolution — no scaling
-        saved_points = [[int(p[0]), int(p[1])] for p in points]
+        # Convert from undistorted+cropped space to raw camera space
+        raw_points = video_processor._redistort_pixels(points)
         
-        # Save with source resolution so draw_perimeter can scale to video frame
-        save_w = source_width if source_width else video_processor.current_resolution[0]
-        save_h = source_height if source_height else video_processor.current_resolution[1]
+        cam_width, cam_height = video_processor.current_resolution
         if video_processor.perimeter:
-            video_processor.perimeter.set_saved_resolution(save_w, save_h)
-        success = video_processor.set_perimeter(saved_points)
+            video_processor.perimeter.set_saved_resolution(cam_width, cam_height)
+        success = video_processor.set_perimeter(raw_points)
         
         if success:
-            print(f"[SETTING] Perimeter updated: {len(saved_points)} points at {save_w}x{save_h} (snapshot resolution)")
+            print(f"[SETTING] Perimeter: {len(raw_points)} points redistorted to raw {cam_width}x{cam_height}")
+            print(f"  Undistorted first: {points[0]}, Raw: {raw_points[0]}")
         
         return jsonify({
             "success": success, 
             "points": video_processor.get_perimeter(),
-            "saved_resolution": [save_w, save_h]
+            "camera_resolution": [cam_width, cam_height]
         })
         
     @app.route('/api/perimeter', methods=['DELETE'])
@@ -1481,8 +1491,8 @@ def create_app():
             for i, point in enumerate(perim_points):
                 px, py = float(point[0]), float(point[1])
                 
-                # Perimeter pixels are in undistorted+cropped space (same as calibration).
-                world_pos = video_processor.pixel_to_world(px, py, already_undistorted=True)
+                # Perimeter pixels are in raw camera space (redistorted at save).
+                world_pos = video_processor.pixel_to_world(px, py, already_undistorted=False)
                 
                 debug["perimeter_points"].append({
                     "index": i,

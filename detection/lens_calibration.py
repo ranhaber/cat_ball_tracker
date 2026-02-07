@@ -307,6 +307,45 @@ class LensCalibration:
             uy -= self.undistort_roi[1]
         return (ux, uy)
     
+    def redistort_point(self, ux, uy):
+        """Convert undistorted+cropped pixel back to raw (distorted) pixel.
+        Inverse of undistort_point(). Returns (raw_x, raw_y)."""
+        if not self.is_calibrated:
+            return (ux, uy)
+        
+        # Step 1: Add ROI offset to get undistorted (full image) coords
+        if self.undistort_roi:
+            ux_full = ux + self.undistort_roi[0]
+            uy_full = uy + self.undistort_roi[1]
+        else:
+            ux_full, uy_full = ux, uy
+        
+        # Step 2: Convert from pixel to normalized coords using optimal camera matrix
+        P = self.optimal_camera_matrix if self.optimal_camera_matrix is not None else self.camera_matrix
+        fx, fy = P[0, 0], P[1, 1]
+        cx, cy = P[0, 2], P[1, 2]
+        xn = (ux_full - cx) / fx
+        yn = (uy_full - cy) / fy
+        
+        # Step 3: Apply distortion model to get distorted normalized coords
+        r2 = xn * xn + yn * yn
+        dc = self.dist_coeffs.flatten()
+        k1, k2 = dc[0], dc[1]
+        p1, p2 = dc[2] if len(dc) > 2 else 0, dc[3] if len(dc) > 3 else 0
+        k3 = dc[4] if len(dc) > 4 else 0
+        
+        radial = 1.0 + k1 * r2 + k2 * r2 * r2 + k3 * r2 * r2 * r2
+        xd = xn * radial + 2 * p1 * xn * yn + p2 * (r2 + 2 * xn * xn)
+        yd = yn * radial + p1 * (r2 + 2 * yn * yn) + 2 * p2 * xn * yn
+        
+        # Step 4: Convert back to raw pixel coords using original camera matrix
+        fx_orig, fy_orig = self.camera_matrix[0, 0], self.camera_matrix[1, 1]
+        cx_orig, cy_orig = self.camera_matrix[0, 2], self.camera_matrix[1, 2]
+        raw_x = xd * fx_orig + cx_orig
+        raw_y = yd * fy_orig + cy_orig
+        
+        return (float(raw_x), float(raw_y))
+    
     def undistort_frame(self, frame):
         """Undistort an entire image frame and crop to clean rectangle.
         No black borders — edges are cropped to the valid region."""
