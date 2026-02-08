@@ -2239,7 +2239,9 @@ def create_app():
             with video_processor.frame_lock:
                 video_processor.current_frame = None
             
-            # Reset motion state so idle timeout can trigger TFLite unload
+            # Reset motion detector background model — prevents false motion
+            # triggers when camera resumes (scene looks different from green frames)
+            video_processor.motion_detector.reset()
             video_processor.motion_detected = False
             video_processor._last_motion_time = 0  # Force immediate idle timeout
             
