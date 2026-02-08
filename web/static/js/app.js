@@ -50,13 +50,13 @@ function toggleStream() {
     const btn = document.getElementById('toggle-stream');
     
     if (streamActive) {
-        // Stop: remove the src to close the MJPEG connection
+        // Set flag BEFORE clearing src (clearing src triggers onerror)
+        streamActive = false;
         videoStream.src = '';
         videoStream.alt = 'Stream paused — click ▶ Start Stream to resume';
         btn.textContent = '▶ Start Stream';
         btn.classList.remove('btn-primary');
         btn.classList.add('btn-success');
-        streamActive = false;
     } else {
         // Start: set src back to video feed
         videoStream.src = `/video_feed?t=${Date.now()}`;
