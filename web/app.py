@@ -9,6 +9,7 @@ import os
 import logging
 from datetime import datetime
 import cv2
+import numpy as np
 from flask import Flask, Response, render_template, jsonify, request
 
 import config
