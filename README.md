@@ -2,7 +2,7 @@
 
 A real-time cat and ball detection system for Raspberry Pi Zero 2W with Camera Module 3. Features motion-first detection for efficiency, a web interface for live streaming, and zone-based tracking.
 
-**Version:** 3.2.2
+**Version:** 3.3.1
 
 ---
 
@@ -486,6 +486,9 @@ sudo journalctl -u cat_ball_tracker -n 50
 
 ## 📝 Version History
 
+- **v3.3.1** - Developer tab: add swap activity monitoring (swap in/out since boot, swappiness value); setup script adds rpi-connect-lite installation, sudoers for web UI service control, swappiness=10
+- **v3.3.0** - Developer tab: system info (RAM, swap, CPU temp, uptime, disk, process RSS/swap/threads), RPi Connect toggle (start/stop from web UI), color-coded indicators
+- **v3.2.2** - Reduce camera buffers from 4 to 2 (saves ~18 MB RAM); update README architecture diagram with current design
 - **v3.2.1** - Smart idle mode: skip frame annotation when no stream clients connected; tracker only runs with actual detections; stream client counter tracks MJPEG connections; Start/Stop Stream button on Video tab with auto-reconnect fix
 - **v3.2.0** - CPU optimization: TFLite lazy load/unload (load on motion, destroy after 10s idle — eliminates spin-wait threads); dynamic OpenCV thread count (1 when idle, 4 when tracking); MJPEG stream rate-limited to ~10 FPS; Flask debug=False; JS polling reduced (status 3s, topdown 2s); thread names visible in top/htop. Idle CPU reduced from 92% to ~50%
 - **v3.1.0** - Rational distortion model (k1-k6): upgrade from standard polynomial (3 radial coeffs) to rational model (6 radial + 2 tangential = 11 params). Residual error dropped from 2.63px to 0.80px (94.4% improvement). World-coordinate accuracy improved from 3-8% to 1-4% across the full 120° FOV
