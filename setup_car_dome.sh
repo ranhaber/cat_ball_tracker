@@ -298,6 +298,41 @@ echo "    sudo systemctl stop cat-dome"
 echo "    sudo systemctl status cat-dome"
 
 # ============================================================================
+# Step 11: Sudoers for Developer Tab (service control from web UI)
+# ============================================================================
+echo ""
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "Step 11: Setting up sudoers for web UI service control..."
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+SUDOERS_FILE="/etc/sudoers.d/catdome"
+sudo tee "$SUDOERS_FILE" > /dev/null << EOF
+# Allow Cat Dome web UI to control rpi-connect service
+$USER ALL=(ALL) NOPASSWD: /usr/bin/systemctl start rpi-connect, /usr/bin/systemctl stop rpi-connect, /usr/bin/systemctl is-active rpi-connect, /usr/bin/systemctl start rpi-connect.service, /usr/bin/systemctl stop rpi-connect.service, /usr/bin/systemctl is-active rpi-connect.service
+EOF
+sudo chmod 440 "$SUDOERS_FILE"
+print_status "Sudoers configured for Developer tab service control"
+
+# ============================================================================
+# Step 12: Optimize swappiness (reduce unnecessary swap on low-RAM system)
+# ============================================================================
+echo ""
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "Step 12: Optimizing swap settings..."
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+CURRENT_SWAPPINESS=$(cat /proc/sys/vm/swappiness)
+if [ "$CURRENT_SWAPPINESS" -gt 10 ]; then
+    sudo sysctl vm.swappiness=10
+    if ! grep -q "vm.swappiness" /etc/sysctl.conf; then
+        echo "vm.swappiness=10" | sudo tee -a /etc/sysctl.conf > /dev/null
+    fi
+    print_status "Swappiness reduced from $CURRENT_SWAPPINESS to 10 (only swap when necessary)"
+else
+    print_status "Swappiness already at $CURRENT_SWAPPINESS (OK)"
+fi
+
+# ============================================================================
 # Summary
 # ============================================================================
 echo ""
@@ -334,11 +369,10 @@ echo ""
 echo "4. Open in browser:"
 echo "   http://$(hostname -I | awk '{print $1}'):5000"
 echo ""
-echo "5. Set up camera calibration:"
-echo "   - Go to Control Panel → Camera Calibration"
-echo "   - Click 4 reference points in your yard"
-echo "   - Enter their real-world X,Y positions in meters"
-echo "   - Click Save Calibration"
+echo "5. Set up calibration (Zone tab):"
+echo "   a. Lens Calibration: mark straight lines → Calibrate"
+echo "   b. Perspective Calibration: add rectangles with known dimensions"
+echo "   c. Detection Zone: draw perimeter on lens-corrected image"
 echo ""
 echo "6. (Optional) Reboot to ensure camera is fully enabled:"
 echo "   sudo reboot"
