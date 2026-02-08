@@ -324,11 +324,16 @@ class VideoProcessor:
         return self._inject_cat_size
     
     def _init_inject_cat_position(self, frame_w, frame_h):
-        """Initialize cat position near the Detection Zone perimeter.
-        If no perimeter exists, falls back to frame center."""
+        """Initialize cat position at the centroid of the Detection Zone.
+        The cat's BOTTOM-CENTER is placed at the centroid (guaranteed inside),
+        then it moves in a random direction until it exits the zone."""
         import random, math
         
-        # Try to start near the Detection Zone (perimeter)
+        # Estimate cat size to offset position so bottom-center is at target
+        cat_h_offset = 100  # approximate cat image height in pixels
+        cat_w_offset = 75   # approximate half cat width
+        
+        # Try to start at the Detection Zone centroid
         perim = self.perimeter.get_points() if self.perimeter else []
         if len(perim) >= 3:
             # Scale perimeter points to current frame resolution
@@ -341,35 +346,28 @@ class VideoProcessor:
                     py = py * frame_h / saved_res[1]
                 pts.append((px, py))
             
-            # Pick a random edge of the perimeter polygon, start along it
+            # Centroid of the polygon
             n = len(pts)
-            edge_idx = random.randint(0, n - 1)
-            p1 = pts[edge_idx]
-            p2 = pts[(edge_idx + 1) % n]
-            t = random.uniform(0.3, 0.7)
-            self._inject_cat_x = float(p1[0] + t * (p2[0] - p1[0]))
-            self._inject_cat_y = float(p1[1] + t * (p2[1] - p1[1]))
-            
-            # Move towards the centroid of the perimeter
             cx = sum(p[0] for p in pts) / n
             cy = sum(p[1] for p in pts) / n
-            dx = cx - self._inject_cat_x
-            dy = cy - self._inject_cat_y
-            length = math.sqrt(dx * dx + dy * dy)
-            if length > 0:
-                self._inject_cat_dx = dx / length
-                self._inject_cat_dy = dy / length
-            else:
-                self._inject_cat_dx = 1.0
-                self._inject_cat_dy = 0.0
             
-            print(f"[INJECT] Cat starting near Detection Zone edge {edge_idx+1}: "
-                  f"({self._inject_cat_x:.0f},{self._inject_cat_y:.0f}), "
-                  f"heading towards centroid ({cx:.0f},{cy:.0f})")
+            # Position top-left so that bottom-center lands at centroid
+            self._inject_cat_x = float(cx - cat_w_offset)
+            self._inject_cat_y = float(cy - cat_h_offset)
+            
+            # Random direction — cat will walk until it exits the zone
+            angle = random.uniform(0, 2 * math.pi)
+            self._inject_cat_dx = math.cos(angle)
+            self._inject_cat_dy = math.sin(angle)
+            
+            print(f"[INJECT] Cat starting at Detection Zone centroid: "
+                  f"top-left=({self._inject_cat_x:.0f},{self._inject_cat_y:.0f}), "
+                  f"bottom-center≈({cx:.0f},{cy:.0f}), "
+                  f"dir=({self._inject_cat_dx:.2f},{self._inject_cat_dy:.2f})")
         else:
             # No perimeter — start at frame center with random direction
-            self._inject_cat_x = float(frame_w // 2)
-            self._inject_cat_y = float(frame_h // 2)
+            self._inject_cat_x = float(frame_w // 2 - cat_w_offset)
+            self._inject_cat_y = float(frame_h // 2 - cat_h_offset)
             angle = random.uniform(0, 2 * math.pi)
             self._inject_cat_dx = math.cos(angle)
             self._inject_cat_dy = math.sin(angle)
