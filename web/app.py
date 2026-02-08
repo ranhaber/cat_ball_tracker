@@ -384,6 +384,39 @@ class VideoProcessor:
             return True  # no perimeter = always inside
         return self.perimeter.is_inside((int(px), int(py)), (frame_w, frame_h))
     
+    def _get_ram_stats(self):
+        """Get compact RAM stats string for debug logging."""
+        try:
+            # System RAM
+            mem = {}
+            with open('/proc/meminfo', 'r') as f:
+                for line in f:
+                    parts = line.split()
+                    if parts[0].rstrip(':') in ('MemTotal', 'MemAvailable', 'SwapTotal', 'SwapFree'):
+                        mem[parts[0].rstrip(':')] = int(parts[1])
+            avail_mb = mem.get('MemAvailable', 0) // 1024
+            total_mb = mem.get('MemTotal', 0) // 1024
+            swap_used_mb = (mem.get('SwapTotal', 0) - mem.get('SwapFree', 0)) // 1024
+            
+            # Process RSS
+            rss_mb = 0
+            proc_swap_mb = 0
+            try:
+                with open('/proc/self/status', 'r') as f:
+                    for line in f:
+                        if line.startswith('VmRSS:'):
+                            rss_mb = int(line.split()[1]) // 1024
+                        elif line.startswith('VmSwap:'):
+                            proc_swap_mb = int(line.split()[1]) // 1024
+            except Exception:
+                pass
+            
+            return (f"avail={avail_mb}MB/{total_mb}MB, "
+                    f"proc_rss={rss_mb}MB, proc_swap={proc_swap_mb}MB, "
+                    f"sys_swap={swap_used_mb}MB")
+        except Exception:
+            return "N/A"
+    
     def _check_ram_safety(self):
         """Auto-disable injection if RAM drops below 50 MB available.
         Also unloads TFLite and reduces threads to recover quickly."""
@@ -583,10 +616,13 @@ class VideoProcessor:
                         self._inject_debug_count = 0
                     self._inject_debug_count += 1
                     if self._inject_debug_count <= 5 or self._inject_debug_count % 50 == 0:
+                        # Get RAM stats for tracking analysis
+                        ram_info = self._get_ram_stats()
                         print(f"[INJECT DEBUG] frame={frame.shape}, img_loaded={self._inject_cat_img is not None}, "
                               f"bbox={self._inject_cat_bbox}, initialized={self._inject_cat_initialized}, "
                               f"pos=({self._inject_cat_x:.0f},{self._inject_cat_y:.0f}), "
-                              f"stream_clients={self.stream_clients}")
+                              f"stream_clients={self.stream_clients}, "
+                              f"RAM: {ram_info}")
                     # Fall through to normal pipeline (motion, AI, perimeter filter, etc.)
                 
                 run_ai_detection = False
