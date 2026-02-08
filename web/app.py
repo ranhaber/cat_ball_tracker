@@ -1829,6 +1829,27 @@ def create_app():
         except Exception:
             pass
         
+        # Swap activity (pages swapped in/out since boot)
+        try:
+            with open('/proc/vmstat', 'r') as f:
+                for line in f:
+                    if line.startswith('pswpin '):
+                        info['swap_in_pages'] = int(line.split()[1])
+                    elif line.startswith('pswpout '):
+                        info['swap_out_pages'] = int(line.split()[1])
+            # Convert pages to MB (page size = 4KB)
+            info['swap_in_mb'] = round((info.get('swap_in_pages', 0) * 4) / 1024, 1)
+            info['swap_out_mb'] = round((info.get('swap_out_pages', 0) * 4) / 1024, 1)
+        except Exception:
+            pass
+        
+        # Swappiness
+        try:
+            with open('/proc/sys/vm/swappiness', 'r') as f:
+                info['swappiness'] = int(f.read().strip())
+        except Exception:
+            pass
+        
         # Stream clients
         info['stream_clients'] = video_processor.stream_clients
         info['tflite_loaded'] = video_processor.detector.is_loaded() if video_processor.detector else False

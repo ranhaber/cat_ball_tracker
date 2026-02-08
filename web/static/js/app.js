@@ -2279,7 +2279,8 @@ async function refreshDevInfo() {
                 <tr><td style="padding:2px 8px;">RAM Total:</td><td><strong>${ramTotal} MB</strong></td></tr>
                 <tr><td style="padding:2px 8px;">RAM Available:</td><td><strong style="color:${parseInt(ramAvail) < 80 ? '#ff6b6b' : '#3fb950'}">${ramAvail} MB</strong></td></tr>
                 <tr><td style="padding:2px 8px;">RAM Free:</td><td>${ramFree} MB</td></tr>
-                <tr><td style="padding:2px 8px;">Swap Used:</td><td><strong style="color:${parseInt(swapUsed) > 50 ? '#d29922' : '#3fb950'}">${swapUsed} / ${swapTotal} MB</strong></td></tr>
+                <tr><td style="padding:2px 8px;">Swap Used:</td><td><strong style="color:${parseInt(swapUsed) > 50 ? '#d29922' : '#3fb950'}">${swapUsed} / ${swapTotal} MB</strong> (swappiness=${d.swappiness || '?'})</td></tr>
+                <tr><td style="padding:2px 8px;">Swap Activity:</td><td>In: ${d.swap_in_mb || 0} MB, Out: ${d.swap_out_mb || 0} MB (since boot)</td></tr>
                 <tr><td style="padding:2px 8px;">CPU Temp:</td><td><strong style="color:${(d.cpu_temp||0) > 70 ? '#ff6b6b' : '#3fb950'}">${d.cpu_temp || '--'}°C</strong></td></tr>
                 <tr><td style="padding:2px 8px;">Uptime:</td><td>${d.uptime || '--'}</td></tr>
                 <tr><td style="padding:2px 8px;">Disk:</td><td>${d.disk_used || '--'} / ${d.disk_total || '--'} (${d.disk_percent || '--'})</td></tr>
