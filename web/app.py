@@ -271,14 +271,24 @@ class VideoProcessor:
         print(f"Video processor started (Detection mode: {mode_str})")
         
     def _load_inject_cat_image(self):
-        """Load the test cat image for injection mode."""
+        """Load the test cat image for injection mode.
+        Pre-shrinks to max 400px wide to avoid resizing a 5MB image at runtime."""
         import os
         cat_path = os.path.join(config.BASE_DIR, 'models', 'test_cat.png')
         if os.path.exists(cat_path):
             img = cv2.imread(cat_path, cv2.IMREAD_UNCHANGED)
             if img is not None:
+                # Pre-shrink to max 400px wide — keeps memory low and resize fast
+                max_w = 400
+                h_orig, w_orig = img.shape[:2]
+                if w_orig > max_w:
+                    scale = max_w / w_orig
+                    new_w = max_w
+                    new_h = max(10, int(h_orig * scale))
+                    img = cv2.resize(img, (new_w, new_h), interpolation=cv2.INTER_AREA)
+                    print(f"[INJECT] Cat image pre-shrunk: {w_orig}x{h_orig} -> {new_w}x{new_h}")
                 self._inject_cat_img = img
-                print(f"[INJECT] Cat image loaded: {img.shape}")
+                print(f"[INJECT] Cat image loaded: {img.shape} ({img.nbytes // 1024}KB in RAM)")
             else:
                 print(f"[INJECT] Failed to load cat image from {cat_path}")
         else:
@@ -312,46 +322,42 @@ class VideoProcessor:
         return self._inject_cat_size
     
     def _init_inject_cat_position(self, frame_w, frame_h):
-        """Initialize or reset cat position to a random perimeter edge."""
+        """Initialize cat position — start from a random edge, move across the frame."""
         import random, math
         
-        perim = self.perimeter.get_points() if self.perimeter else []
-        if len(perim) < 3:
-            # No perimeter — use frame center
-            self._inject_cat_x = float(frame_w // 3)
-            self._inject_cat_y = float(frame_h // 2)
+        # Pick a random starting edge (0=left, 1=right, 2=top, 3=bottom)
+        edge = random.randint(0, 3)
+        margin = 50
+        if edge == 0:  # left
+            self._inject_cat_x = float(margin)
+            self._inject_cat_y = float(random.randint(margin, frame_h - margin))
             self._inject_cat_dx = 1.0
-            self._inject_cat_dy = 0.3
-            self._inject_cat_initialized = True
-            return
+            self._inject_cat_dy = random.uniform(-0.3, 0.3)
+        elif edge == 1:  # right
+            self._inject_cat_x = float(frame_w - margin - 200)
+            self._inject_cat_y = float(random.randint(margin, frame_h - margin))
+            self._inject_cat_dx = -1.0
+            self._inject_cat_dy = random.uniform(-0.3, 0.3)
+        elif edge == 2:  # top
+            self._inject_cat_x = float(random.randint(margin, frame_w - margin))
+            self._inject_cat_y = float(margin)
+            self._inject_cat_dx = random.uniform(-0.3, 0.3)
+            self._inject_cat_dy = 1.0
+        else:  # bottom
+            self._inject_cat_x = float(random.randint(margin, frame_w - margin))
+            self._inject_cat_y = float(frame_h - margin - 200)
+            self._inject_cat_dx = random.uniform(-0.3, 0.3)
+            self._inject_cat_dy = -1.0
         
-        # Pick a random edge of the perimeter polygon
-        n = len(perim)
-        edge_idx = random.randint(0, n - 1)
-        p1 = perim[edge_idx]
-        p2 = perim[(edge_idx + 1) % n]
-        
-        # Start at a random point along this edge
-        t = random.uniform(0.2, 0.8)
-        self._inject_cat_x = float(p1[0] + t * (p2[0] - p1[0]))
-        self._inject_cat_y = float(p1[1] + t * (p2[1] - p1[1]))
-        
-        # Direction: towards the centroid of the polygon (roughly opposite side)
-        cx = sum(p[0] for p in perim) / n
-        cy = sum(p[1] for p in perim) / n
-        dx = cx - self._inject_cat_x
-        dy = cy - self._inject_cat_y
-        length = math.sqrt(dx * dx + dy * dy)
+        # Normalize direction
+        length = math.sqrt(self._inject_cat_dx**2 + self._inject_cat_dy**2)
         if length > 0:
-            self._inject_cat_dx = dx / length
-            self._inject_cat_dy = dy / length
-        else:
-            self._inject_cat_dx = 1.0
-            self._inject_cat_dy = 0.0
+            self._inject_cat_dx /= length
+            self._inject_cat_dy /= length
         
         self._inject_cat_initialized = True
         print(f"[INJECT] Cat starting at ({self._inject_cat_x:.0f},{self._inject_cat_y:.0f}), "
-              f"edge {edge_idx+1}, heading towards center")
+              f"edge={edge}, dir=({self._inject_cat_dx:.2f},{self._inject_cat_dy:.2f})")
     
     def _is_inside_perimeter_px(self, px, py, frame_w, frame_h):
         """Check if pixel is inside the perimeter polygon."""
@@ -405,11 +411,12 @@ class VideoProcessor:
         if not self._inject_cat_initialized:
             self._init_inject_cat_position(w, h)
         
-        # Get perspective-correct size based on position
-        cat_size = self._get_perspective_cat_size(
+        # Get perspective-correct size based on position (round to 10px to stabilize cache)
+        cat_size_raw = self._get_perspective_cat_size(
             self._inject_cat_x, self._inject_cat_y)
+        cat_size = max(30, round(cat_size_raw / 10) * 10)  # Round to nearest 10px
         
-        # Pre-cache resized cat to avoid resizing every frame
+        # Re-cache only when size bucket changes (avoids resize every frame)
         if not hasattr(self, '_inject_cat_cached_size') or self._inject_cat_cached_size != cat_size:
             cat_img = self._inject_cat_img
             cat_h_orig, cat_w_orig = cat_img.shape[:2]
@@ -430,13 +437,12 @@ class VideoProcessor:
         self._inject_cat_x += self._inject_cat_dx * self._inject_cat_speed
         self._inject_cat_y += self._inject_cat_dy * self._inject_cat_speed
         
-        # Check if cat left the perimeter or frame — reset from a different side
+        # Check if cat left the frame — bounce off edges
         cx = self._inject_cat_x + new_w // 2
         cy = self._inject_cat_y + new_h // 2
         out_of_frame = cx < 0 or cx > w or cy < 0 or cy > h
-        out_of_perimeter = not self._is_inside_perimeter_px(cx, cy, w, h)
         
-        if out_of_frame or out_of_perimeter:
+        if out_of_frame:
             self._inject_cat_initialized = False
             return frame
         
@@ -513,6 +519,19 @@ class VideoProcessor:
                 # ===== Inject cat mode: full shortcut (skip normal pipeline) =====
                 if self.inject_cat:
                     frame = self._inject_cat_on_frame(frame)
+                    # Debug: log inject state
+                    if not hasattr(self, '_inject_debug_count'):
+                        self._inject_debug_count = 0
+                    self._inject_debug_count += 1
+                    if self._inject_debug_count <= 5 or self._inject_debug_count % 50 == 0:
+                        print(f"[INJECT DEBUG] frame={frame.shape}, img_loaded={self._inject_cat_img is not None}, "
+                              f"bbox={self._inject_cat_bbox}, initialized={self._inject_cat_initialized}, "
+                              f"pos=({self._inject_cat_x:.0f},{self._inject_cat_y:.0f}), "
+                              f"stream_clients={self.stream_clients}")
+                    
+                    # Process detection data if cat was successfully placed
+                    last_detections = []
+                    tracked_objects = {}
                     if self._inject_cat_bbox:
                         bbox = self._inject_cat_bbox
                         cat_class_id = config.COCO_CLASSES.get('cat', 17)
@@ -537,26 +556,30 @@ class VideoProcessor:
                                 "world_position": world_pos,
                                 "injected": True
                             })
-                        self._update_fps()
-                        self.frame_count += 1
                         tracked_objects = self.tracker.update(last_detections)
-                        if self.stream_clients > 0:
-                            annotated = frame
-                            self.perimeter.draw(annotated)
-                            self.detector.draw_detections(annotated, last_detections, tracked_objects)
-                            for det_info in self.last_detections_with_world:
-                                if det_info.get("injected"):
-                                    bx = det_info["bbox"]
-                                    cv2.rectangle(annotated, (bx[0], bx[1]), (bx[2], bx[3]),
-                                                 (0, 255, 255), 3)
-                                    cv2.putText(annotated, "INJECTED", (bx[0], bx[1] - 5),
-                                               cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 2)
-                            self._draw_status(annotated)
-                            with self.frame_lock:
-                                self.current_frame = annotated
-                        else:
-                            with self.frame_lock:
-                                self.current_frame = frame
+                    
+                    self._update_fps()
+                    self.frame_count += 1
+                    
+                    # ALWAYS store the frame — green bg must be visible even without cat
+                    if self.stream_clients > 0 and last_detections:
+                        annotated = frame
+                        self.perimeter.draw(annotated)
+                        self.detector.draw_detections(annotated, last_detections, tracked_objects)
+                        for det_info in self.last_detections_with_world:
+                            if det_info.get("injected"):
+                                bx = det_info["bbox"]
+                                cv2.rectangle(annotated, (bx[0], bx[1]), (bx[2], bx[3]),
+                                             (0, 255, 255), 3)
+                                cv2.putText(annotated, "INJECTED", (bx[0], bx[1] - 5),
+                                           cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 2)
+                        self._draw_status(annotated)
+                        with self.frame_lock:
+                            self.current_frame = annotated
+                    else:
+                        # Still store the green frame so stream shows something
+                        with self.frame_lock:
+                            self.current_frame = frame
                     time.sleep(0.2)
                     continue
                 
