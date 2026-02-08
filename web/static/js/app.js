@@ -41,6 +41,34 @@ function initTabs() {
 }
 
 // ============================================================================
+// Video Stream Toggle (Start/Stop)
+// ============================================================================
+let streamActive = true;
+
+function toggleStream() {
+    const videoStream = document.getElementById('video-stream');
+    const btn = document.getElementById('toggle-stream');
+    
+    if (streamActive) {
+        // Stop: remove the src to close the MJPEG connection
+        videoStream.src = '';
+        videoStream.alt = 'Stream paused — click ▶ Start Stream to resume';
+        btn.textContent = '▶ Start Stream';
+        btn.classList.remove('btn-primary');
+        btn.classList.add('btn-success');
+        streamActive = false;
+    } else {
+        // Start: set src back to video feed
+        videoStream.src = `/video_feed?t=${Date.now()}`;
+        videoStream.alt = 'Video Stream';
+        btn.textContent = '⏸ Stop Stream';
+        btn.classList.remove('btn-success');
+        btn.classList.add('btn-primary');
+        streamActive = true;
+    }
+}
+
+// ============================================================================
 // Video Stream with Auto-Reconnect
 // ============================================================================
 let reconnectAttempts = 0;
