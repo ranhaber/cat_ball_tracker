@@ -195,7 +195,7 @@ class VideoProcessor:
         self._inject_cat_y = 0.0
         self._inject_cat_dx = 0.0  # direction vector (normalized)
         self._inject_cat_dy = 0.0
-        self._inject_cat_speed = 5.0  # pixels per frame
+        self._inject_cat_speed = 2.0  # pixels per frame (slow for small Detection Zones)
         self._inject_cat_size = 150  # fallback pixel width
         self._inject_cat_initialized = False
         self._inject_cat_bbox = None
@@ -330,8 +330,13 @@ class VideoProcessor:
         import random, math
         
         # Estimate cat size to offset position so bottom-center is at target
-        cat_h_offset = 100  # approximate cat image height in pixels
-        cat_w_offset = 75   # approximate half cat width
+        # Use cached size if available, otherwise approximate
+        if hasattr(self, '_inject_cat_cached_h') and self._inject_cat_cached_h:
+            cat_h_offset = self._inject_cat_cached_h
+            cat_w_offset = self._inject_cat_cached_w // 2
+        else:
+            cat_h_offset = 60  # conservative estimate
+            cat_w_offset = 50
         
         # Try to start at the Detection Zone centroid
         perim = self.perimeter.get_points() if self.perimeter else []
@@ -375,6 +380,7 @@ class VideoProcessor:
                   f"({self._inject_cat_x:.0f},{self._inject_cat_y:.0f})")
         
         self._inject_cat_initialized = True
+        self._inject_cat_fixed_size = None  # Will be computed on first frame
     
     def _is_inside_perimeter_px(self, px, py, frame_w, frame_h):
         """Check if pixel is inside the perimeter polygon."""
@@ -463,10 +469,16 @@ class VideoProcessor:
         if not self._inject_cat_initialized:
             self._init_inject_cat_position(w, h)
         
-        # Get perspective-correct size based on position (round to 10px to stabilize cache)
-        cat_size_raw = self._get_perspective_cat_size(
-            self._inject_cat_x, self._inject_cat_y)
-        cat_size = max(30, round(cat_size_raw / 10) * 10)  # Round to nearest 10px
+        # Use fixed size for inject mode — perspective sizing causes the cat to
+        # grow/shrink rapidly which shifts the bottom-center outside the zone.
+        # Compute size ONCE at initialization based on the centroid position.
+        if not hasattr(self, '_inject_cat_fixed_size') or self._inject_cat_fixed_size is None:
+            cat_size_raw = self._get_perspective_cat_size(
+                self._inject_cat_x, self._inject_cat_y)
+            self._inject_cat_fixed_size = max(30, round(cat_size_raw / 10) * 10)
+            print(f"[INJECT] Fixed cat size: {self._inject_cat_fixed_size}px "
+                  f"(from perspective at start position)")
+        cat_size = self._inject_cat_fixed_size
         
         # Re-cache only when size bucket changes (avoids resize every frame)
         if not hasattr(self, '_inject_cat_cached_size') or self._inject_cat_cached_size != cat_size:
