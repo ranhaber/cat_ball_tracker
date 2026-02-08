@@ -2199,6 +2199,13 @@ def create_app():
                 del video_processor._jpeg_none_warned
             if hasattr(video_processor, '_jpeg_first_logged'):
                 del video_processor._jpeg_first_logged
+            
+            # Stop camera to free ~18MB of buffers (not used during inject)
+            if video_processor.camera:
+                video_processor.camera.stop()
+                print("[INJECT] Camera stopped to free ~18MB for TFLite")
+                import gc
+                gc.collect()
         else:
             # === DISABLE: aggressive cleanup to free RAM and CPU ===
             video_processor._inject_cat_bbox = None
@@ -2245,8 +2252,13 @@ def create_app():
             import gc
             gc.collect()
             
+            # Restart camera (was stopped on inject enable)
+            if video_processor.camera and not video_processor.camera.running:
+                video_processor.camera.start()
+                print("[INJECT CLEANUP] Camera restarted")
+            
             print(f"[INJECT CLEANUP] TFLite unloaded, cat image freed, "
-                  f"frame cleared, GC forced, 5s cooldown started")
+                  f"frame cleared, camera restarted, GC forced, 5s cooldown")
         
         status = "active" if video_processor.inject_cat else "stopped"
         print(f"[INJECT API] Cat injection: {status}, "
