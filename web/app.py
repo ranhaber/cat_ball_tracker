@@ -582,7 +582,16 @@ class VideoProcessor:
                 # Inject cat mode: skip camera entirely, use synthetic frame
                 if self.inject_cat:
                     cam_res = self.camera.get_resolution() if self.camera else (2304, 1296)
-                    frame = np.full((cam_res[1], cam_res[0], 3), (50, 120, 50), dtype=np.uint8)
+                    # Reuse green frame buffer — avoid allocating 9MB every iteration
+                    # (picamera2 reuses camera buffers; we must do the same for synthetic frames)
+                    if not hasattr(self, '_inject_green_frame') or self._inject_green_frame is None \
+                            or self._inject_green_frame.shape != (cam_res[1], cam_res[0], 3):
+                        self._inject_green_frame = np.full((cam_res[1], cam_res[0], 3), (50, 120, 50), dtype=np.uint8)
+                        print(f"[INJECT] Green frame buffer allocated: {cam_res[0]}x{cam_res[1]} "
+                              f"({self._inject_green_frame.nbytes // 1024}KB)")
+                    # Reset to green (cat paste from last frame is still there)
+                    self._inject_green_frame[:] = (50, 120, 50)
+                    frame = self._inject_green_frame
                 else:
                     frame = None
                     if self.video_source == "file" and self.file_camera and self.file_camera.running:
@@ -613,13 +622,17 @@ class VideoProcessor:
                             # Still waiting — draw perimeter + status on green frame
                             remaining = self._inject_respawn_time - time.time()
                             if self.stream_clients > 0:
-                                self.perimeter.draw(frame)
-                                self._draw_status(frame)
-                                cv2.putText(frame, f"Cat respawning in {remaining:.0f}s",
+                                respawn_frame = frame.copy()  # Copy — we reuse the green buffer
+                                self.perimeter.draw(respawn_frame)
+                                self._draw_status(respawn_frame)
+                                cv2.putText(respawn_frame, f"Cat respawning in {remaining:.0f}s",
                                            (frame_w // 2 - 200, frame_h // 2),
                                            cv2.FONT_HERSHEY_SIMPLEX, 1.0, (255, 255, 255), 2)
-                            with self.frame_lock:
-                                self.current_frame = frame
+                                with self.frame_lock:
+                                    self.current_frame = respawn_frame
+                            else:
+                                with self.frame_lock:
+                                    self.current_frame = frame.copy()
                             time.sleep(0.2)
                             continue
                         else:
@@ -856,12 +869,13 @@ class VideoProcessor:
                     self._draw_status(annotated)
                     
                     # Store for MJPEG streaming
+                    # In inject mode, copy because we reuse the green buffer
                     with self.frame_lock:
-                        self.current_frame = annotated
+                        self.current_frame = annotated.copy() if self.inject_cat else annotated
                 else:
                     # No stream clients — store raw frame (for snapshots) without annotation
                     with self.frame_lock:
-                        self.current_frame = frame
+                        self.current_frame = frame.copy() if self.inject_cat else frame
                 
                 # Recording on detection (live only, when enabled)
                 if self.video_source == "live" and self.recording_enabled:
@@ -2201,6 +2215,10 @@ def create_app():
             
             # Free the original cat image too (5MB numpy array — reload on next enable)
             video_processor._inject_cat_img = None
+            
+            # Free the reusable green frame buffer
+            if hasattr(video_processor, '_inject_green_frame'):
+                video_processor._inject_green_frame = None
             
             # Clear the current frame buffer (large numpy array)
             with video_processor.frame_lock:
