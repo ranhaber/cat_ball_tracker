@@ -289,6 +289,42 @@ class CameraHandler:
         """Get current camera resolution"""
         return (self.width, self.height)
     
+    def pause(self):
+        """Pause the camera (stop streaming but keep device open).
+        Use resume() to restart. Frees DMA buffers (~18MB)."""
+        if not self.running or self.use_mock:
+            return
+        self.running = False
+        if self.camera is not None:
+            try:
+                self.camera.stop()
+                print("Camera paused (DMA buffers freed, device kept open)")
+            except Exception as e:
+                print(f"Error pausing camera: {e}")
+    
+    def resume(self):
+        """Resume a paused camera (restart streaming)."""
+        if self.running:
+            return
+        if self.camera is not None and not self.use_mock:
+            try:
+                self.camera.start()
+                self.running = True
+                time.sleep(0.5)  # Brief warmup
+                print("Camera resumed")
+            except Exception as e:
+                print(f"Error resuming camera: {e}")
+                # Fallback: full restart
+                try:
+                    self.camera.close()
+                    self.camera = None
+                    self.start()
+                    print("Camera fully restarted (fallback)")
+                except Exception as e2:
+                    print(f"Camera restart also failed: {e2}")
+        else:
+            self.start()
+    
     def stop(self):
         """Stop the camera and release resources"""
         self.running = False

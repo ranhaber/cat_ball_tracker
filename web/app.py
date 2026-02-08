@@ -2200,10 +2200,11 @@ def create_app():
             if hasattr(video_processor, '_jpeg_first_logged'):
                 del video_processor._jpeg_first_logged
             
-            # Stop camera to free ~18MB of buffers (not used during inject)
+            # Pause camera to free ~18MB of DMA buffers (not used during inject)
+            # pause() keeps device open, resume() is fast and reliable
             if video_processor.camera:
-                video_processor.camera.stop()
-                print("[INJECT] Camera stopped to free ~18MB for TFLite")
+                video_processor.camera.pause()
+                print("[INJECT] Camera paused to free ~18MB for TFLite")
                 import gc
                 gc.collect()
         else:
@@ -2252,10 +2253,10 @@ def create_app():
             import gc
             gc.collect()
             
-            # Restart camera (was stopped on inject enable)
+            # Resume camera (was paused on inject enable)
             if video_processor.camera and not video_processor.camera.running:
-                video_processor.camera.start()
-                print("[INJECT CLEANUP] Camera restarted")
+                video_processor.camera.resume()
+                print("[INJECT CLEANUP] Camera resumed")
             
             print(f"[INJECT CLEANUP] TFLite unloaded, cat image freed, "
                   f"frame cleared, camera restarted, GC forced, 5s cooldown")
