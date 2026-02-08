@@ -16,6 +16,7 @@
             <button class="tab-btn active" data-tab="video">📹 Video</button>
             <button class="tab-btn" data-tab="settings">⚙️ Settings</button>
             <button class="tab-btn" data-tab="zone">📍 Zone</button>
+            <button class="tab-btn" data-tab="developer">🔧 Developer</button>
         </nav>
 
         <main>
@@ -377,6 +378,39 @@
                                 <p id="lens-params" style="display:none; font-size:0.85em; color:#aaa;"></p>
                             </div>
                             <p class="hint">1) Load Frame. 2) Click 3+ points along a straight line. 3) Add Line (repeat). 4) Save Lines when done adding. 5) Calibrate. Target: 6+ lines spread across the image.</p>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Developer Tab -->
+            <section id="developer-tab" class="tab-content">
+                <div class="control-panel">
+                    <!-- System Info -->
+                    <div class="control-section">
+                        <h2>System Information</h2>
+                        <div id="dev-system-info" style="font-family: monospace; font-size: 0.9em; line-height: 1.6;">
+                            <p>Loading...</p>
+                        </div>
+                        <button class="btn btn-secondary" onclick="refreshDevInfo()">🔄 Refresh</button>
+                    </div>
+
+                    <!-- Service Controls -->
+                    <div class="control-section">
+                        <h2>Services</h2>
+                        <div class="service-control" style="display: flex; align-items: center; gap: 12px; padding: 8px 0;">
+                            <span style="min-width: 120px;"><strong>RPi Connect:</strong></span>
+                            <span id="rpi-connect-status" style="min-width: 80px; color: #888;">checking...</span>
+                            <button id="rpi-connect-toggle" class="btn btn-secondary" onclick="toggleRpiConnect()">Toggle</button>
+                        </div>
+                        <p class="hint">RPi Connect provides remote VNC access. Disabling saves ~13 MB RAM.</p>
+                    </div>
+
+                    <!-- Thread Info -->
+                    <div class="control-section">
+                        <h2>Threads</h2>
+                        <div id="dev-threads-info" style="font-family: monospace; font-size: 0.85em; line-height: 1.5;">
+                            <p>Loading...</p>
                         </div>
                     </div>
                 </div>

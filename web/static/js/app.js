@@ -2254,3 +2254,109 @@ function updateLensStatusUI(data) {
         if (paramsEl) paramsEl.style.display = 'none';
     }
 }
+
+// ============================================================================
+// Developer Tab
+// ============================================================================
+
+async function refreshDevInfo() {
+    try {
+        const response = await fetch('/api/dev/system');
+        const d = await response.json();
+        
+        const ramTotal = ((d.ram_total_kb || 0) / 1024).toFixed(0);
+        const ramAvail = ((d.ram_available_kb || 0) / 1024).toFixed(0);
+        const ramFree = ((d.ram_free_kb || 0) / 1024).toFixed(0);
+        const swapTotal = ((d.swap_total_kb || 0) / 1024).toFixed(0);
+        const swapUsed = (((d.swap_total_kb || 0) - (d.swap_free_kb || 0)) / 1024).toFixed(0);
+        const procRSS = ((d.process_rss_kb || 0) / 1024).toFixed(0);
+        const procSwap = ((d.process_swap_kb || 0) / 1024).toFixed(0);
+        
+        const el = document.getElementById('dev-system-info');
+        if (el) {
+            el.innerHTML = `
+                <table style="width:100%; border-collapse:collapse;">
+                <tr><td style="padding:2px 8px;">RAM Total:</td><td><strong>${ramTotal} MB</strong></td></tr>
+                <tr><td style="padding:2px 8px;">RAM Available:</td><td><strong style="color:${parseInt(ramAvail) < 80 ? '#ff6b6b' : '#3fb950'}">${ramAvail} MB</strong></td></tr>
+                <tr><td style="padding:2px 8px;">RAM Free:</td><td>${ramFree} MB</td></tr>
+                <tr><td style="padding:2px 8px;">Swap Used:</td><td><strong style="color:${parseInt(swapUsed) > 50 ? '#d29922' : '#3fb950'}">${swapUsed} / ${swapTotal} MB</strong></td></tr>
+                <tr><td style="padding:2px 8px;">CPU Temp:</td><td><strong style="color:${(d.cpu_temp||0) > 70 ? '#ff6b6b' : '#3fb950'}">${d.cpu_temp || '--'}°C</strong></td></tr>
+                <tr><td style="padding:2px 8px;">Uptime:</td><td>${d.uptime || '--'}</td></tr>
+                <tr><td style="padding:2px 8px;">Disk:</td><td>${d.disk_used || '--'} / ${d.disk_total || '--'} (${d.disk_percent || '--'})</td></tr>
+                <tr><td colspan="2" style="padding:6px 0 2px; border-top:1px solid #333;"><strong>Cat Dome Process:</strong></td></tr>
+                <tr><td style="padding:2px 8px;">Process RAM (RSS):</td><td><strong>${procRSS} MB</strong></td></tr>
+                <tr><td style="padding:2px 8px;">Process Swap:</td><td>${procSwap} MB</td></tr>
+                <tr><td style="padding:2px 8px;">Threads:</td><td>${d.process_threads || '--'}</td></tr>
+                <tr><td style="padding:2px 8px;">Stream Clients:</td><td>${d.stream_clients || 0}</td></tr>
+                <tr><td style="padding:2px 8px;">TFLite Loaded:</td><td style="color:${d.tflite_loaded ? '#d29922' : '#3fb950'}">${d.tflite_loaded ? 'YES (active)' : 'No (idle)'}</td></tr>
+                <tr><td style="padding:2px 8px;">Motion:</td><td>${d.motion_detected ? 'ACTIVE' : 'Idle'}</td></tr>
+                <tr><td style="padding:2px 8px;">AI Runs (total):</td><td>${d.ai_runs || 0}</td></tr>
+                </table>
+            `;
+        }
+        
+        // Refresh rpi-connect status
+        refreshRpiConnectStatus();
+        
+    } catch (error) {
+        console.error('Error loading dev info:', error);
+    }
+}
+
+async function refreshRpiConnectStatus() {
+    try {
+        const response = await fetch('/api/dev/service/rpi-connect');
+        const d = await response.json();
+        const statusEl = document.getElementById('rpi-connect-status');
+        const btnEl = document.getElementById('rpi-connect-toggle');
+        if (statusEl) {
+            const isActive = d.status === 'active';
+            statusEl.textContent = isActive ? '🟢 Running' : '🔴 Stopped';
+            statusEl.style.color = isActive ? '#3fb950' : '#ff6b6b';
+            if (btnEl) {
+                btnEl.textContent = isActive ? '⏹ Stop' : '▶ Start';
+                btnEl.className = isActive ? 'btn btn-secondary' : 'btn btn-success';
+            }
+        }
+    } catch (error) {
+        const statusEl = document.getElementById('rpi-connect-status');
+        if (statusEl) {
+            statusEl.textContent = '⚠ Error';
+            statusEl.style.color = '#d29922';
+        }
+    }
+}
+
+async function toggleRpiConnect() {
+    const btnEl = document.getElementById('rpi-connect-toggle');
+    if (btnEl) btnEl.textContent = '⏳...';
+    
+    try {
+        const response = await fetch('/api/dev/service/rpi-connect', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action: 'toggle' })
+        });
+        const d = await response.json();
+        if (d.success) {
+            refreshRpiConnectStatus();
+            refreshDevInfo();
+        } else {
+            alert('Failed: ' + (d.error || 'Unknown error'));
+            refreshRpiConnectStatus();
+        }
+    } catch (error) {
+        alert('Error toggling service: ' + error);
+        refreshRpiConnectStatus();
+    }
+}
+
+// Auto-refresh developer tab when visible
+document.addEventListener('DOMContentLoaded', () => {
+    const devTab = document.querySelector('[data-tab="developer"]');
+    if (devTab) {
+        devTab.addEventListener('click', () => {
+            refreshDevInfo();
+        });
+    }
+});
