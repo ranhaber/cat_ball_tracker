@@ -570,6 +570,15 @@ class VideoProcessor:
         
         while self.running:
             try:
+                # Post-inject cooldown: sleep to let system recover from high RAM
+                if hasattr(self, '_inject_cooldown_until') and self._inject_cooldown_until > 0:
+                    if time.time() < self._inject_cooldown_until:
+                        time.sleep(0.5)
+                        continue
+                    else:
+                        self._inject_cooldown_until = 0
+                        print("[INJECT] Cooldown ended, resuming normal processing")
+                
                 # Inject cat mode: skip camera entirely, use synthetic frame
                 if self.inject_cat:
                     cam_res = self.camera.get_resolution() if self.camera else (2304, 1296)
@@ -2160,6 +2169,10 @@ def create_app():
             video_processor._inject_cat_bbox = None
             video_processor._inject_respawn_time = 0
             video_processor._inject_cat_fixed_size = None
+            video_processor._inject_cooldown_until = 0  # Cancel any cooldown
+            # Reload cat image if it was freed on previous disable
+            if video_processor._inject_cat_img is None:
+                video_processor._load_inject_cat_image()
             if hasattr(video_processor, '_inject_debug_count'):
                 video_processor._inject_debug_count = 0
             # Reset debug one-shot flags
@@ -2168,7 +2181,7 @@ def create_app():
             if hasattr(video_processor, '_jpeg_first_logged'):
                 del video_processor._jpeg_first_logged
         else:
-            # === DISABLE: full cleanup to free RAM and CPU ===
+            # === DISABLE: aggressive cleanup to free RAM and CPU ===
             video_processor._inject_cat_bbox = None
             video_processor._inject_cat_initialized = False
             video_processor._inject_respawn_time = 0
@@ -2180,6 +2193,13 @@ def create_app():
                 video_processor._inject_cat_cached_size = None
                 video_processor._inject_cat_cached_w = 0
                 video_processor._inject_cat_cached_h = 0
+            
+            # Free the original cat image too (5MB numpy array — reload on next enable)
+            video_processor._inject_cat_img = None
+            
+            # Clear the current frame buffer (large numpy array)
+            with video_processor.frame_lock:
+                video_processor.current_frame = None
             
             # Reset motion state so idle timeout can trigger TFLite unload
             video_processor.motion_detected = False
@@ -2195,8 +2215,15 @@ def create_app():
             video_processor.last_detections_with_world = []
             video_processor.detection_history = []
             
-            print(f"[INJECT CLEANUP] TFLite unloaded, cache freed, "
-                  f"motion reset, OpenCV threads=1")
+            # Set cooldown — processing loop will sleep for 5s to let system recover
+            video_processor._inject_cooldown_until = time.time() + 5.0
+            
+            # Force Python garbage collection to reclaim freed memory NOW
+            import gc
+            gc.collect()
+            
+            print(f"[INJECT CLEANUP] TFLite unloaded, cat image freed, "
+                  f"frame cleared, GC forced, 5s cooldown started")
         
         status = "active" if video_processor.inject_cat else "stopped"
         print(f"[INJECT API] Cat injection: {status}, "
