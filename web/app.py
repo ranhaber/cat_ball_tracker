@@ -484,24 +484,29 @@ class VideoProcessor:
         
         while self.running:
             try:
-                frame = None
-                if self.video_source == "file" and self.file_camera and self.file_camera.running:
-                    frame = self.file_camera.get_frame()
-                    if frame is None:
-                        time.sleep(0.05)
-                        continue
+                # Inject cat mode: skip camera entirely, use synthetic frame
+                if self.inject_cat:
+                    cam_res = self.camera.get_resolution() if self.camera else (2304, 1296)
+                    frame = np.full((cam_res[1], cam_res[0], 3), (50, 120, 50), dtype=np.uint8)
                 else:
-                    request = self.camera.get_request()
-                    if request is None:
-                        frame = self.camera.get_frame()
+                    frame = None
+                    if self.video_source == "file" and self.file_camera and self.file_camera.running:
+                        frame = self.file_camera.get_frame()
                         if frame is None:
-                            time.sleep(0.01)
+                            time.sleep(0.05)
                             continue
                     else:
-                        with request as req:
-                            # picamera2 "RGB888" format actually stores BGR bytes in memory
-                            # (reversed naming convention), which is exactly what OpenCV needs
-                            frame = req.make_array("main")
+                        request = self.camera.get_request()
+                        if request is None:
+                            frame = self.camera.get_frame()
+                            if frame is None:
+                                time.sleep(0.01)
+                                continue
+                        else:
+                            with request as req:
+                                # picamera2 "RGB888" format actually stores BGR bytes in memory
+                                # (reversed naming convention), which is exactly what OpenCV needs
+                                frame = req.make_array("main")
                 
                 frame_h, frame_w = frame.shape[:2]
                 run_ai_detection = False
