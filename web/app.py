@@ -199,6 +199,7 @@ class VideoProcessor:
         self._inject_cat_size = 150  # fallback pixel width
         self._inject_cat_initialized = False
         self._inject_cat_bbox = None
+        self._inject_respawn_time = 0  # 0 = no respawn pending
         self._load_inject_cat_image()
         
         # Temporal confirmation - require detection in N consecutive frames
@@ -462,15 +463,23 @@ class VideoProcessor:
         self._inject_cat_x += self._inject_cat_dx * self._inject_cat_speed
         self._inject_cat_y += self._inject_cat_dy * self._inject_cat_speed
         
-        # Check if cat left the frame — bounce off edges
-        cx = self._inject_cat_x + new_w // 2
-        cy = self._inject_cat_y + new_h // 2
-        out_of_frame = cx < 0 or cx > w or cy < 0 or cy > h
+        # Cat's bottom-center (ground contact point, same as real detection)
+        bcx = self._inject_cat_x + new_w // 2
+        bcy = self._inject_cat_y + new_h  # bottom of bounding box
         
-        if out_of_frame:
-            print(f"[INJECT] Cat out of frame: center=({cx:.0f},{cy:.0f}), "
-                  f"frame={w}x{h}, resetting position")
+        # Check if cat left the frame
+        out_of_frame = bcx < 0 or bcx > w or bcy < 0 or bcy > h
+        
+        # Check if cat left the Detection Zone
+        out_of_zone = not self._is_inside_perimeter_px(bcx, bcy, w, h)
+        
+        if out_of_frame or out_of_zone:
+            reason = "frame" if out_of_frame else "Detection Zone"
+            print(f"[INJECT] Cat left {reason}: bottom-center=({bcx:.0f},{bcy:.0f}), "
+                  f"frame={w}x{h}, starting 10s respawn timer")
             self._inject_cat_initialized = False
+            self._inject_cat_bbox = None  # Clear bbox so no detection this frame
+            self._inject_respawn_time = time.time() + 10.0  # 10-second delay
             return frame
         
         x = max(0, min(int(self._inject_cat_x), w - new_w))
@@ -544,8 +553,23 @@ class VideoProcessor:
                 
                 frame_h, frame_w = frame.shape[:2]
                 
-                # ===== Inject cat mode: full shortcut (skip normal pipeline) =====
+                # ===== Inject cat mode: paste cat on synthetic frame, then use NORMAL pipeline =====
                 if self.inject_cat:
+                    # Check respawn timer — wait 10s after cat leaves Detection Zone
+                    if hasattr(self, '_inject_respawn_time') and self._inject_respawn_time > 0:
+                        if time.time() < self._inject_respawn_time:
+                            # Still waiting — store green frame and skip
+                            with self.frame_lock:
+                                self.current_frame = frame
+                            time.sleep(0.2)
+                            continue
+                        else:
+                            # Timer expired — reset for new cat
+                            self._inject_respawn_time = 0
+                            self._inject_cat_initialized = False
+                            self._inject_cat_bbox = None
+                            print("[INJECT] Respawn timer expired — new cat appearing")
+                    
                     frame = self._inject_cat_on_frame(frame)
                     # Debug: log inject state
                     if not hasattr(self, '_inject_debug_count'):
@@ -556,66 +580,7 @@ class VideoProcessor:
                               f"bbox={self._inject_cat_bbox}, initialized={self._inject_cat_initialized}, "
                               f"pos=({self._inject_cat_x:.0f},{self._inject_cat_y:.0f}), "
                               f"stream_clients={self.stream_clients}")
-                    
-                    # Process detection data if cat was successfully placed
-                    last_detections = []
-                    tracked_objects = {}
-                    if self._inject_cat_bbox:
-                        bbox = self._inject_cat_bbox
-                        cat_class_id = config.COCO_CLASSES.get('cat', 17)
-                        last_detections = [(bbox[0], bbox[1], bbox[2], bbox[3], 0.95, cat_class_id)]
-                        self.motion_detected = True
-                        self._last_motion_time = time.time()
-                        self.ai_detections_count += 1
-                        self.last_detections_with_world = []
-                        for det in last_detections:
-                            x1, y1, x2, y2, conf, class_id = det
-                            world_pos = None
-                            if self.calibration and self.calibration.is_calibrated:
-                                bcx = (x1 + x2) / 2
-                                bcy = y2
-                                wp = self.pixel_to_world(bcx, bcy, already_undistorted=False)
-                                if wp:
-                                    world_pos = {"world_x": round(wp[0], 2), "world_y": round(wp[1], 2)}
-                            self.last_detections_with_world.append({
-                                "bbox": [x1, y1, x2, y2],
-                                "confidence": round(conf, 2),
-                                "class_id": class_id,
-                                "world_position": world_pos,
-                                "injected": True
-                            })
-                        tracked_objects = self.tracker.update(last_detections)
-                    
-                    self._update_fps()
-                    self.frame_count += 1
-                    
-                    # ALWAYS store the frame — green bg must be visible even without cat
-                    if self.stream_clients > 0 and last_detections:
-                        annotated = frame
-                        self.perimeter.draw(annotated)
-                        self.detector.draw_detections(annotated, last_detections, tracked_objects)
-                        for det_info in self.last_detections_with_world:
-                            if det_info.get("injected"):
-                                bx = det_info["bbox"]
-                                cv2.rectangle(annotated, (bx[0], bx[1]), (bx[2], bx[3]),
-                                             (0, 255, 255), 3)
-                                cv2.putText(annotated, "INJECTED", (bx[0], bx[1] - 5),
-                                           cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 2)
-                        self._draw_status(annotated)
-                        with self.frame_lock:
-                            self.current_frame = annotated
-                        if self._inject_debug_count <= 3:
-                            print(f"[INJECT STORE] annotated frame stored, shape={annotated.shape}")
-                    else:
-                        # Still store the green frame so stream shows something
-                        with self.frame_lock:
-                            self.current_frame = frame
-                        if self._inject_debug_count <= 3:
-                            print(f"[INJECT STORE] green frame stored (no detections or no clients), "
-                                  f"shape={frame.shape}, clients={self.stream_clients}, "
-                                  f"has_dets={bool(last_detections)}")
-                    time.sleep(0.2)
-                    continue
+                    # Fall through to normal pipeline (motion, AI, perimeter filter, etc.)
                 
                 run_ai_detection = False
                 crop_region = None
@@ -630,7 +595,12 @@ class VideoProcessor:
                     self._update_fps()
                     self.frame_count += 1
                     
-                    if self.motion_first_enabled:
+                    # Inject mode: skip motion detection, force AI detection
+                    if self.inject_cat:
+                        run_ai_detection = True
+                        self.motion_detected = True
+                        self._last_motion_time = time.time()
+                    elif self.motion_first_enabled:
                         # Motion-first mode: only run AI when motion detected
                         motion_start = time.time()
                         motion_result = self.motion_detector.detect(frame)
@@ -840,6 +810,10 @@ class VideoProcessor:
                     else:
                         if self._recording_writer is not None and (now - self._recording_last_detection_time) >= self.record_after_detection_sec:
                             self._stop_recording()
+                
+                # Rate-limit inject mode (no camera blocking to slow us down)
+                if self.inject_cat:
+                    time.sleep(0.15)
                 
             except Exception as e:
                 print(f"Processing error: {e}")
@@ -2130,6 +2104,7 @@ def create_app():
         if video_processor.inject_cat:
             video_processor._inject_cat_initialized = False
             video_processor._inject_cat_bbox = None
+            video_processor._inject_respawn_time = 0
             if hasattr(video_processor, '_inject_debug_count'):
                 video_processor._inject_debug_count = 0
             # Reset debug one-shot flags
