@@ -635,14 +635,77 @@ class VideoProcessor:
                         self._inject_debug_count = 0
                     self._inject_debug_count += 1
                     if self._inject_debug_count <= 5 or self._inject_debug_count % 50 == 0:
-                        # Get RAM stats for tracking analysis
                         ram_info = self._get_ram_stats()
-                        print(f"[INJECT DEBUG] frame={frame.shape}, img_loaded={self._inject_cat_img is not None}, "
-                              f"bbox={self._inject_cat_bbox}, initialized={self._inject_cat_initialized}, "
+                        print(f"[INJECT DEBUG] bbox={self._inject_cat_bbox}, "
                               f"pos=({self._inject_cat_x:.0f},{self._inject_cat_y:.0f}), "
-                              f"stream_clients={self.stream_clients}, "
-                              f"RAM: {ram_info}")
-                    # Fall through to normal pipeline (motion, AI, perimeter filter, etc.)
+                              f"clients={self.stream_clients}, RAM: {ram_info}")
+                    
+                    # === LIGHTWEIGHT inject path: no TFLite, just perimeter + world coords ===
+                    last_detections = []
+                    tracked_objects = {}
+                    if self._inject_cat_bbox:
+                        bbox = self._inject_cat_bbox
+                        cat_class_id = config.COCO_CLASSES.get('cat', 17)
+                        raw_det = (bbox[0], bbox[1], bbox[2], bbox[3], 0.95, cat_class_id)
+                        
+                        # Apply perimeter filter (same as real pipeline)
+                        frame_res = (frame_w, frame_h)
+                        filtered = self.perimeter.filter_detections([raw_det], frame_resolution=frame_res)
+                        
+                        if filtered:
+                            last_detections = filtered
+                            self.motion_detected = True
+                            self._last_motion_time = time.time()
+                            self.ai_detections_count += 1
+                            
+                            # Compute world coords (same as real pipeline: bottom-center)
+                            self.last_detections_with_world = []
+                            for det in last_detections:
+                                x1, y1, x2, y2, conf, class_id = det
+                                world_pos = None
+                                if self.calibration and self.calibration.is_calibrated:
+                                    bcx = (x1 + x2) / 2
+                                    bcy = y2  # bottom-center
+                                    wp = self.pixel_to_world(bcx, bcy, already_undistorted=False)
+                                    if wp:
+                                        world_pos = {"world_x": round(wp[0], 2), "world_y": round(wp[1], 2)}
+                                self.last_detections_with_world.append({
+                                    "bbox": [x1, y1, x2, y2],
+                                    "confidence": round(conf, 2),
+                                    "class_id": class_id,
+                                    "world_position": world_pos,
+                                    "injected": True
+                                })
+                            tracked_objects = self.tracker.update(last_detections)
+                        else:
+                            # Cat is outside Detection Zone — clear detections
+                            self.last_detections_with_world = []
+                    
+                    self._update_fps()
+                    self.frame_count += 1
+                    
+                    # Store frame (with or without annotations)
+                    if self.stream_clients > 0:
+                        annotated = frame
+                        self.perimeter.draw(annotated)
+                        if last_detections:
+                            self.detector.draw_detections(annotated, last_detections, tracked_objects)
+                            for det_info in self.last_detections_with_world:
+                                if det_info.get("injected"):
+                                    bx = det_info["bbox"]
+                                    cv2.rectangle(annotated, (bx[0], bx[1]), (bx[2], bx[3]),
+                                                 (0, 255, 255), 3)
+                                    cv2.putText(annotated, "INJECTED", (bx[0], bx[1] - 5),
+                                               cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 2)
+                        self._draw_status(annotated)
+                        with self.frame_lock:
+                            self.current_frame = annotated
+                    else:
+                        with self.frame_lock:
+                            self.current_frame = frame
+                    
+                    time.sleep(0.2)
+                    continue
                 
                 run_ai_detection = False
                 crop_region = None
@@ -657,12 +720,7 @@ class VideoProcessor:
                     self._update_fps()
                     self.frame_count += 1
                     
-                    # Inject mode: skip motion detection, force AI detection
-                    if self.inject_cat:
-                        run_ai_detection = True
-                        self.motion_detected = True
-                        self._last_motion_time = time.time()
-                    elif self.motion_first_enabled:
+                    if self.motion_first_enabled:
                         # Motion-first mode: only run AI when motion detected
                         motion_start = time.time()
                         motion_result = self.motion_detector.detect(frame)
@@ -717,6 +775,25 @@ class VideoProcessor:
                         self.motion_detected = True
                     
                     if run_ai_detection:
+                        # RAM safety: skip AI if available RAM is critically low
+                        try:
+                            with open('/proc/meminfo', 'r') as f:
+                                for line in f:
+                                    if line.startswith('MemAvailable:'):
+                                        avail_kb = int(line.split()[1])
+                                        if avail_kb < 40 * 1024:  # < 40 MB available
+                                            run_ai_detection = False
+                                            # Unload TFLite to free RAM
+                                            if self.detector.is_loaded():
+                                                self.detector.unload_model()
+                                                cv2.setNumThreads(1)
+                                                print(f"[RAM SAFETY] AI skipped & TFLite unloaded: "
+                                                      f"only {avail_kb//1024}MB available")
+                                        break
+                        except Exception:
+                            pass
+                    
+                    if run_ai_detection:
                         ai_start = time.time()
                         if crop_region and self.motion_first_enabled:
                             # Crop frame to motion region for AI detection
@@ -741,21 +818,6 @@ class VideoProcessor:
                             detections = self.detector.detect(frame)
                         
                         ai_time_ms = (time.time() - ai_start) * 1000
-                        
-                        # Inject Cat fallback: if TFLite didn't detect the injected cat,
-                        # add a fake detection at the cat's position
-                        if self.inject_cat and hasattr(self, '_inject_cat_bbox'):
-                            bbox = self._inject_cat_bbox
-                            cat_class_id = config.COCO_CLASSES.get('cat', 17)
-                            # Check if TFLite detected something near the injected position
-                            tflite_found = any(
-                                abs((d[0]+d[2])/2 - (bbox[0]+bbox[2])/2) < 100 and
-                                abs((d[1]+d[3])/2 - (bbox[1]+bbox[3])/2) < 100
-                                for d in detections
-                            )
-                            if not tflite_found:
-                                # Inject fake detection
-                                detections.append((bbox[0], bbox[1], bbox[2], bbox[3], 0.95, cat_class_id))
                         
                         # Filter by perimeter (pass frame resolution for scaling)
                         frame_res = (frame_w, frame_h)
@@ -837,16 +899,6 @@ class VideoProcessor:
                         tracked_objects
                     )
                     
-                    # Draw injected detection with yellow box (override green)
-                    if self.inject_cat and self.last_detections_with_world:
-                        for det_info in self.last_detections_with_world:
-                            if det_info.get("injected"):
-                                bx = det_info["bbox"]
-                                cv2.rectangle(annotated, (bx[0], bx[1]), (bx[2], bx[3]), 
-                                             (0, 255, 255), 3)  # Yellow, thick
-                                cv2.putText(annotated, "INJECTED", (bx[0], bx[1] - 5),
-                                           cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 2)
-                    
                     # Draw FPS and status
                     self._draw_status(annotated)
                     
@@ -872,10 +924,6 @@ class VideoProcessor:
                     else:
                         if self._recording_writer is not None and (now - self._recording_last_detection_time) >= self.record_after_detection_sec:
                             self._stop_recording()
-                
-                # Rate-limit inject mode (no camera blocking to slow us down)
-                if self.inject_cat:
-                    time.sleep(0.15)
                 
             except Exception as e:
                 print(f"Processing error: {e}")
