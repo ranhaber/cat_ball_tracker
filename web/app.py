@@ -630,7 +630,7 @@ class VideoProcessor:
                             print("[INJECT] Respawn timer expired — new cat appearing")
                     
                     frame = self._inject_cat_on_frame(frame)
-                    # Debug: log inject state
+                    # Debug: log inject state periodically
                     if not hasattr(self, '_inject_debug_count'):
                         self._inject_debug_count = 0
                     self._inject_debug_count += 1
@@ -639,73 +639,7 @@ class VideoProcessor:
                         print(f"[INJECT DEBUG] bbox={self._inject_cat_bbox}, "
                               f"pos=({self._inject_cat_x:.0f},{self._inject_cat_y:.0f}), "
                               f"clients={self.stream_clients}, RAM: {ram_info}")
-                    
-                    # === LIGHTWEIGHT inject path: no TFLite, just perimeter + world coords ===
-                    last_detections = []
-                    tracked_objects = {}
-                    if self._inject_cat_bbox:
-                        bbox = self._inject_cat_bbox
-                        cat_class_id = config.COCO_CLASSES.get('cat', 17)
-                        raw_det = (bbox[0], bbox[1], bbox[2], bbox[3], 0.95, cat_class_id)
-                        
-                        # Apply perimeter filter (same as real pipeline)
-                        frame_res = (frame_w, frame_h)
-                        filtered = self.perimeter.filter_detections([raw_det], frame_resolution=frame_res)
-                        
-                        if filtered:
-                            last_detections = filtered
-                            self.motion_detected = True
-                            self._last_motion_time = time.time()
-                            self.ai_detections_count += 1
-                            
-                            # Compute world coords (same as real pipeline: bottom-center)
-                            self.last_detections_with_world = []
-                            for det in last_detections:
-                                x1, y1, x2, y2, conf, class_id = det
-                                world_pos = None
-                                if self.calibration and self.calibration.is_calibrated:
-                                    bcx = (x1 + x2) / 2
-                                    bcy = y2  # bottom-center
-                                    wp = self.pixel_to_world(bcx, bcy, already_undistorted=False)
-                                    if wp:
-                                        world_pos = {"world_x": round(wp[0], 2), "world_y": round(wp[1], 2)}
-                                self.last_detections_with_world.append({
-                                    "bbox": [x1, y1, x2, y2],
-                                    "confidence": round(conf, 2),
-                                    "class_id": class_id,
-                                    "world_position": world_pos,
-                                    "injected": True
-                                })
-                            tracked_objects = self.tracker.update(last_detections)
-                        else:
-                            # Cat is outside Detection Zone — clear detections
-                            self.last_detections_with_world = []
-                    
-                    self._update_fps()
-                    self.frame_count += 1
-                    
-                    # Store frame (with or without annotations)
-                    if self.stream_clients > 0:
-                        annotated = frame
-                        self.perimeter.draw(annotated)
-                        if last_detections:
-                            self.detector.draw_detections(annotated, last_detections, tracked_objects)
-                            for det_info in self.last_detections_with_world:
-                                if det_info.get("injected"):
-                                    bx = det_info["bbox"]
-                                    cv2.rectangle(annotated, (bx[0], bx[1]), (bx[2], bx[3]),
-                                                 (0, 255, 255), 3)
-                                    cv2.putText(annotated, "INJECTED", (bx[0], bx[1] - 5),
-                                               cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 2)
-                        self._draw_status(annotated)
-                        with self.frame_lock:
-                            self.current_frame = annotated
-                    else:
-                        with self.frame_lock:
-                            self.current_frame = frame
-                    
-                    time.sleep(0.2)
-                    continue
+                    # Fall through to the REAL pipeline below (same as camera frames)
                 
                 run_ai_detection = False
                 crop_region = None
@@ -720,7 +654,13 @@ class VideoProcessor:
                     self._update_fps()
                     self.frame_count += 1
                     
-                    if self.motion_first_enabled:
+                    if self.inject_cat:
+                        # Inject mode: skip motion detection, force AI
+                        # (synthetic frames don't have real motion patterns)
+                        run_ai_detection = True
+                        self.motion_detected = True
+                        self._last_motion_time = time.time()
+                    elif self.motion_first_enabled:
                         # Motion-first mode: only run AI when motion detected
                         motion_start = time.time()
                         motion_result = self.motion_detector.detect(frame)
@@ -818,6 +758,19 @@ class VideoProcessor:
                             detections = self.detector.detect(frame)
                         
                         ai_time_ms = (time.time() - ai_start) * 1000
+                        
+                        # Inject Cat fallback: if TFLite didn't detect the pasted cat,
+                        # inject a fake detection so the rest of the pipeline can test
+                        if self.inject_cat and self._inject_cat_bbox:
+                            bbox = self._inject_cat_bbox
+                            cat_class_id = config.COCO_CLASSES.get('cat', 17)
+                            tflite_found = any(
+                                abs((d[0]+d[2])/2 - (bbox[0]+bbox[2])/2) < 100 and
+                                abs((d[1]+d[3])/2 - (bbox[1]+bbox[3])/2) < 100
+                                for d in detections
+                            )
+                            if not tflite_found:
+                                detections.append((bbox[0], bbox[1], bbox[2], bbox[3], 0.95, cat_class_id))
                         
                         # Filter by perimeter (pass frame resolution for scaling)
                         frame_res = (frame_w, frame_h)
@@ -924,6 +877,10 @@ class VideoProcessor:
                     else:
                         if self._recording_writer is not None and (now - self._recording_last_detection_time) >= self.record_after_detection_sec:
                             self._stop_recording()
+                
+                # Rate-limit inject mode (no camera blocking to slow the loop)
+                if self.inject_cat:
+                    time.sleep(0.15)
                 
             except Exception as e:
                 print(f"Processing error: {e}")
