@@ -2,7 +2,7 @@
 
 A real-time cat and ball detection system for Raspberry Pi Zero 2W with Camera Module 3. Features motion-first detection for efficiency, a web interface for live streaming, and zone-based tracking.
 
-**Version:** 3.3.1
+**Version:** 3.4.0
 
 ---
 
@@ -486,6 +486,7 @@ sudo journalctl -u cat_ball_tracker -n 50
 
 ## 📝 Version History
 
+- **v3.4.0** - Inject Cat test mode: overlay a real cat photo on camera frames to test the full pipeline (motion → TFLite → tracking → world position → top-down view). Cat bounces across the frame. Toggle from Developer tab.
 - **v3.3.1** - Developer tab: add swap activity monitoring (swap in/out since boot, swappiness value); setup script adds rpi-connect-lite installation, sudoers for web UI service control, swappiness=10
 - **v3.3.0** - Developer tab: system info (RAM, swap, CPU temp, uptime, disk, process RSS/swap/threads), RPi Connect toggle (start/stop from web UI), color-coded indicators
 - **v3.2.2** - Reduce camera buffers from 4 to 2 (saves ~18 MB RAM); update README architecture diagram with current design

@@ -406,6 +406,16 @@
                         <p class="hint">RPi Connect provides remote VNC access. Disabling saves ~13 MB RAM.</p>
                     </div>
 
+                    <!-- Inject Cat Test -->
+                    <div class="control-section">
+                        <h2>Test: Inject Cat</h2>
+                        <div style="display: flex; align-items: center; gap: 12px; padding: 8px 0;">
+                            <span id="inject-cat-status" style="min-width: 80px; color: #888;">Stopped</span>
+                            <button id="inject-cat-toggle" class="btn btn-success" onclick="toggleInjectCat()">🐱 Start Inject</button>
+                        </div>
+                        <p class="hint">Overlays a real cat photo on the camera frame. Tests the full pipeline: motion detection → TFLite AI → tracking → world position → top-down view. Cat bounces across the frame.</p>
+                    </div>
+
                     <!-- Thread Info -->
                     <div class="control-section">
                         <h2>Threads</h2>

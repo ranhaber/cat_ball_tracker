@@ -2352,6 +2352,32 @@ async function toggleRpiConnect() {
     }
 }
 
+async function toggleInjectCat() {
+    const btn = document.getElementById('inject-cat-toggle');
+    if (btn) btn.textContent = '⏳...';
+    
+    try {
+        const response = await fetch('/api/dev/inject_cat', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action: 'toggle' })
+        });
+        const d = await response.json();
+        const statusEl = document.getElementById('inject-cat-status');
+        if (statusEl) {
+            statusEl.textContent = d.inject_cat ? '🐱 Active' : 'Stopped';
+            statusEl.style.color = d.inject_cat ? '#3fb950' : '#888';
+        }
+        if (btn) {
+            btn.textContent = d.inject_cat ? '⏹ Stop Inject' : '🐱 Start Inject';
+            btn.className = d.inject_cat ? 'btn btn-secondary' : 'btn btn-success';
+        }
+    } catch (error) {
+        alert('Error: ' + error);
+        if (btn) btn.textContent = '🐱 Start Inject';
+    }
+}
+
 // Auto-refresh developer tab when visible
 document.addEventListener('DOMContentLoaded', () => {
     const devTab = document.querySelector('[data-tab="developer"]');

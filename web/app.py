@@ -187,6 +187,16 @@ class VideoProcessor:
         self._last_motion_time = 0  # Time of last motion detection
         self._tflite_idle_timeout = 10  # Seconds of no motion before unloading TFLite
         
+        # Inject Cat test mode
+        self.inject_cat = False
+        self._inject_cat_img = None
+        self._inject_cat_x = 200.0
+        self._inject_cat_y = 500.0
+        self._inject_cat_vx = 4.0  # pixels per frame
+        self._inject_cat_vy = 2.0
+        self._inject_cat_size = 150  # pixel width of injected cat
+        self._load_inject_cat_image()
+        
         # Temporal confirmation - require detection in N consecutive frames
         self.confirm_frames = saved.get("confirm_frames", getattr(config, 'DETECTION_CONFIRM_FRAMES', 1))
         self.detection_history = []  # List of recent detection counts
@@ -257,6 +267,96 @@ class VideoProcessor:
         mode_str = "MOTION-FIRST" if self.motion_first_enabled else "ALWAYS-ON"
         print(f"Video processor started (Detection mode: {mode_str})")
         
+    def _load_inject_cat_image(self):
+        """Load the test cat image for injection mode."""
+        import os
+        cat_path = os.path.join(config.BASE_DIR, 'models', 'test_cat.png')
+        if os.path.exists(cat_path):
+            img = cv2.imread(cat_path, cv2.IMREAD_UNCHANGED)
+            if img is not None:
+                self._inject_cat_img = img
+                print(f"[INJECT] Cat image loaded: {img.shape}")
+            else:
+                print(f"[INJECT] Failed to load cat image from {cat_path}")
+        else:
+            print(f"[INJECT] Cat image not found at {cat_path}")
+    
+    def _get_perspective_cat_size(self, px, py):
+        """Get the pixel size a 0.5m cat should be at position (px, py) using calibration."""
+        if not (self.calibration and self.calibration.is_calibrated and 
+                self.calibration.inverse_matrix is not None):
+            return self._inject_cat_size  # fallback: fixed size
+        
+        try:
+            # Project two world points 0.5m apart at the cat's world position
+            # to find how many pixels 0.5m is at this location
+            world_pos = self.pixel_to_world(px, py)
+            if world_pos is None:
+                return self._inject_cat_size
+            
+            wx, wy = world_pos
+            # Get pixel positions for cat center and 0.5m to the right
+            p1 = self.calibration.world_to_pixel(wx, wy)
+            p2 = self.calibration.world_to_pixel(wx + 0.5, wy)
+            if p1 and p2:
+                import math
+                dx = p2[0] - p1[0]
+                dy = p2[1] - p1[1]
+                pixel_size = int(math.sqrt(dx * dx + dy * dy))
+                return max(30, min(pixel_size, 400))  # clamp to reasonable range
+        except Exception:
+            pass
+        return self._inject_cat_size
+    
+    def _inject_cat_on_frame(self, frame):
+        """Overlay the cat image on the frame at the current position, move it."""
+        if self._inject_cat_img is None:
+            return frame
+        
+        h, w = frame.shape[:2]
+        
+        # Get perspective-correct size based on position
+        cat_size = self._get_perspective_cat_size(
+            self._inject_cat_x + self._inject_cat_size // 2,
+            self._inject_cat_y + self._inject_cat_size // 2)
+        
+        # Resize cat image to perspective-correct size
+        cat_img = self._inject_cat_img
+        cat_h, cat_w = cat_img.shape[:2]
+        scale = cat_size / cat_w
+        new_w = int(cat_w * scale)
+        new_h = int(cat_h * scale)
+        cat_resized = cv2.resize(cat_img, (new_w, new_h), interpolation=cv2.INTER_AREA)
+        
+        # Update position
+        self._inject_cat_x += self._inject_cat_vx
+        self._inject_cat_y += self._inject_cat_vy
+        
+        # Bounce off frame edges (or re-enter from opposite side)
+        if self._inject_cat_x < 0 or self._inject_cat_x + new_w > w:
+            self._inject_cat_vx = -self._inject_cat_vx
+            self._inject_cat_x = max(0, min(self._inject_cat_x, w - new_w))
+        if self._inject_cat_y < 0 or self._inject_cat_y + new_h > h:
+            self._inject_cat_vy = -self._inject_cat_vy
+            self._inject_cat_y = max(0, min(self._inject_cat_y, h - new_h))
+        
+        x = int(self._inject_cat_x)
+        y = int(self._inject_cat_y)
+        
+        # Paste cat onto frame (handle alpha channel if present)
+        if cat_resized.shape[2] == 4:
+            # Has alpha channel — blend
+            alpha = cat_resized[:, :, 3] / 255.0
+            for c in range(3):
+                roi = frame[y:y+new_h, x:x+new_w, c].astype(float)
+                cat_c = cat_resized[:, :, c].astype(float)
+                frame[y:y+new_h, x:x+new_w, c] = (alpha * cat_c + (1 - alpha) * roi).astype(np.uint8)
+        else:
+            # No alpha — just paste
+            frame[y:y+new_h, x:x+new_w] = cat_resized[:, :, :3]
+        
+        return frame
+    
     def stop(self):
         """Stop all components"""
         self.running = False
@@ -302,6 +402,10 @@ class VideoProcessor:
                             # picamera2 "RGB888" format actually stores BGR bytes in memory
                             # (reversed naming convention), which is exactly what OpenCV needs
                             frame = req.make_array("main")
+                
+                # Inject test cat onto raw frame (before motion detection)
+                if self.inject_cat:
+                    frame = self._inject_cat_on_frame(frame)
                 
                 frame_h, frame_w = frame.shape[:2]
                 run_ai_detection = False
@@ -1754,6 +1858,23 @@ def create_app():
     # =========================================================================
     # Developer API Endpoints
     # =========================================================================
+    
+    @app.route('/api/dev/inject_cat', methods=['POST'])
+    def dev_inject_cat():
+        """Toggle cat injection test mode."""
+        data = request.get_json() or {}
+        action = data.get('action', 'toggle')
+        
+        if action == 'toggle':
+            video_processor.inject_cat = not video_processor.inject_cat
+        elif action == 'start':
+            video_processor.inject_cat = True
+        elif action == 'stop':
+            video_processor.inject_cat = False
+        
+        status = "active" if video_processor.inject_cat else "stopped"
+        print(f"[INJECT] Cat injection: {status}")
+        return jsonify({"inject_cat": video_processor.inject_cat, "status": status})
     
     @app.route('/api/dev/system', methods=['GET'])
     def dev_system_info():
