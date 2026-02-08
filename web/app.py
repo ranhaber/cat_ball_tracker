@@ -2155,9 +2155,11 @@ def create_app():
         
         # Reset state on enable/disable
         if video_processor.inject_cat:
+            # === ENABLE: reset inject state ===
             video_processor._inject_cat_initialized = False
             video_processor._inject_cat_bbox = None
             video_processor._inject_respawn_time = 0
+            video_processor._inject_cat_fixed_size = None
             if hasattr(video_processor, '_inject_debug_count'):
                 video_processor._inject_debug_count = 0
             # Reset debug one-shot flags
@@ -2165,6 +2167,36 @@ def create_app():
                 del video_processor._jpeg_none_warned
             if hasattr(video_processor, '_jpeg_first_logged'):
                 del video_processor._jpeg_first_logged
+        else:
+            # === DISABLE: full cleanup to free RAM and CPU ===
+            video_processor._inject_cat_bbox = None
+            video_processor._inject_cat_initialized = False
+            video_processor._inject_respawn_time = 0
+            video_processor._inject_cat_fixed_size = None
+            
+            # Free cached resized cat image
+            if hasattr(video_processor, '_inject_cat_cached'):
+                del video_processor._inject_cat_cached
+                video_processor._inject_cat_cached_size = None
+                video_processor._inject_cat_cached_w = 0
+                video_processor._inject_cat_cached_h = 0
+            
+            # Reset motion state so idle timeout can trigger TFLite unload
+            video_processor.motion_detected = False
+            video_processor._last_motion_time = 0  # Force immediate idle timeout
+            
+            # Unload TFLite immediately (was force-loaded by inject mode)
+            video_processor.detector.unload_model()
+            
+            # Reduce OpenCV threads back to idle state
+            cv2.setNumThreads(1)
+            
+            # Clear detection state
+            video_processor.last_detections_with_world = []
+            video_processor.detection_history = []
+            
+            print(f"[INJECT CLEANUP] TFLite unloaded, cache freed, "
+                  f"motion reset, OpenCV threads=1")
         
         status = "active" if video_processor.inject_cat else "stopped"
         print(f"[INJECT API] Cat injection: {status}, "
