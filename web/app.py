@@ -324,21 +324,18 @@ class VideoProcessor:
         return self._inject_cat_size
     
     def _init_inject_cat_position(self, frame_w, frame_h):
-        """Initialize cat position at the centroid of the Detection Zone.
-        The cat's BOTTOM-CENTER is placed at the centroid (guaranteed inside),
-        then it moves in a random direction until it exits the zone."""
+        """Start cat on a random edge of the Detection Zone, heading towards
+        the opposite side through the centroid. Each respawn picks a new edge."""
         import random, math
         
-        # Estimate cat size to offset position so bottom-center is at target
-        # Use cached size if available, otherwise approximate
+        # Estimate cat size to offset so bottom-center is at the target point
         if hasattr(self, '_inject_cat_cached_h') and self._inject_cat_cached_h:
             cat_h_offset = self._inject_cat_cached_h
             cat_w_offset = self._inject_cat_cached_w // 2
         else:
-            cat_h_offset = 60  # conservative estimate
+            cat_h_offset = 60
             cat_w_offset = 50
         
-        # Try to start at the Detection Zone centroid
         perim = self.perimeter.get_points() if self.perimeter else []
         if len(perim) >= 3:
             # Scale perimeter points to current frame resolution
@@ -351,23 +348,40 @@ class VideoProcessor:
                     py = py * frame_h / saved_res[1]
                 pts.append((px, py))
             
-            # Centroid of the polygon
             n = len(pts)
             cx = sum(p[0] for p in pts) / n
             cy = sum(p[1] for p in pts) / n
             
-            # Position top-left so that bottom-center lands at centroid
-            self._inject_cat_x = float(cx - cat_w_offset)
-            self._inject_cat_y = float(cy - cat_h_offset)
+            # Pick a random edge, place bottom-center slightly inside from the midpoint
+            edge_idx = random.randint(0, n - 1)
+            p1 = pts[edge_idx]
+            p2 = pts[(edge_idx + 1) % n]
+            t = random.uniform(0.3, 0.7)
+            edge_x = p1[0] + t * (p2[0] - p1[0])
+            edge_y = p1[1] + t * (p2[1] - p1[1])
             
-            # Random direction — cat will walk until it exits the zone
-            angle = random.uniform(0, 2 * math.pi)
-            self._inject_cat_dx = math.cos(angle)
-            self._inject_cat_dy = math.sin(angle)
+            # Push slightly inward (20% towards centroid) so bottom-center starts inside
+            start_x = edge_x + 0.2 * (cx - edge_x)
+            start_y = edge_y + 0.2 * (cy - edge_y)
             
-            print(f"[INJECT] Cat starting at Detection Zone centroid: "
-                  f"top-left=({self._inject_cat_x:.0f},{self._inject_cat_y:.0f}), "
-                  f"bottom-center≈({cx:.0f},{cy:.0f}), "
+            # Position top-left so bottom-center is at start point
+            self._inject_cat_x = float(start_x - cat_w_offset)
+            self._inject_cat_y = float(start_y - cat_h_offset)
+            
+            # Direction: towards the opposite side (through and past centroid)
+            dx = cx - start_x
+            dy = cy - start_y
+            length = math.sqrt(dx * dx + dy * dy)
+            if length > 0:
+                self._inject_cat_dx = dx / length
+                self._inject_cat_dy = dy / length
+            else:
+                self._inject_cat_dx = 1.0
+                self._inject_cat_dy = 0.0
+            
+            print(f"[INJECT] Cat on edge {edge_idx+1}/{n}: "
+                  f"bottom-center≈({start_x:.0f},{start_y:.0f}), "
+                  f"heading towards ({cx:.0f},{cy:.0f}), "
                   f"dir=({self._inject_cat_dx:.2f},{self._inject_cat_dy:.2f})")
         else:
             # No perimeter — start at frame center with random direction
@@ -376,8 +390,7 @@ class VideoProcessor:
             angle = random.uniform(0, 2 * math.pi)
             self._inject_cat_dx = math.cos(angle)
             self._inject_cat_dy = math.sin(angle)
-            print(f"[INJECT] No Detection Zone — starting at frame center "
-                  f"({self._inject_cat_x:.0f},{self._inject_cat_y:.0f})")
+            print(f"[INJECT] No Detection Zone — starting at frame center")
         
         self._inject_cat_initialized = True
         self._inject_cat_fixed_size = None  # Will be computed on first frame
@@ -536,10 +549,11 @@ class VideoProcessor:
         if out_of_frame or out_of_zone:
             reason = "frame" if out_of_frame else "Detection Zone"
             print(f"[INJECT] Cat left {reason}: bottom-center=({bcx:.0f},{bcy:.0f}), "
-                  f"frame={w}x{h}, starting 10s respawn timer")
+                  f"respawning on new edge immediately")
+            # Immediately reappear on a new edge — no delay
             self._inject_cat_initialized = False
             self._inject_cat_bbox = None  # Clear bbox so no detection this frame
-            self._inject_respawn_time = time.time() + 10.0  # 10-second delay
+            self._init_inject_cat_position(w, h)
             return frame
         
         x = max(0, min(int(self._inject_cat_x), w - new_w))
@@ -633,32 +647,6 @@ class VideoProcessor:
                 
                 # ===== Inject cat mode: paste cat on synthetic frame, then use NORMAL pipeline =====
                 if self.inject_cat:
-                    # Check respawn timer — wait 10s after cat leaves Detection Zone
-                    if hasattr(self, '_inject_respawn_time') and self._inject_respawn_time > 0:
-                        if time.time() < self._inject_respawn_time:
-                            # Still waiting — draw perimeter + status on green frame
-                            remaining = self._inject_respawn_time - time.time()
-                            if self.stream_clients > 0:
-                                respawn_frame = frame.copy()  # Copy — we reuse the green buffer
-                                self.perimeter.draw(respawn_frame)
-                                self._draw_status(respawn_frame)
-                                cv2.putText(respawn_frame, f"Cat respawning in {remaining:.0f}s",
-                                           (frame_w // 2 - 200, frame_h // 2),
-                                           cv2.FONT_HERSHEY_SIMPLEX, 1.0, (255, 255, 255), 2)
-                                with self.frame_lock:
-                                    self.current_frame = respawn_frame
-                            else:
-                                with self.frame_lock:
-                                    self.current_frame = frame.copy()
-                            time.sleep(0.2)
-                            continue
-                        else:
-                            # Timer expired — reset for new cat
-                            self._inject_respawn_time = 0
-                            self._inject_cat_initialized = False
-                            self._inject_cat_bbox = None
-                            print("[INJECT] Respawn timer expired — new cat appearing")
-                    
                     frame = self._inject_cat_on_frame(frame)
                     # Debug: log inject state periodically
                     if not hasattr(self, '_inject_debug_count'):
