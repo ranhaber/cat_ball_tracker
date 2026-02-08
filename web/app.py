@@ -394,6 +394,7 @@ class VideoProcessor:
         """Overlay the cat image on the frame at the current position, move it.
         Lightweight: no alpha blending, just paste BGR pixels."""
         if self._inject_cat_img is None:
+            print("[INJECT EXIT] cat image is None — not loaded!")
             return frame
         
         # RAM safety check (every ~30 frames to avoid I/O overhead)
@@ -403,11 +404,12 @@ class VideoProcessor:
         if self._inject_safety_counter >= 30:
             self._inject_safety_counter = 0
             if not self._check_ram_safety():
+                print("[INJECT EXIT] RAM safety triggered")
                 return frame
         
         h, w = frame.shape[:2]
         
-        # Initialize position on first call or when cat exits perimeter
+        # Initialize position on first call or when cat exits frame
         if not self._inject_cat_initialized:
             self._init_inject_cat_position(w, h)
         
@@ -425,10 +427,15 @@ class VideoProcessor:
             new_h = max(10, int(cat_h_orig * scale))
             # Pre-convert to BGR (no alpha) for fast paste
             resized = cv2.resize(cat_img, (new_w, new_h), interpolation=cv2.INTER_AREA)
-            self._inject_cat_cached = resized[:, :, :3]  # Drop alpha — just BGR
+            if resized.shape[2] >= 3:
+                self._inject_cat_cached = resized[:, :, :3]  # Drop alpha — just BGR
+            else:
+                self._inject_cat_cached = resized
             self._inject_cat_cached_size = cat_size
             self._inject_cat_cached_w = new_w
             self._inject_cat_cached_h = new_h
+            print(f"[INJECT] Resized cat: {cat_w_orig}x{cat_h_orig} -> {new_w}x{new_h} "
+                  f"(target={cat_size}px, raw={cat_size_raw})")
         
         new_w = self._inject_cat_cached_w
         new_h = self._inject_cat_cached_h
@@ -443,6 +450,8 @@ class VideoProcessor:
         out_of_frame = cx < 0 or cx > w or cy < 0 or cy > h
         
         if out_of_frame:
+            print(f"[INJECT] Cat out of frame: center=({cx:.0f},{cy:.0f}), "
+                  f"frame={w}x{h}, resetting position")
             self._inject_cat_initialized = False
             return frame
         
@@ -453,6 +462,7 @@ class VideoProcessor:
         paste_w = min(new_w, w - x)
         paste_h = min(new_h, h - y)
         if paste_w <= 0 or paste_h <= 0:
+            print(f"[INJECT EXIT] paste size zero: paste={paste_w}x{paste_h}")
             return frame
         
         # Fast paste — no alpha blending, just overwrite pixels (saves CPU)
@@ -576,10 +586,16 @@ class VideoProcessor:
                         self._draw_status(annotated)
                         with self.frame_lock:
                             self.current_frame = annotated
+                        if self._inject_debug_count <= 3:
+                            print(f"[INJECT STORE] annotated frame stored, shape={annotated.shape}")
                     else:
                         # Still store the green frame so stream shows something
                         with self.frame_lock:
                             self.current_frame = frame
+                        if self._inject_debug_count <= 3:
+                            print(f"[INJECT STORE] green frame stored (no detections or no clients), "
+                                  f"shape={frame.shape}, clients={self.stream_clients}, "
+                                  f"has_dets={bool(last_detections)}")
                     time.sleep(0.2)
                     continue
                 
@@ -934,9 +950,18 @@ class VideoProcessor:
         # OPTIMIZATION A: Only copy when encoding (required by imencode)
         with self.frame_lock:
             if self.current_frame is None:
+                # Debug: log when no frame available during inject mode
+                if self.inject_cat and not hasattr(self, '_jpeg_none_warned'):
+                    print(f"[INJECT WARN] get_frame_jpeg: current_frame is None!")
+                    self._jpeg_none_warned = True
                 return None
             # imencode doesn't modify the frame, but we copy for thread safety
             frame = self.current_frame.copy()
+            # Debug: log first frame served in inject mode
+            if self.inject_cat and not hasattr(self, '_jpeg_first_logged'):
+                print(f"[INJECT] First frame served to stream: shape={frame.shape}, "
+                      f"mean_color=({frame[:,:,0].mean():.0f},{frame[:,:,1].mean():.0f},{frame[:,:,2].mean():.0f})")
+                self._jpeg_first_logged = True
         
         # OPTIMIZATION B: Use profile-specific JPEG quality
         jpeg_quality = self.current_jpeg_quality
@@ -2083,8 +2108,23 @@ def create_app():
         elif action == 'stop':
             video_processor.inject_cat = False
         
+        # Reset state on enable/disable
+        if video_processor.inject_cat:
+            video_processor._inject_cat_initialized = False
+            video_processor._inject_cat_bbox = None
+            if hasattr(video_processor, '_inject_debug_count'):
+                video_processor._inject_debug_count = 0
+            # Reset debug one-shot flags
+            if hasattr(video_processor, '_jpeg_none_warned'):
+                del video_processor._jpeg_none_warned
+            if hasattr(video_processor, '_jpeg_first_logged'):
+                del video_processor._jpeg_first_logged
+        
         status = "active" if video_processor.inject_cat else "stopped"
-        print(f"[INJECT] Cat injection: {status}")
+        print(f"[INJECT API] Cat injection: {status}, "
+              f"img_loaded={video_processor._inject_cat_img is not None}, "
+              f"current_frame={'SET' if video_processor.current_frame is not None else 'NONE'}, "
+              f"stream_clients={video_processor.stream_clients}")
         return jsonify({"inject_cat": video_processor.inject_cat, "status": status})
     
     @app.route('/api/dev/system', methods=['GET'])
