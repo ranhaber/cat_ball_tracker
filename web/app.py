@@ -324,17 +324,17 @@ class VideoProcessor:
         return self._inject_cat_size
     
     def _init_inject_cat_position(self, frame_w, frame_h):
-        """Start cat on a random edge of the Detection Zone, heading towards
-        the opposite side through the centroid. Each respawn picks a new edge."""
+        """Start cat at centroid of Detection Zone (guaranteed inside),
+        walk towards a random edge. Each respawn picks a new direction."""
         import random, math
         
-        # Estimate cat size to offset so bottom-center is at the target point
+        # Cat size offsets to convert bottom-center → top-left
         if hasattr(self, '_inject_cat_cached_h') and self._inject_cat_cached_h:
-            cat_h_offset = self._inject_cat_cached_h
-            cat_w_offset = self._inject_cat_cached_w // 2
+            cat_h = self._inject_cat_cached_h
+            cat_w_half = self._inject_cat_cached_w // 2
         else:
-            cat_h_offset = 60
-            cat_w_offset = 50
+            cat_h = 60
+            cat_w_half = 50
         
         perim = self.perimeter.get_points() if self.perimeter else []
         if len(perim) >= 3:
@@ -352,25 +352,19 @@ class VideoProcessor:
             cx = sum(p[0] for p in pts) / n
             cy = sum(p[1] for p in pts) / n
             
-            # Pick a random edge, place bottom-center slightly inside from the midpoint
+            # Bottom-center at centroid → top-left offset
+            self._inject_cat_x = float(cx - cat_w_half)
+            self._inject_cat_y = float(cy - cat_h)
+            
+            # Pick a random edge midpoint, walk TOWARDS it (outward from centroid)
             edge_idx = random.randint(0, n - 1)
             p1 = pts[edge_idx]
             p2 = pts[(edge_idx + 1) % n]
-            t = random.uniform(0.3, 0.7)
-            edge_x = p1[0] + t * (p2[0] - p1[0])
-            edge_y = p1[1] + t * (p2[1] - p1[1])
+            target_x = (p1[0] + p2[0]) / 2
+            target_y = (p1[1] + p2[1]) / 2
             
-            # Push slightly inward (20% towards centroid) so bottom-center starts inside
-            start_x = edge_x + 0.2 * (cx - edge_x)
-            start_y = edge_y + 0.2 * (cy - edge_y)
-            
-            # Position top-left so bottom-center is at start point
-            self._inject_cat_x = float(start_x - cat_w_offset)
-            self._inject_cat_y = float(start_y - cat_h_offset)
-            
-            # Direction: towards the opposite side (through and past centroid)
-            dx = cx - start_x
-            dy = cy - start_y
+            dx = target_x - cx
+            dy = target_y - cy
             length = math.sqrt(dx * dx + dy * dy)
             if length > 0:
                 self._inject_cat_dx = dx / length
@@ -379,14 +373,11 @@ class VideoProcessor:
                 self._inject_cat_dx = 1.0
                 self._inject_cat_dy = 0.0
             
-            print(f"[INJECT] Cat on edge {edge_idx+1}/{n}: "
-                  f"bottom-center≈({start_x:.0f},{start_y:.0f}), "
-                  f"heading towards ({cx:.0f},{cy:.0f}), "
-                  f"dir=({self._inject_cat_dx:.2f},{self._inject_cat_dy:.2f})")
+            print(f"[INJECT] Cat at centroid ({cx:.0f},{cy:.0f}), "
+                  f"walking towards edge {edge_idx+1}/{n} at ({target_x:.0f},{target_y:.0f})")
         else:
-            # No perimeter — start at frame center with random direction
-            self._inject_cat_x = float(frame_w // 2 - cat_w_offset)
-            self._inject_cat_y = float(frame_h // 2 - cat_h_offset)
+            self._inject_cat_x = float(frame_w // 2 - cat_w_half)
+            self._inject_cat_y = float(frame_h // 2 - cat_h)
             angle = random.uniform(0, 2 * math.pi)
             self._inject_cat_dx = math.cos(angle)
             self._inject_cat_dy = math.sin(angle)
@@ -674,10 +665,20 @@ class VideoProcessor:
                     
                     if self.inject_cat:
                         # Inject mode: skip motion detection, force AI
-                        # (synthetic frames don't have real motion patterns)
+                        # Use a crop around the known cat position (same as motion-first)
+                        # instead of feeding the full 2304x1296 frame to TFLite
                         run_ai_detection = True
                         self.motion_detected = True
                         self._last_motion_time = time.time()
+                        if self._inject_cat_bbox:
+                            bx = self._inject_cat_bbox
+                            cat_cx = (bx[0] + bx[2]) // 2
+                            cat_cy = (bx[1] + bx[3]) // 2
+                            crop_size = getattr(config, 'MOTION_CROP_SIZE', (380, 380))
+                            cw, ch = crop_size
+                            cx = max(0, min(cat_cx - cw // 2, frame_w - cw))
+                            cy = max(0, min(cat_cy - ch // 2, frame_h - ch))
+                            crop_region = (cx, cy, cw, ch)
                     elif self.motion_first_enabled:
                         # Motion-first mode: only run AI when motion detected
                         motion_start = time.time()
