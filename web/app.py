@@ -755,6 +755,18 @@ class VideoProcessor:
                         except Exception:
                             pass
                     
+                    # Post-inject grace period: suppress TFLite loading to let swap clear
+                    if run_ai_detection and hasattr(self, '_tflite_suppress_until') and self._tflite_suppress_until > 0:
+                        if time.time() < self._tflite_suppress_until:
+                            run_ai_detection = False
+                            remaining = int(self._tflite_suppress_until - time.time())
+                            if not hasattr(self, '_suppress_logged') or self._suppress_logged != remaining:
+                                print(f"[POST-INJECT] TFLite suppressed for {remaining}s (swap recovery)")
+                                self._suppress_logged = remaining
+                        else:
+                            self._tflite_suppress_until = 0
+                            print("[POST-INJECT] Grace period ended, TFLite can load normally")
+                    
                     if run_ai_detection:
                         ai_start = time.time()
                         if crop_region and self.motion_first_enabled:
@@ -2198,6 +2210,7 @@ def create_app():
             video_processor._inject_respawn_time = 0
             video_processor._inject_cat_fixed_size = None
             video_processor._inject_cooldown_until = 0  # Cancel any cooldown
+            video_processor._tflite_suppress_until = 0  # Cancel any TFLite grace period
             # Reload cat image if it was freed on previous disable
             if video_processor._inject_cat_img is None:
                 video_processor._load_inject_cat_image()
@@ -2258,6 +2271,10 @@ def create_app():
             
             # Set cooldown — processing loop will sleep for 5s to let system recover
             video_processor._inject_cooldown_until = time.time() + 5.0
+            
+            # Suppress TFLite loading for 30s after cooldown ends
+            # Gives OS time to reclaim swap pages before TFLite uses 80MB
+            video_processor._tflite_suppress_until = time.time() + 35.0  # 5s cooldown + 30s grace
             
             # Force memory reclaim (gc + malloc_trim)
             video_processor._reclaim_memory()
