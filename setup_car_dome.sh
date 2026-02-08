@@ -298,11 +298,32 @@ echo "    sudo systemctl stop cat-dome"
 echo "    sudo systemctl status cat-dome"
 
 # ============================================================================
-# Step 11: Sudoers for Developer Tab (service control from web UI)
+# Step 11: Install rpi-connect-lite (remote access, controlled from Developer tab)
 # ============================================================================
 echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo "Step 11: Setting up sudoers for web UI service control..."
+echo "Step 11: Installing rpi-connect-lite (optional remote access)..."
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+if dpkg -l rpi-connect-lite 2>/dev/null | grep -q '^ii'; then
+    print_status "rpi-connect-lite already installed"
+else
+    sudo apt install -y rpi-connect-lite 2>/dev/null && \
+        print_status "rpi-connect-lite installed" || \
+        print_warning "rpi-connect-lite not available (may not be supported on this Pi)"
+fi
+
+# Disable by default to save ~13MB RAM. Enable from Developer tab when needed.
+sudo systemctl disable rpi-connect 2>/dev/null || true
+sudo systemctl stop rpi-connect 2>/dev/null || true
+print_status "rpi-connect stopped and disabled (enable from Developer tab in web UI)"
+
+# ============================================================================
+# Step 12: Sudoers for Developer Tab (service control from web UI)
+# ============================================================================
+echo ""
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "Step 12: Setting up sudoers for web UI service control..."
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
 SUDOERS_FILE="/etc/sudoers.d/catdome"
@@ -314,11 +335,11 @@ sudo chmod 440 "$SUDOERS_FILE"
 print_status "Sudoers configured for Developer tab service control"
 
 # ============================================================================
-# Step 12: Optimize swappiness (reduce unnecessary swap on low-RAM system)
+# Step 13: Optimize swappiness (reduce unnecessary swap on low-RAM system)
 # ============================================================================
 echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo "Step 12: Optimizing swap settings..."
+echo "Step 13: Optimizing swap settings..."
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
 CURRENT_SWAPPINESS=$(cat /proc/sys/vm/swappiness)
