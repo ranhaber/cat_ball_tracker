@@ -2296,6 +2296,18 @@ async function refreshDevInfo() {
             `;
         }
         
+        // Sync inject cat button with server state
+        const injectStatusEl = document.getElementById('inject-cat-status');
+        const injectBtnEl = document.getElementById('inject-cat-toggle');
+        if (injectStatusEl) {
+            injectStatusEl.textContent = d.inject_cat ? '🐱 Active' : 'Stopped';
+            injectStatusEl.style.color = d.inject_cat ? '#3fb950' : '#888';
+        }
+        if (injectBtnEl) {
+            injectBtnEl.textContent = d.inject_cat ? '⏹ Stop Inject' : '🐱 Start Inject';
+            injectBtnEl.className = d.inject_cat ? 'btn btn-secondary' : 'btn btn-success';
+        }
+        
         // Refresh rpi-connect status
         refreshRpiConnectStatus();
         
