@@ -609,13 +609,24 @@ class VideoProcessor:
                         for det in detections:
                             x1, y1, x2, y2, conf, class_id = det
                             world_pos = None
-                            if self.calibration and hasattr(self.calibration, 'is_calibrated') and self.calibration.is_calibrated:
-                                world_pos = self.calibration.bbox_to_world(x1, y1, x2, y2)
+                            if self.calibration and self.calibration.is_calibrated:
+                                # Use bottom-center of bbox (where cat touches ground)
+                                # Undistort the raw pixel before applying homography
+                                bcx = (x1 + x2) / 2
+                                bcy = y2  # bottom of bbox
+                                wp = self.pixel_to_world(bcx, bcy, already_undistorted=False)
+                                if wp:
+                                    world_pos = {"world_x": round(wp[0], 2), "world_y": round(wp[1], 2)}
+                            # Mark if this is a fallback injection (for different-color box)
+                            is_injected = (self.inject_cat and conf == 0.95 and 
+                                          hasattr(self, '_inject_cat_bbox') and self._inject_cat_bbox and
+                                          abs(x1 - self._inject_cat_bbox[0]) < 5)
                             self.last_detections_with_world.append({
                                 "bbox": [x1, y1, x2, y2],
                                 "confidence": round(conf, 2),
                                 "class_id": class_id,
-                                "world_position": world_pos
+                                "world_position": world_pos,
+                                "injected": is_injected
                             })
                     elif not self.motion_detected:
                         # No motion - clear detections after a while
@@ -648,6 +659,16 @@ class VideoProcessor:
                         last_detections,
                         tracked_objects
                     )
+                    
+                    # Draw injected detection with yellow box (override green)
+                    if self.inject_cat and self.last_detections_with_world:
+                        for det_info in self.last_detections_with_world:
+                            if det_info.get("injected"):
+                                bx = det_info["bbox"]
+                                cv2.rectangle(annotated, (bx[0], bx[1]), (bx[2], bx[3]), 
+                                             (0, 255, 255), 3)  # Yellow, thick
+                                cv2.putText(annotated, "INJECTED", (bx[0], bx[1] - 5),
+                                           cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 2)
                     
                     # Draw FPS and status
                     self._draw_status(annotated)
