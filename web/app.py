@@ -388,6 +388,22 @@ class VideoProcessor:
             return True  # no perimeter = always inside
         return self.perimeter.is_inside((int(px), int(py)), (frame_w, frame_h))
     
+    def _reclaim_memory(self):
+        """Force OS to reclaim freed memory pages.
+        
+        Python/glibc hold onto freed heap pages in case they're needed again.
+        After large deallocations (TFLite unload, etc.), this forces them back
+        to the OS immediately instead of waiting for the OS to reclaim them.
+        """
+        import gc
+        gc.collect()  # Free Python objects → heap pages freed in glibc
+        try:
+            import ctypes
+            libc = ctypes.CDLL('libc.so.6')
+            libc.malloc_trim(0)  # Return freed heap pages to OS
+        except Exception:
+            pass
+    
     def _get_ram_stats(self):
         """Get compact RAM stats string for debug logging."""
         try:
@@ -438,8 +454,9 @@ class VideoProcessor:
                                 self._inject_cat_cached_size = None
                             self.detector.unload_model()
                             cv2.setNumThreads(1)
+                            self._reclaim_memory()
                             print(f"[INJECT] AUTO-DISABLED: RAM {avail_kb//1024}MB < 50MB. "
-                                  f"TFLite unloaded, OpenCV threads reduced.")
+                                  f"TFLite unloaded, memory reclaimed.")
                             return False
                         return True
         except Exception:
@@ -722,6 +739,8 @@ class VideoProcessor:
                             # No motion for N seconds — unload TFLite and reduce OpenCV threads
                             self.detector.unload_model()
                             cv2.setNumThreads(1)  # Back to single-thread to stop spin-wait
+                            self._reclaim_memory()
+                            print("[IDLE] TFLite unloaded, memory reclaimed")
                     else:
                         # Always-on mode: run AI on every frame
                         run_ai_detection = True
@@ -740,7 +759,8 @@ class VideoProcessor:
                                             if self.detector.is_loaded():
                                                 self.detector.unload_model()
                                                 cv2.setNumThreads(1)
-                                                print(f"[RAM SAFETY] AI skipped & TFLite unloaded: "
+                                                self._reclaim_memory()
+                                                print(f"[RAM SAFETY] AI skipped & TFLite unloaded, memory reclaimed: "
                                                       f"only {avail_kb//1024}MB available")
                                         break
                         except Exception:
@@ -2205,8 +2225,7 @@ def create_app():
             if video_processor.camera:
                 video_processor.camera.pause()
                 print("[INJECT] Camera paused to free ~18MB for TFLite")
-                import gc
-                gc.collect()
+                video_processor._reclaim_memory()
         else:
             # === DISABLE: aggressive cleanup to free RAM and CPU ===
             video_processor._inject_cat_bbox = None
@@ -2249,9 +2268,8 @@ def create_app():
             # Set cooldown — processing loop will sleep for 5s to let system recover
             video_processor._inject_cooldown_until = time.time() + 5.0
             
-            # Force Python garbage collection to reclaim freed memory NOW
-            import gc
-            gc.collect()
+            # Force memory reclaim (gc + malloc_trim)
+            video_processor._reclaim_memory()
             
             # Resume camera (was paused on inject enable)
             if video_processor.camera and not video_processor.camera.running:
