@@ -2,88 +2,90 @@
 
 A real-time cat and ball detection system for Raspberry Pi Zero 2W with Camera Module 3. Features motion-first detection for efficiency, a web interface for live streaming, and zone-based tracking.
 
-**Version:** 3.2.1
+**Version:** 3.2.2
 
 ---
 
 ## 🏗️ System Architecture
 
+Detection and tracking work **independently of the web UI** — the system runs headless via systemd.
+
 ```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                           RPi Zero 2W System                                │
-│  ┌──────────────┐    ┌──────────────┐    ┌──────────────┐                   │
-│  │   Camera     │───▶│   Motion     │───▶│  Detection   │                   │
-│  │  Module 3    │    │  Detector    │    │   (TFLite)   │                   │
-│  │  (IMX708)    │    │ (Low memory) │    │ MobileNetSSD │                   │
-│  │  picamera2   │    │              │    │              │                   │
-│  └──────────────┘    └──────────────┘    └──────────────┘                   │
-│         │                   │                   │                           │
-│         │                   │                   ▼                           │
-│         │                   │          ┌──────────────┐                     │
-│         │                   │          │   Tracker    │                     │
-│         │                   │          │  (Centroid)  │                     │
-│         │                   │          │ + Perimeter  │                     │
-│         │                   │          └──────────────┘                     │
-│         ▼                   ▼                   │                           │
-│  ┌─────────────────────────────────────────────────────┐                    │
-│  │              Frame Processor                        │                    │
-│  │  - Motion detection (runs first, saves CPU)         │                    │
-│  │  - AI detection only when motion detected           │                    │
-│  │  - Draw perimeter and detection boxes               │                    │
-│  │  - Overlay FPS, RAM, CPU temp status                │                    │
-│  └─────────────────────────────────────────────────────┘                    │
-│                            │                                                │
-│                            ▼                                                │
-│  ┌─────────────────────────────────────────────────────┐                    │
-│  │              Flask Web Server                       │                    │
-│  │  - MJPEG video streaming                            │                    │
-│  │  - REST API for control                             │                    │
-│  │  - Settings persistence (JSON)                      │                    │
-│  └─────────────────────────────────────────────────────┘                    │
-│                            │                                                │
-└────────────────────────────┼────────────────────────────────────────────────┘
-                             │
-                             ▼ (HTTP)
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                         Web Browser (Client)                                │
-│  ┌─────────────────────────────────────────────────────┐                    │
-│  │  Tab 1: 📹 Video Stream                             │                    │
-│  │  - Live MJPEG feed with detection overlays          │                    │
-│  │  - Motion status indicator                          │                    │
-│  │  - RAM/CPU temp display                             │                    │
-│  │  - Show motion regions checkbox                     │                    │
-│  └─────────────────────────────────────────────────────┘                    │
-│  ┌─────────────────────────────────────────────────────┐                    │
-│  │  Tab 2: ⚙️ Settings                                 │                    │
-│  │  - Detection mode toggle (Cat / Ball)               │                    │
-│  │  - Camera resolution selector                       │                    │
-│  │  - Frame skip (performance tuning)                  │                    │
-│  │  - System status (FPS, RAM, CPU temp)               │                    │
-│  └─────────────────────────────────────────────────────┘                    │
-│  ┌─────────────────────────────────────────────────────┐                    │
-│  │  Tab 3: 📍 Zone                                     │                    │
-│  │  - Detection zone editor (click on camera frame)    │                    │
-│  │  - Distance calibration (line-based)                │                    │
-│  └─────────────────────────────────────────────────────┘                    │
-└─────────────────────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────────┐
+│  RPi Zero 2W (416MB RAM, 4-core ARM Cortex-A53)                     │
+│                                                                     │
+│  Thread: CatDome-Proc (processing loop, always running)             │
+│  ┌───────────┐    ┌──────────────┐    ┌──────────────────┐         │
+│  │  Camera   │───▶│   Motion     │───▶│  TFLite AI       │         │
+│  │ Module 3  │    │  Detector    │    │  (load on motion, │         │
+│  │ 2304×1296 │    │ (every 2nd   │    │   unload after   │         │
+│  │ 2 buffers │    │  frame)      │    │   10s idle)      │         │
+│  └───────────┘    └──────────────┘    └──────────────────┘         │
+│       │                 │                    │                       │
+│       │                 │                    ▼                       │
+│       │                 │           ┌──────────────┐                │
+│       │                 │           │   Tracker    │                │
+│       │                 │           │  (only when  │                │
+│       │                 │           │  detections) │                │
+│       │                 │           └──────────────┘                │
+│       │                 │                    │                       │
+│       ▼                 ▼                    ▼                       │
+│  ┌─────────────────────────────────────────────────────┐            │
+│  │  Lens Calibration (rational k1-k6, 94% improvement) │            │
+│  │  → undistort detection pixel → homography → world xy │            │
+│  └─────────────────────────────────────────────────────┘            │
+│       │                                                             │
+│       ▼ (only if stream clients connected)                          │
+│  ┌─────────────────────────────────────────────────────┐            │
+│  │  Frame Annotation (skip when nobody watches)         │            │
+│  │  - Draw perimeter, boxes, FPS overlay                │            │
+│  │  - Store frame for MJPEG streaming                   │            │
+│  └─────────────────────────────────────────────────────┘            │
+│                                                                     │
+│  Thread: CatDome-Main (Flask web server)                            │
+│  ┌─────────────────────────────────────────────────────┐            │
+│  │  Flask Web Server                                    │            │
+│  │  - MJPEG streaming (rate-limited ~10fps)             │            │
+│  │  - REST API (status, calibration, settings)          │            │
+│  │  - Lens-corrected snapshots for calibration          │            │
+│  └─────────────────────────────────────────────────────┘            │
+│                                                                     │
+│  CPU optimization:                                                  │
+│  - OpenCV: 1 thread idle, 4 when tracking                           │
+│  - TFLite: 0 threads idle, 3 when detecting                        │
+│  - MJPEG: rate-limited, skipped when no clients                     │
+│  - Idle CPU: ~50% (was 92% before optimization)                     │
+└─────────────────────────────────────────────────────────────────────┘
+                          │
+                          ▼ (HTTP, optional)
+┌─────────────────────────────────────────────────────────────────────┐
+│  Web Browser (monitoring only — NOT required for detection)         │
+│  ┌─────────────────────┐ ┌──────────────┐ ┌──────────────────────┐ │
+│  │ Tab 1: Video Stream │ │ Tab 2: Settng│ │ Tab 3: Zone          │ │
+│  │ - Start/Stop button │ │ - Mode/FPS   │ │ - Detection Zone     │ │
+│  │ - Live MJPEG feed   │ │ - Profiles   │ │ - Perspective Cal    │ │
+│  │ - Top-Down View     │ │ - Motion     │ │ - Lens Calibration   │ │
+│  └─────────────────────┘ └──────────────┘ └──────────────────────┘ │
+└─────────────────────────────────────────────────────────────────────┘
 ```
 
 ---
 
 ## ✨ Features
 
-- **🐱 Cat & Ball Detection** - TensorFlow Lite MobileNet SSD
-- **🎯 Motion-First Detection** - AI only runs when motion detected (saves ~30% CPU/memory)
+- **🐱 Cat & Ball Detection** - TensorFlow Lite MobileNet SSD (loaded on demand, unloaded after 10s idle)
+- **🎯 Motion-First Detection** - AI only runs when motion detected inside the detection zone
 - **🎯 Fixed 300x300 Crop** - No-scale AI input preserves object pixel size for better detection
 - **⏱️ Temporal Confirmation** - Require detection in N consecutive frames (reduces false positives)
-- **🔢 Object Tracking** - Consistent IDs across frames using centroid tracking
-- **📍 Detection Zones** - Draw perimeter on camera snapshot to limit detection area
-- **🗺️ Top-Down View** - Bird's eye view of detection zone with tracked objects (perspective transform)
-- **📏 Multi-Rectangle Calibration** - Add one or more rectangles with known dimensions anywhere in the frame; least-squares best-fit homography
-- **⚡ Performance Controls** - Resolution, frame skip, threshold, and confirmation adjustment
+- **🔢 Object Tracking** - Consistent IDs across frames using centroid tracking (only runs with detections)
+- **📍 Detection Zones** - Draw perimeter on lens-corrected camera snapshot
+- **🗺️ Top-Down View** - Bird's eye view with tracked objects (1-4% world-coordinate accuracy)
+- **📏 Multi-Rectangle Calibration** - Multiple rectangles with known dimensions; global findHomography
+- **🔭 Lens Calibration** - Rational distortion model (k1-k6); 94.4% improvement, 0.8px residual
+- **⚡ Smart Idle Mode** - Skip frame annotation when nobody watches; TFLite/OpenCV threads only active when needed
 - **💾 Settings Persistence** - All settings saved and restored on reboot
-- **📊 System Monitoring** - RAM usage and CPU temperature display
-- **📱 Responsive Web UI** - Works on desktop and mobile browsers
+- **📊 System Monitoring** - FPS, RAM, CPU temp, motion status, AI runs counter
+- **📱 Responsive Web UI** - Works on desktop and mobile; Start/Stop Stream button
 
 ---
 
@@ -94,7 +96,7 @@ cat_ball_tracker/
 ├── README.md                    # This file
 ├── requirements.txt             # Python dependencies
 ├── config.py                    # Configuration settings
-├── main.py                      # Application entry point (v2.4.1)
+├── main.py                      # Application entry point (v3.2.2)
 ├── settings.py                  # Settings persistence
 ├── cat_dome.service             # Systemd service file
 ├── start_Cat_Dome.sh            # Startup wrapper with logging
@@ -113,8 +115,8 @@ cat_ball_tracker/
 │   ├── tracker.py               # Centroid-based tracking
 │   ├── perimeter.py             # Detection zone management
 │   ├── motion_detector.py       # Lightweight motion detection
-│   ├── calibration.py           # Perspective calibration (4+ points)
-│   └── lens_calibration.py      # Plumb-line lens distortion correction
+│   ├── calibration.py           # Multi-rectangle perspective calibration
+│   └── lens_calibration.py      # Rational model (k1-k6) lens distortion correction
 │
 ├── web/
 │   ├── __init__.py
@@ -468,13 +470,17 @@ sudo journalctl -u cat_ball_tracker -n 50
 |--------|-------|
 | FPS (with TFLite) | 3-8 FPS |
 | FPS (mock mode) | 15+ FPS |
-| Memory usage | 170-190MB |
-| Motion detection | <10ms |
+| Memory (RSS) | ~177 MB (2 camera buffers) |
+| Memory (swap) | ~27 MB |
+| Motion detection | <15ms |
 | AI detection | 200-500ms (loaded on demand) |
-| Idle CPU (browser open) | ~50% (was 92%) |
-| Idle CPU (browser closed) | ~25% |
+| Idle CPU (browser open, stream on) | ~50% (was 92%) |
+| Idle CPU (browser open, stream off) | ~35% |
+| Idle CPU (no browser) | ~25% |
 | TFLite threads | 0 when idle, 3 when tracking |
+| OpenCV threads | 1 when idle, 4 when tracking |
 | Calibration accuracy | 1-4% across full 120° FOV |
+| Lens correction | 94.4% improvement, 0.8px residual |
 
 ---
 
