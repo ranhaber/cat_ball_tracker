@@ -359,10 +359,36 @@ class VideoProcessor:
             return True  # no perimeter = always inside
         return self.perimeter.is_inside((int(px), int(py)), (frame_w, frame_h))
     
+    def _check_ram_safety(self):
+        """Auto-disable injection if RAM drops below 50 MB available."""
+        try:
+            with open('/proc/meminfo', 'r') as f:
+                for line in f:
+                    if line.startswith('MemAvailable:'):
+                        avail_kb = int(line.split()[1])
+                        if avail_kb < 50 * 1024:  # < 50 MB
+                            self.inject_cat = False
+                            print(f"[INJECT] AUTO-DISABLED: RAM available {avail_kb//1024}MB < 50MB")
+                            return False
+                        return True
+        except Exception:
+            pass
+        return True
+    
     def _inject_cat_on_frame(self, frame):
-        """Overlay the cat image on the frame at the current position, move it."""
+        """Overlay the cat image on the frame at the current position, move it.
+        Lightweight: no alpha blending, just paste BGR pixels."""
         if self._inject_cat_img is None:
             return frame
+        
+        # RAM safety check (every ~30 frames to avoid I/O overhead)
+        if not hasattr(self, '_inject_safety_counter'):
+            self._inject_safety_counter = 0
+        self._inject_safety_counter += 1
+        if self._inject_safety_counter >= 30:
+            self._inject_safety_counter = 0
+            if not self._check_ram_safety():
+                return frame
         
         h, w = frame.shape[:2]
         
@@ -374,13 +400,22 @@ class VideoProcessor:
         cat_size = self._get_perspective_cat_size(
             self._inject_cat_x, self._inject_cat_y)
         
-        # Resize cat image
-        cat_img = self._inject_cat_img
-        cat_h_orig, cat_w_orig = cat_img.shape[:2]
-        scale = cat_size / cat_w_orig
-        new_w = max(10, int(cat_w_orig * scale))
-        new_h = max(10, int(cat_h_orig * scale))
-        cat_resized = cv2.resize(cat_img, (new_w, new_h), interpolation=cv2.INTER_AREA)
+        # Pre-cache resized cat to avoid resizing every frame
+        if not hasattr(self, '_inject_cat_cached_size') or self._inject_cat_cached_size != cat_size:
+            cat_img = self._inject_cat_img
+            cat_h_orig, cat_w_orig = cat_img.shape[:2]
+            scale = cat_size / cat_w_orig
+            new_w = max(10, int(cat_w_orig * scale))
+            new_h = max(10, int(cat_h_orig * scale))
+            # Pre-convert to BGR (no alpha) for fast paste
+            resized = cv2.resize(cat_img, (new_w, new_h), interpolation=cv2.INTER_AREA)
+            self._inject_cat_cached = resized[:, :, :3]  # Drop alpha — just BGR
+            self._inject_cat_cached_size = cat_size
+            self._inject_cat_cached_w = new_w
+            self._inject_cat_cached_h = new_h
+        
+        new_w = self._inject_cat_cached_w
+        new_h = self._inject_cat_cached_h
         
         # Update position
         self._inject_cat_x += self._inject_cat_dx * self._inject_cat_speed
@@ -393,8 +428,8 @@ class VideoProcessor:
         out_of_perimeter = not self._is_inside_perimeter_px(cx, cy, w, h)
         
         if out_of_frame or out_of_perimeter:
-            self._inject_cat_initialized = False  # will reinit from a different edge
-            return frame  # skip this frame
+            self._inject_cat_initialized = False
+            return frame
         
         x = max(0, min(int(self._inject_cat_x), w - new_w))
         y = max(0, min(int(self._inject_cat_y), h - new_h))
@@ -405,16 +440,8 @@ class VideoProcessor:
         if paste_w <= 0 or paste_h <= 0:
             return frame
         
-        cat_roi = cat_resized[:paste_h, :paste_w]
-        
-        # Paste cat onto frame (handle alpha channel if present)
-        if cat_roi.shape[2] == 4:
-            alpha = cat_roi[:, :, 3:4] / 255.0
-            frame_roi = frame[y:y+paste_h, x:x+paste_w].astype(float)
-            cat_rgb = cat_roi[:, :, :3].astype(float)
-            frame[y:y+paste_h, x:x+paste_w] = (alpha * cat_rgb + (1 - alpha) * frame_roi).astype(np.uint8)
-        else:
-            frame[y:y+paste_h, x:x+paste_w] = cat_roi[:, :, :3]
+        # Fast paste — no alpha blending, just overwrite pixels (saves CPU)
+        frame[y:y+paste_h, x:x+paste_w] = self._inject_cat_cached[:paste_h, :paste_w]
         
         # Store bounding box for fallback detection injection
         self._inject_cat_bbox = (x, y, x + paste_w, y + paste_h)
@@ -467,10 +494,6 @@ class VideoProcessor:
                             # (reversed naming convention), which is exactly what OpenCV needs
                             frame = req.make_array("main")
                 
-                # Inject test cat onto raw frame (before motion detection)
-                if self.inject_cat:
-                    frame = self._inject_cat_on_frame(frame)
-                
                 frame_h, frame_w = frame.shape[:2]
                 run_ai_detection = False
                 crop_region = None
@@ -479,6 +502,9 @@ class VideoProcessor:
                 # Run detection periodically (skip frames for performance)
                 skip_counter += 1
                 if skip_counter >= self.current_frame_skip:
+                    # Inject cat only on processed frames (not every frame — saves CPU)
+                    if self.inject_cat:
+                        frame = self._inject_cat_on_frame(frame)
                     skip_counter = 0
                     
                     # Update FPS only when we actually process a frame (not every loop iteration)
