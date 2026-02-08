@@ -190,11 +190,14 @@ class VideoProcessor:
         # Inject Cat test mode
         self.inject_cat = False
         self._inject_cat_img = None
-        self._inject_cat_x = 200.0
-        self._inject_cat_y = 500.0
-        self._inject_cat_vx = 4.0  # pixels per frame
-        self._inject_cat_vy = 2.0
-        self._inject_cat_size = 150  # pixel width of injected cat
+        self._inject_cat_x = 0.0
+        self._inject_cat_y = 0.0
+        self._inject_cat_dx = 0.0  # direction vector (normalized)
+        self._inject_cat_dy = 0.0
+        self._inject_cat_speed = 5.0  # pixels per frame
+        self._inject_cat_size = 150  # fallback pixel width
+        self._inject_cat_initialized = False
+        self._inject_cat_bbox = None
         self._load_inject_cat_image()
         
         # Temporal confirmation - require detection in N consecutive frames
@@ -308,6 +311,54 @@ class VideoProcessor:
             pass
         return self._inject_cat_size
     
+    def _init_inject_cat_position(self, frame_w, frame_h):
+        """Initialize or reset cat position to a random perimeter edge."""
+        import random, math
+        
+        perim = self.perimeter.get_points() if self.perimeter else []
+        if len(perim) < 3:
+            # No perimeter — use frame center
+            self._inject_cat_x = float(frame_w // 3)
+            self._inject_cat_y = float(frame_h // 2)
+            self._inject_cat_dx = 1.0
+            self._inject_cat_dy = 0.3
+            self._inject_cat_initialized = True
+            return
+        
+        # Pick a random edge of the perimeter polygon
+        n = len(perim)
+        edge_idx = random.randint(0, n - 1)
+        p1 = perim[edge_idx]
+        p2 = perim[(edge_idx + 1) % n]
+        
+        # Start at a random point along this edge
+        t = random.uniform(0.2, 0.8)
+        self._inject_cat_x = float(p1[0] + t * (p2[0] - p1[0]))
+        self._inject_cat_y = float(p1[1] + t * (p2[1] - p1[1]))
+        
+        # Direction: towards the centroid of the polygon (roughly opposite side)
+        cx = sum(p[0] for p in perim) / n
+        cy = sum(p[1] for p in perim) / n
+        dx = cx - self._inject_cat_x
+        dy = cy - self._inject_cat_y
+        length = math.sqrt(dx * dx + dy * dy)
+        if length > 0:
+            self._inject_cat_dx = dx / length
+            self._inject_cat_dy = dy / length
+        else:
+            self._inject_cat_dx = 1.0
+            self._inject_cat_dy = 0.0
+        
+        self._inject_cat_initialized = True
+        print(f"[INJECT] Cat starting at ({self._inject_cat_x:.0f},{self._inject_cat_y:.0f}), "
+              f"edge {edge_idx+1}, heading towards center")
+    
+    def _is_inside_perimeter_px(self, px, py, frame_w, frame_h):
+        """Check if pixel is inside the perimeter polygon."""
+        if not self.perimeter:
+            return True  # no perimeter = always inside
+        return self.perimeter.is_inside((int(px), int(py)), (frame_w, frame_h))
+    
     def _inject_cat_on_frame(self, frame):
         """Overlay the cat image on the frame at the current position, move it."""
         if self._inject_cat_img is None:
@@ -315,45 +366,58 @@ class VideoProcessor:
         
         h, w = frame.shape[:2]
         
+        # Initialize position on first call or when cat exits perimeter
+        if not self._inject_cat_initialized:
+            self._init_inject_cat_position(w, h)
+        
         # Get perspective-correct size based on position
         cat_size = self._get_perspective_cat_size(
-            self._inject_cat_x + self._inject_cat_size // 2,
-            self._inject_cat_y + self._inject_cat_size // 2)
+            self._inject_cat_x, self._inject_cat_y)
         
-        # Resize cat image to perspective-correct size
+        # Resize cat image
         cat_img = self._inject_cat_img
-        cat_h, cat_w = cat_img.shape[:2]
-        scale = cat_size / cat_w
-        new_w = int(cat_w * scale)
-        new_h = int(cat_h * scale)
+        cat_h_orig, cat_w_orig = cat_img.shape[:2]
+        scale = cat_size / cat_w_orig
+        new_w = max(10, int(cat_w_orig * scale))
+        new_h = max(10, int(cat_h_orig * scale))
         cat_resized = cv2.resize(cat_img, (new_w, new_h), interpolation=cv2.INTER_AREA)
         
         # Update position
-        self._inject_cat_x += self._inject_cat_vx
-        self._inject_cat_y += self._inject_cat_vy
+        self._inject_cat_x += self._inject_cat_dx * self._inject_cat_speed
+        self._inject_cat_y += self._inject_cat_dy * self._inject_cat_speed
         
-        # Bounce off frame edges (or re-enter from opposite side)
-        if self._inject_cat_x < 0 or self._inject_cat_x + new_w > w:
-            self._inject_cat_vx = -self._inject_cat_vx
-            self._inject_cat_x = max(0, min(self._inject_cat_x, w - new_w))
-        if self._inject_cat_y < 0 or self._inject_cat_y + new_h > h:
-            self._inject_cat_vy = -self._inject_cat_vy
-            self._inject_cat_y = max(0, min(self._inject_cat_y, h - new_h))
+        # Check if cat left the perimeter or frame — reset from a different side
+        cx = self._inject_cat_x + new_w // 2
+        cy = self._inject_cat_y + new_h // 2
+        out_of_frame = cx < 0 or cx > w or cy < 0 or cy > h
+        out_of_perimeter = not self._is_inside_perimeter_px(cx, cy, w, h)
         
-        x = int(self._inject_cat_x)
-        y = int(self._inject_cat_y)
+        if out_of_frame or out_of_perimeter:
+            self._inject_cat_initialized = False  # will reinit from a different edge
+            return frame  # skip this frame
+        
+        x = max(0, min(int(self._inject_cat_x), w - new_w))
+        y = max(0, min(int(self._inject_cat_y), h - new_h))
+        
+        # Ensure ROI fits within frame
+        paste_w = min(new_w, w - x)
+        paste_h = min(new_h, h - y)
+        if paste_w <= 0 or paste_h <= 0:
+            return frame
+        
+        cat_roi = cat_resized[:paste_h, :paste_w]
         
         # Paste cat onto frame (handle alpha channel if present)
-        if cat_resized.shape[2] == 4:
-            # Has alpha channel — blend
-            alpha = cat_resized[:, :, 3] / 255.0
-            for c in range(3):
-                roi = frame[y:y+new_h, x:x+new_w, c].astype(float)
-                cat_c = cat_resized[:, :, c].astype(float)
-                frame[y:y+new_h, x:x+new_w, c] = (alpha * cat_c + (1 - alpha) * roi).astype(np.uint8)
+        if cat_roi.shape[2] == 4:
+            alpha = cat_roi[:, :, 3:4] / 255.0
+            frame_roi = frame[y:y+paste_h, x:x+paste_w].astype(float)
+            cat_rgb = cat_roi[:, :, :3].astype(float)
+            frame[y:y+paste_h, x:x+paste_w] = (alpha * cat_rgb + (1 - alpha) * frame_roi).astype(np.uint8)
         else:
-            # No alpha — just paste
-            frame[y:y+new_h, x:x+new_w] = cat_resized[:, :, :3]
+            frame[y:y+paste_h, x:x+paste_w] = cat_roi[:, :, :3]
+        
+        # Store bounding box for fallback detection injection
+        self._inject_cat_bbox = (x, y, x + paste_w, y + paste_h)
         
         return frame
     
@@ -500,6 +564,21 @@ class VideoProcessor:
                             detections = self.detector.detect(frame)
                         
                         ai_time_ms = (time.time() - ai_start) * 1000
+                        
+                        # Inject Cat fallback: if TFLite didn't detect the injected cat,
+                        # add a fake detection at the cat's position
+                        if self.inject_cat and hasattr(self, '_inject_cat_bbox'):
+                            bbox = self._inject_cat_bbox
+                            cat_class_id = config.COCO_CLASSES.get('cat', 17)
+                            # Check if TFLite detected something near the injected position
+                            tflite_found = any(
+                                abs((d[0]+d[2])/2 - (bbox[0]+bbox[2])/2) < 100 and
+                                abs((d[1]+d[3])/2 - (bbox[1]+bbox[3])/2) < 100
+                                for d in detections
+                            )
+                            if not tflite_found:
+                                # Inject fake detection
+                                detections.append((bbox[0], bbox[1], bbox[2], bbox[3], 0.95, cat_class_id))
                         
                         # Filter by perimeter (pass frame resolution for scaling)
                         frame_res = (frame_w, frame_h)
