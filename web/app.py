@@ -558,7 +558,14 @@ class VideoProcessor:
                     # Check respawn timer — wait 10s after cat leaves Detection Zone
                     if hasattr(self, '_inject_respawn_time') and self._inject_respawn_time > 0:
                         if time.time() < self._inject_respawn_time:
-                            # Still waiting — store green frame and skip
+                            # Still waiting — draw perimeter + status on green frame
+                            remaining = self._inject_respawn_time - time.time()
+                            if self.stream_clients > 0:
+                                self.perimeter.draw(frame)
+                                self._draw_status(frame)
+                                cv2.putText(frame, f"Cat respawning in {remaining:.0f}s",
+                                           (frame_w // 2 - 200, frame_h // 2),
+                                           cv2.FONT_HERSHEY_SIMPLEX, 1.0, (255, 255, 255), 2)
                             with self.frame_lock:
                                 self.current_frame = frame
                             time.sleep(0.2)
