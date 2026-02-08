@@ -509,6 +509,57 @@ class VideoProcessor:
                                 frame = req.make_array("main")
                 
                 frame_h, frame_w = frame.shape[:2]
+                
+                # ===== Inject cat mode: full shortcut (skip normal pipeline) =====
+                if self.inject_cat:
+                    frame = self._inject_cat_on_frame(frame)
+                    if self._inject_cat_bbox:
+                        bbox = self._inject_cat_bbox
+                        cat_class_id = config.COCO_CLASSES.get('cat', 17)
+                        last_detections = [(bbox[0], bbox[1], bbox[2], bbox[3], 0.95, cat_class_id)]
+                        self.motion_detected = True
+                        self._last_motion_time = time.time()
+                        self.ai_detections_count += 1
+                        self.last_detections_with_world = []
+                        for det in last_detections:
+                            x1, y1, x2, y2, conf, class_id = det
+                            world_pos = None
+                            if self.calibration and self.calibration.is_calibrated:
+                                bcx = (x1 + x2) / 2
+                                bcy = y2
+                                wp = self.pixel_to_world(bcx, bcy, already_undistorted=False)
+                                if wp:
+                                    world_pos = {"world_x": round(wp[0], 2), "world_y": round(wp[1], 2)}
+                            self.last_detections_with_world.append({
+                                "bbox": [x1, y1, x2, y2],
+                                "confidence": round(conf, 2),
+                                "class_id": class_id,
+                                "world_position": world_pos,
+                                "injected": True
+                            })
+                        self._update_fps()
+                        self.frame_count += 1
+                        tracked_objects = self.tracker.update(last_detections)
+                        if self.stream_clients > 0:
+                            annotated = frame
+                            self.perimeter.draw(annotated)
+                            self.detector.draw_detections(annotated, last_detections, tracked_objects)
+                            for det_info in self.last_detections_with_world:
+                                if det_info.get("injected"):
+                                    bx = det_info["bbox"]
+                                    cv2.rectangle(annotated, (bx[0], bx[1]), (bx[2], bx[3]),
+                                                 (0, 255, 255), 3)
+                                    cv2.putText(annotated, "INJECTED", (bx[0], bx[1] - 5),
+                                               cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 2)
+                            self._draw_status(annotated)
+                            with self.frame_lock:
+                                self.current_frame = annotated
+                        else:
+                            with self.frame_lock:
+                                self.current_frame = frame
+                    time.sleep(0.2)
+                    continue
+                
                 run_ai_detection = False
                 crop_region = None
                 motion_regions_in_perimeter = []
@@ -516,64 +567,6 @@ class VideoProcessor:
                 # Run detection periodically (skip frames for performance)
                 skip_counter += 1
                 if skip_counter >= self.current_frame_skip:
-                    # Inject cat mode: use synthetic frame (skip camera processing)
-                    if self.inject_cat:
-                        # Create lightweight synthetic frame (solid color, no camera ISP)
-                        synth = np.full((frame_h, frame_w, 3), (50, 120, 50), dtype=np.uint8)  # dark green
-                        frame = self._inject_cat_on_frame(synth)
-                        # Inject detection directly — skip motion detection + TFLite
-                        if self._inject_cat_bbox:
-                            bbox = self._inject_cat_bbox
-                            cat_class_id = config.COCO_CLASSES.get('cat', 17)
-                            last_detections = [(bbox[0], bbox[1], bbox[2], bbox[3], 0.95, cat_class_id)]
-                            self.motion_detected = True
-                            self._last_motion_time = time.time()
-                            self.ai_detections_count += 1
-                            # Compute world coords
-                            self.last_detections_with_world = []
-                            for det in last_detections:
-                                x1, y1, x2, y2, conf, class_id = det
-                                world_pos = None
-                                if self.calibration and self.calibration.is_calibrated:
-                                    bcx = (x1 + x2) / 2
-                                    bcy = y2
-                                    wp = self.pixel_to_world(bcx, bcy, already_undistorted=False)
-                                    if wp:
-                                        world_pos = {"world_x": round(wp[0], 2), "world_y": round(wp[1], 2)}
-                                self.last_detections_with_world.append({
-                                    "bbox": [x1, y1, x2, y2],
-                                    "confidence": round(conf, 2),
-                                    "class_id": class_id,
-                                    "world_position": world_pos,
-                                    "injected": True
-                                })
-                            # Skip the normal motion/AI pipeline — jump to tracking
-                            skip_counter = 0
-                            self._update_fps()
-                            self.frame_count += 1
-                            tracked_objects = self.tracker.update(last_detections)
-                            # Annotate and store
-                            if self.stream_clients > 0:
-                                annotated = frame
-                                self.perimeter.draw(annotated)
-                                self.detector.draw_detections(annotated, last_detections, tracked_objects)
-                                # Yellow INJECTED box
-                                for det_info in self.last_detections_with_world:
-                                    if det_info.get("injected"):
-                                        bx = det_info["bbox"]
-                                        cv2.rectangle(annotated, (bx[0], bx[1]), (bx[2], bx[3]),
-                                                     (0, 255, 255), 3)
-                                        cv2.putText(annotated, "INJECTED", (bx[0], bx[1] - 5),
-                                                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 2)
-                                self._draw_status(annotated)
-                                with self.frame_lock:
-                                    self.current_frame = annotated
-                            else:
-                                with self.frame_lock:
-                                    self.current_frame = frame
-                            # Sleep to limit frame rate (~5 FPS for test)
-                            time.sleep(0.2)
-                            continue
                     skip_counter = 0
                     
                     # Update FPS only when we actually process a frame (not every loop iteration)
