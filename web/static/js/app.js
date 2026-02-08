@@ -79,6 +79,7 @@ function initVideoReconnect() {
     const videoStream = document.getElementById('video-stream');
     
     videoStream.onerror = () => {
+        if (!streamActive) return;  // Don't reconnect if user stopped stream
         console.log('Video stream error - attempting reconnect...');
         showConnectionStatus('disconnected');
         scheduleReconnect();
@@ -89,6 +90,7 @@ function initVideoReconnect() {
 }
 
 function scheduleReconnect() {
+    if (!streamActive) return;  // Don't reconnect if user stopped stream
     if (reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
         showConnectionStatus('failed');
         return;
@@ -121,6 +123,7 @@ function reconnectVideo() {
 }
 
 function checkVideoHealth() {
+    if (!streamActive) return;  // Don't check if user stopped stream
     const videoStream = document.getElementById('video-stream');
     
     // If image seems broken, try reconnect
