@@ -323,42 +323,59 @@ class VideoProcessor:
         return self._inject_cat_size
     
     def _init_inject_cat_position(self, frame_w, frame_h):
-        """Initialize cat position — start from a random edge, move across the frame."""
+        """Initialize cat position near the Detection Zone perimeter.
+        If no perimeter exists, falls back to frame center."""
         import random, math
         
-        # Pick a random starting edge (0=left, 1=right, 2=top, 3=bottom)
-        edge = random.randint(0, 3)
-        margin = 50
-        if edge == 0:  # left
-            self._inject_cat_x = float(margin)
-            self._inject_cat_y = float(random.randint(margin, frame_h - margin))
-            self._inject_cat_dx = 1.0
-            self._inject_cat_dy = random.uniform(-0.3, 0.3)
-        elif edge == 1:  # right
-            self._inject_cat_x = float(frame_w - margin - 200)
-            self._inject_cat_y = float(random.randint(margin, frame_h - margin))
-            self._inject_cat_dx = -1.0
-            self._inject_cat_dy = random.uniform(-0.3, 0.3)
-        elif edge == 2:  # top
-            self._inject_cat_x = float(random.randint(margin, frame_w - margin))
-            self._inject_cat_y = float(margin)
-            self._inject_cat_dx = random.uniform(-0.3, 0.3)
-            self._inject_cat_dy = 1.0
-        else:  # bottom
-            self._inject_cat_x = float(random.randint(margin, frame_w - margin))
-            self._inject_cat_y = float(frame_h - margin - 200)
-            self._inject_cat_dx = random.uniform(-0.3, 0.3)
-            self._inject_cat_dy = -1.0
-        
-        # Normalize direction
-        length = math.sqrt(self._inject_cat_dx**2 + self._inject_cat_dy**2)
-        if length > 0:
-            self._inject_cat_dx /= length
-            self._inject_cat_dy /= length
+        # Try to start near the Detection Zone (perimeter)
+        perim = self.perimeter.get_points() if self.perimeter else []
+        if len(perim) >= 3:
+            # Scale perimeter points to current frame resolution
+            saved_res = self.perimeter.saved_resolution if hasattr(self.perimeter, 'saved_resolution') else None
+            pts = []
+            for p in perim:
+                px, py = float(p[0]), float(p[1])
+                if saved_res and saved_res[0] > 0 and saved_res[1] > 0:
+                    px = px * frame_w / saved_res[0]
+                    py = py * frame_h / saved_res[1]
+                pts.append((px, py))
+            
+            # Pick a random edge of the perimeter polygon, start along it
+            n = len(pts)
+            edge_idx = random.randint(0, n - 1)
+            p1 = pts[edge_idx]
+            p2 = pts[(edge_idx + 1) % n]
+            t = random.uniform(0.3, 0.7)
+            self._inject_cat_x = float(p1[0] + t * (p2[0] - p1[0]))
+            self._inject_cat_y = float(p1[1] + t * (p2[1] - p1[1]))
+            
+            # Move towards the centroid of the perimeter
+            cx = sum(p[0] for p in pts) / n
+            cy = sum(p[1] for p in pts) / n
+            dx = cx - self._inject_cat_x
+            dy = cy - self._inject_cat_y
+            length = math.sqrt(dx * dx + dy * dy)
+            if length > 0:
+                self._inject_cat_dx = dx / length
+                self._inject_cat_dy = dy / length
+            else:
+                self._inject_cat_dx = 1.0
+                self._inject_cat_dy = 0.0
+            
+            print(f"[INJECT] Cat starting near Detection Zone edge {edge_idx+1}: "
+                  f"({self._inject_cat_x:.0f},{self._inject_cat_y:.0f}), "
+                  f"heading towards centroid ({cx:.0f},{cy:.0f})")
+        else:
+            # No perimeter — start at frame center with random direction
+            self._inject_cat_x = float(frame_w // 2)
+            self._inject_cat_y = float(frame_h // 2)
+            angle = random.uniform(0, 2 * math.pi)
+            self._inject_cat_dx = math.cos(angle)
+            self._inject_cat_dy = math.sin(angle)
+            print(f"[INJECT] No Detection Zone — starting at frame center "
+                  f"({self._inject_cat_x:.0f},{self._inject_cat_y:.0f})")
         
         self._inject_cat_initialized = True
-        print(f"[INJECT] Cat starting at ({self._inject_cat_x:.0f},{self._inject_cat_y:.0f}), "
-              f"edge={edge}, dir=({self._inject_cat_dx:.2f},{self._inject_cat_dy:.2f})")
     
     def _is_inside_perimeter_px(self, px, py, frame_w, frame_h):
         """Check if pixel is inside the perimeter polygon."""
