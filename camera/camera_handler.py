@@ -194,7 +194,7 @@ class CameraHandler:
                 controls={
                     "FrameRate": self.fps
                 },
-                buffer_count=4  # Small buffer to reduce latency
+                buffer_count=2  # 2 buffers saves ~18MB RAM (9MB/frame). Minimal impact on detection.
             )
             
             self.camera.configure(camera_config)
