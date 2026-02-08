@@ -135,6 +135,7 @@ class VideoProcessor:
         
         self.current_frame = None
         self.frame_lock = threading.Lock()
+        self.stream_clients = 0  # Number of active MJPEG stream connections
         
         # Load saved settings (or defaults)
         saved = settings.load_settings()
@@ -439,37 +440,42 @@ class VideoProcessor:
                             # Keep last detections for a few frames
                             pass
                     
-                # Update tracker with latest detections
-                tracked_objects = self.tracker.update(last_detections)
+                # Update tracker only when there are detections
+                tracked_objects = self.tracker.update(last_detections) if last_detections else {}
                 
-                # OPTIMIZATION A: Draw directly on frame, only copy once at the end
-                annotated = frame
-                
-                # Draw motion regions if enabled (only those inside perimeter)
-                if self.show_motion_regions and self.motion_first_enabled:
-                    self.motion_detector.draw_motion(annotated, regions=motion_regions_in_perimeter)
-                
-                # Draw crop region if used
-                if crop_region and self.show_motion_regions:
-                    cx, cy, cw, ch = crop_region
-                    cv2.rectangle(annotated, (cx, cy), (cx+cw, cy+ch), (255, 0, 255), 2)
-                
-                # Draw perimeter
-                annotated = self.perimeter.draw(annotated)
-                
-                # Draw detections and tracking
-                annotated = self.detector.draw_detections(
-                    annotated, 
-                    last_detections,
-                    tracked_objects
-                )
-                
-                # Draw FPS and status
-                self._draw_status(annotated)
-                
-                # OPTIMIZATION A: Store reference, copy only when encoding to JPEG
-                with self.frame_lock:
-                    self.current_frame = annotated
+                # Only annotate and store frame if someone is watching the stream
+                if self.stream_clients > 0:
+                    annotated = frame
+                    
+                    # Draw motion regions if enabled
+                    if self.show_motion_regions and self.motion_first_enabled:
+                        self.motion_detector.draw_motion(annotated, regions=motion_regions_in_perimeter)
+                    
+                    # Draw crop region if used
+                    if crop_region and self.show_motion_regions:
+                        cx, cy, cw, ch = crop_region
+                        cv2.rectangle(annotated, (cx, cy), (cx+cw, cy+ch), (255, 0, 255), 2)
+                    
+                    # Draw perimeter
+                    annotated = self.perimeter.draw(annotated)
+                    
+                    # Draw detections and tracking
+                    annotated = self.detector.draw_detections(
+                        annotated, 
+                        last_detections,
+                        tracked_objects
+                    )
+                    
+                    # Draw FPS and status
+                    self._draw_status(annotated)
+                    
+                    # Store for MJPEG streaming
+                    with self.frame_lock:
+                        self.current_frame = annotated
+                else:
+                    # No stream clients — store raw frame (for snapshots) without annotation
+                    with self.frame_lock:
+                        self.current_frame = frame
                 
                 # Recording on detection (live only, when enabled)
                 if self.video_source == "live" and self.recording_enabled:
@@ -1078,15 +1084,21 @@ def create_app():
         
         # Otherwise stream continuously (rate-limited to save CPU)
         def generate():
-            while True:
-                jpeg = video_processor.get_frame_jpeg()
-                if jpeg is not None:
-                    yield (
-                        b'--frame\r\n'
-                        b'Content-Type: image/jpeg\r\n\r\n' + jpeg + b'\r\n'
-                    )
-                # Limit stream to ~10 FPS max — saves CPU on JPEG encoding
-                time.sleep(0.1)
+            video_processor.stream_clients += 1
+            print(f"[STREAM] Client connected ({video_processor.stream_clients} active)")
+            try:
+                while True:
+                    jpeg = video_processor.get_frame_jpeg()
+                    if jpeg is not None:
+                        yield (
+                            b'--frame\r\n'
+                            b'Content-Type: image/jpeg\r\n\r\n' + jpeg + b'\r\n'
+                        )
+                    # Limit stream to ~10 FPS max — saves CPU on JPEG encoding
+                    time.sleep(0.1)
+            finally:
+                video_processor.stream_clients = max(0, video_processor.stream_clients - 1)
+                print(f"[STREAM] Client disconnected ({video_processor.stream_clients} active)")
                     
         return Response(
             generate(),
