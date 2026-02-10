@@ -51,10 +51,10 @@ def run_tests(module_name=None):
     
     print("\n" + "=" * 60)
     if result.wasSuccessful():
-        print(f"✅ All {result.testsRun} tests passed!")
+        print(f"PASS: All {result.testsRun} tests passed!")
     else:
         failed = len(result.failures) + len(result.errors)
-        print(f"❌ {failed} of {result.testsRun} tests failed")
+        print(f"FAIL: {failed} of {result.testsRun} tests failed")
     
     return result.wasSuccessful()
 

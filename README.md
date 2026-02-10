@@ -97,6 +97,47 @@ Detection and tracking work **independently of the web UI** — the system runs 
 
 ---
 
+## 🔄 Detection Phase State Machine
+
+The processing loop uses a 4-phase state machine to manage TFLite and CPU:
+
+```
+PHASE 1: IDLE                          PHASE 2: ACQUISITION
++----------------------------+         +----------------------------+
+| Motion detection only      |         | TFLite loads, runs every   |
+| (Detection Zone only)      | motion  | frame, searching for cat   |
+| TFLite: NOT loaded         |-------->| TFLite: LOADED             |
+| CPU: ~30%  RAM: ~75%       |in zone  | CPU: ~80%  RAM: ~87%       |
++----------------------------+         +-------------+--------------+
+       ^                                      cat found |    no motion
+       |                                               v    for 10s -> IDLE
+       | no detection          PHASE 3: TRACKING       |
+       | for 30s              +----------------------------+
+       +----------------------| Cat confirmed              |
+       |                      | TFLite every 3rd frame     |
+       |                      | Motion crop for AI         |
+       |                      | CPU: ~60%  RAM: ~87%       |
+       |                      +-------------+--------------+
+       |                           motion stops |
+       |                                       v
+       | no detection          PHASE 4: WATCH MODE
+       | for 30s              +----------------------------+
+       +----------------------| No motion, cat still there |
+                              | TFLite every 2nd frame     |
+                              | Full frame scan (no crop)  |
+                              | Cat moves -> TRACKING      |
+                              | CPU: ~50%  RAM: ~87%       |
+                              +----------------------------+
+```
+
+**Key rules:**
+- Motion detection only inside the Detection Zone (all phases)
+- TFLite uses crop around motion area (ACQUISITION/TRACKING) or full frame (WATCH)
+- Cat gone for 30 seconds -> TFLite unloads, memory reclaimed, back to IDLE
+- Inject Cat test mode forces ACQUISITION phase on enable
+
+---
+
 ## 📁 Project Structure
 
 ```

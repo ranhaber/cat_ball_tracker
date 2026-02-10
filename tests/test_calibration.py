@@ -21,6 +21,10 @@ class TestCalibration(unittest.TestCase):
     """Test perspective calibration with homography."""
     
     def setUp(self):
+        # Remove any saved calibration file so tests start fresh
+        cal_file = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'calibration.json')
+        if os.path.exists(cal_file):
+            os.remove(cal_file)
         self.cal = CameraCalibration()
     
     def test_not_calibrated_initially(self):

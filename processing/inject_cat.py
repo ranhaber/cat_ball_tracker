@@ -206,8 +206,8 @@ class InjectCat:
                 self._dx = 1.0
                 self._dy = 0.0
             
-            print(f"[INJECT] Vertex {start_idx+1}→{target_idx+1} (of {n}): "
-                  f"start≈({sx:.0f},{sy:.0f}), target=({target_pt[0]:.0f},{target_pt[1]:.0f}), "
+            print(f"[INJECT] Vertex {start_idx+1}->{target_idx+1} (of {n}): "
+                  f"start=({sx:.0f},{sy:.0f}), target=({target_pt[0]:.0f},{target_pt[1]:.0f}), "
                   f"dist={length:.0f}px")
         else:
             # No perimeter — start at frame center

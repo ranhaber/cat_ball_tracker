@@ -330,7 +330,7 @@ class CameraCalibration:
                     dy_s = placed_world[j][1] - placed_world[i][1]
                     computed = math.sqrt(dx_s * dx_s + dy_s * dy_s)
                     expected = rect["side_lengths"][i]
-                    print(f"[CALIBRATION]   side {i+1}→{(i+1)%4+1}: expected={expected:.3f}m, got={computed:.3f}m")
+                    print(f"[CALIBRATION]   side {i+1}->{(i+1)%4+1}: expected={expected:.3f}m, got={computed:.3f}m")
                 
                 all_pixel_pts.extend(rect["pixels"])
                 all_world_pts.extend(placed_world)

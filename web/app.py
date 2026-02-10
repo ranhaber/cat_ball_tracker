@@ -133,11 +133,18 @@ class VideoProcessor:
         self._saved_detection_mode = saved.get("detection_mode", config.DEFAULT_DETECTION_MODE)
         self._saved_threshold = saved.get("detection_threshold", config.DETECTION_THRESHOLD)
         
-        # Motion detection stats
+        # Phase state machine: IDLE → ACQUISITION → TRACKING → WATCH → IDLE
+        # See README.md for detailed phase diagram
+        self._phase = "IDLE"
+        self._last_detection_time = 0    # Time of last successful cat detection
+        self._last_motion_time = 0       # Time of last motion in Detection Zone
+        self._phase_frame_counter = 0    # Frames since entering current phase
+        self._detection_timeout = 30     # Seconds with no detection → back to IDLE
+        self._acquisition_timeout = 10   # Seconds with no cat found → back to IDLE
+        
+        # Motion detection stats (exposed to API)
         self.motion_detected = False
         self.ai_detections_count = 0
-        self._last_motion_time = 0
-        self._tflite_idle_timeout = 10  # Seconds of no motion before unloading TFLite
         
         # Inject Cat test mode (uses InjectCat class from processing/inject_cat.py)
         self.inject_cat = False
@@ -281,7 +288,9 @@ class VideoProcessor:
                         print(f"[INJECT DEBUG] {self.inject_cat_handler.get_debug_info()}, "
                               f"clients={self.stream_clients}, RAM: {ram_info}")
                 
-                # ── Detection pipeline (skip frames for performance) ──
+                # ══════════════════════════════════════════════════════════
+                # PHASE STATE MACHINE: IDLE → ACQUISITION → TRACKING → WATCH
+                # ══════════════════════════════════════════════════════════
                 run_ai_detection = False
                 crop_region = None
                 motion_regions_in_perimeter = []
@@ -291,76 +300,158 @@ class VideoProcessor:
                     skip_counter = 0
                     self._update_fps()
                     self.frame_count += 1
+                    self._phase_frame_counter += 1
+                    now = time.time()
                     
-                    if self.inject_cat:
-                        # Inject mode: force AI with crop around known cat position
-                        if not hasattr(self, '_inject_ai_counter'):
-                            self._inject_ai_counter = 0
-                        self._inject_ai_counter += 1
-                        if self._inject_ai_counter >= 20:
-                            self._inject_ai_counter = 0
-                            run_ai_detection = True
-                            self.motion_detected = True
-                            self._last_motion_time = time.time()
-                            if self.inject_cat_handler:
-                                crop_region = self.inject_cat_handler.get_crop_region(
-                                    frame_w, frame_h,
-                                    getattr(config, 'MOTION_CROP_SIZE', (380, 380)))
-                        else:
-                            self.motion_detected = True
-                            self._last_motion_time = time.time()
-                    elif self.motion_first_enabled:
-                        # Motion-first: only run AI when motion detected inside Detection Zone
+                    # ── PHASE: IDLE ──
+                    # Motion detection only. TFLite not loaded. Low power.
+                    if self._phase == "IDLE":
                         motion_start = time.time()
                         motion_result = self.motion_detector.detect(frame)
                         motion_time_ms = (time.time() - motion_start) * 1000
                         
-                        if motion_result["motion_detected"] and config.DEBUG:
-                            print(f"[DEBUG] Motion detected: {len(motion_result['regions'])} regions (took {motion_time_ms:.1f}ms)")
-                        
-                        # Filter motion regions to only those inside Detection Zone
-                        motion_regions_in_perimeter = []
+                        # Filter motion to Detection Zone only
                         if motion_result["motion_detected"] and motion_result["regions"]:
                             frame_res = (frame_w, frame_h)
-                            perimeter_points = len(self.perimeter.get_points()) if self.perimeter else 0
-                            
                             for region in motion_result["regions"]:
                                 rx, ry, rw, rh = region
-                                center_x = rx + rw // 2
-                                center_y = ry + rh // 2
-                                inside = self.perimeter.is_inside((center_x, center_y), frame_res)
-                                if inside:
+                                cx, cy = rx + rw // 2, ry + rh // 2
+                                if self.perimeter.is_inside((cx, cy), frame_res):
                                     motion_regions_in_perimeter.append(region)
-                            
-                            if config.DEBUG or len(motion_regions_in_perimeter) > 0:
-                                print(f"[DEBUG] Perimeter has {perimeter_points} points, "
-                                      f"{len(motion_regions_in_perimeter)}/{len(motion_result['regions'])} regions inside")
-                            self.motion_detected = len(motion_regions_in_perimeter) > 0
-                        else:
-                            self.motion_detected = False
                         
-                        if self.motion_detected:
-                            self._last_motion_time = time.time()
+                        self.motion_detected = len(motion_regions_in_perimeter) > 0
+                        
+                        if self.motion_detected or self.inject_cat:
+                            # Transition → ACQUISITION
+                            self._phase = "ACQUISITION"
+                            self._phase_frame_counter = 0
+                            self._last_motion_time = now
                             cv2.setNumThreads(4)
-                            crop_size = getattr(config, 'MOTION_CROP_SIZE', (300, 300))
+                            print(f"[PHASE] IDLE → ACQUISITION (motion in Detection Zone)")
+                    
+                    # ── PHASE: ACQUISITION ──
+                    # TFLite runs every frame, searching for cat.
+                    elif self._phase == "ACQUISITION":
+                        # Run motion detection to get crop region
+                        motion_result = self.motion_detector.detect(frame)
+                        if motion_result["motion_detected"] and motion_result["regions"]:
+                            frame_res = (frame_w, frame_h)
+                            for region in motion_result["regions"]:
+                                rx, ry, rw, rh = region
+                                cx, cy = rx + rw // 2, ry + rh // 2
+                                if self.perimeter.is_inside((cx, cy), frame_res):
+                                    motion_regions_in_perimeter.append(region)
+                        
+                        self.motion_detected = len(motion_regions_in_perimeter) > 0
+                        if self.motion_detected:
+                            self._last_motion_time = now
+                        
+                        # AI runs every frame during acquisition
+                        run_ai_detection = True
+                        crop_size = getattr(config, 'MOTION_CROP_SIZE', (380, 380))
+                        if self.inject_cat and self.inject_cat_handler:
+                            crop_region = self.inject_cat_handler.get_crop_region(
+                                frame_w, frame_h, crop_size)
+                        elif motion_regions_in_perimeter:
                             crop_region = self.motion_detector.get_fixed_crop_region(
                                 frame.shape, crop_size=crop_size)
-                            run_ai_detection = True
-                        elif (self.detector.is_loaded() and 
-                              time.time() - self._last_motion_time > self._tflite_idle_timeout):
+                        
+                        # Timeout: no motion for 10s → back to IDLE
+                        if not self.inject_cat and (now - self._last_motion_time > self._acquisition_timeout):
+                            self._phase = "IDLE"
+                            self._phase_frame_counter = 0
                             self.detector.unload_model()
                             cv2.setNumThreads(1)
                             reclaim_memory()
-                            print("[IDLE] TFLite unloaded, memory reclaimed")
-                    else:
-                        # Always-on mode
-                        run_ai_detection = True
-                        self.motion_detected = True
+                            print(f"[PHASE] ACQUISITION → IDLE (no motion for {self._acquisition_timeout}s)")
                     
-                    # ── AI detection ──
+                    # ── PHASE: TRACKING ──
+                    # Cat confirmed. TFLite every 3rd processed frame with motion crop.
+                    elif self._phase == "TRACKING":
+                        # Run motion detection for crop region
+                        motion_result = self.motion_detector.detect(frame)
+                        if motion_result["motion_detected"] and motion_result["regions"]:
+                            frame_res = (frame_w, frame_h)
+                            for region in motion_result["regions"]:
+                                rx, ry, rw, rh = region
+                                cx, cy = rx + rw // 2, ry + rh // 2
+                                if self.perimeter.is_inside((cx, cy), frame_res):
+                                    motion_regions_in_perimeter.append(region)
+                        
+                        self.motion_detected = len(motion_regions_in_perimeter) > 0
+                        if self.motion_detected:
+                            self._last_motion_time = now
+                        
+                        # TFLite every 3rd processed frame
+                        if self._phase_frame_counter % 3 == 0:
+                            run_ai_detection = True
+                            crop_size = getattr(config, 'MOTION_CROP_SIZE', (380, 380))
+                            if self.inject_cat and self.inject_cat_handler:
+                                crop_region = self.inject_cat_handler.get_crop_region(
+                                    frame_w, frame_h, crop_size)
+                            elif motion_regions_in_perimeter:
+                                crop_region = self.motion_detector.get_fixed_crop_region(
+                                    frame.shape, crop_size=crop_size)
+                        
+                        # Motion stopped → WATCH
+                        if not self.motion_detected and not self.inject_cat:
+                            self._phase = "WATCH"
+                            self._phase_frame_counter = 0
+                            print(f"[PHASE] TRACKING → WATCH (motion stopped, watching for cat)")
+                        
+                        # No detection for 30s → IDLE
+                        if now - self._last_detection_time > self._detection_timeout:
+                            self._phase = "IDLE"
+                            self._phase_frame_counter = 0
+                            self.detector.unload_model()
+                            cv2.setNumThreads(1)
+                            reclaim_memory()
+                            last_detections = []
+                            self.last_detections_with_world = []
+                            print(f"[PHASE] TRACKING → IDLE (no detection for {self._detection_timeout}s)")
+                    
+                    # ── PHASE: WATCH ──
+                    # No motion but cat was recently detected. TFLite every 2nd frame.
+                    elif self._phase == "WATCH":
+                        # Check for motion (cat might move again)
+                        motion_result = self.motion_detector.detect(frame)
+                        if motion_result["motion_detected"] and motion_result["regions"]:
+                            frame_res = (frame_w, frame_h)
+                            for region in motion_result["regions"]:
+                                rx, ry, rw, rh = region
+                                cx, cy = rx + rw // 2, ry + rh // 2
+                                if self.perimeter.is_inside((cx, cy), frame_res):
+                                    motion_regions_in_perimeter.append(region)
+                        
+                        self.motion_detected = len(motion_regions_in_perimeter) > 0
+                        
+                        # Cat moved again → back to TRACKING
+                        if self.motion_detected:
+                            self._last_motion_time = now
+                            self._phase = "TRACKING"
+                            self._phase_frame_counter = 0
+                            print(f"[PHASE] WATCH → TRACKING (motion resumed)")
+                        
+                        # TFLite every 2nd processed frame (no crop — full Detection Zone)
+                        if self._phase_frame_counter % 2 == 0:
+                            run_ai_detection = True
+                            # No crop in WATCH — scan wider area
+                        
+                        # No detection for 30s → IDLE
+                        if now - self._last_detection_time > self._detection_timeout:
+                            self._phase = "IDLE"
+                            self._phase_frame_counter = 0
+                            self.detector.unload_model()
+                            cv2.setNumThreads(1)
+                            reclaim_memory()
+                            last_detections = []
+                            self.last_detections_with_world = []
+                            print(f"[PHASE] WATCH → IDLE (no detection for {self._detection_timeout}s)")
+                    
+                    # ── AI DETECTION (shared by ACQUISITION, TRACKING, WATCH) ──
                     if run_ai_detection:
                         ai_start = time.time()
-                        if crop_region and (self.motion_first_enabled or self.inject_cat):
+                        if crop_region:
                             cx, cy, cw, ch = crop_region
                             cropped_frame = frame[cy:cy+ch, cx:cx+cw]
                             crop_detections = self.detector.detect(cropped_frame)
@@ -395,7 +486,6 @@ class VideoProcessor:
                         self.detection_history.append(len(detections) > 0)
                         if len(self.detection_history) > self.confirm_frames:
                             self.detection_history.pop(0)
-                        
                         if self.confirm_frames > 1:
                             confirmed = len(self.detection_history) >= self.confirm_frames and all(self.detection_history)
                             if not confirmed:
@@ -403,10 +493,19 @@ class VideoProcessor:
                         
                         last_detections = detections
                         
+                        # Phase transitions based on detection results
+                        if len(detections) > 0:
+                            self._last_detection_time = now
+                            # ACQUISITION → TRACKING (cat found!)
+                            if self._phase == "ACQUISITION":
+                                self._phase = "TRACKING"
+                                self._phase_frame_counter = 0
+                                print(f"[PHASE] ACQUISITION → TRACKING (cat detected!)")
+                        
                         if config.DEBUG or raw_count > 0:
                             confirmed_str = f", Confirmed: {len(detections) > 0}" if self.confirm_frames > 1 else ""
-                            print(f"[PERF] AI inference: {ai_time_ms:.1f}ms | "
-                                  f"Raw detections: {raw_count}, After perimeter: {len(detections)}{confirmed_str}")
+                            print(f"[PERF] Phase={self._phase} AI: {ai_time_ms:.1f}ms | "
+                                  f"Raw: {raw_count}, Perimeter: {len(detections)}{confirmed_str}")
                         
                         # Compute world coordinates
                         self.last_detections_with_world = []
@@ -429,9 +528,6 @@ class VideoProcessor:
                                 "world_position": world_pos,
                                 "injected": is_injected
                             })
-                    elif not self.motion_detected:
-                        if len(last_detections) > 0:
-                            pass  # Keep last detections briefly
                 
                 # ── Tracking ──
                 tracked_objects = self.tracker.update(last_detections) if last_detections else {}
@@ -494,11 +590,16 @@ class VideoProcessor:
         count_text = f"Objects: {self.tracker.get_object_count()}"
         cv2.putText(frame, count_text, (10, text_h + 32), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 0), 1)
         
-        if self.motion_first_enabled:
-            motion_status = "MOTION" if self.motion_detected else "IDLE"
-            motion_color = (0, 255, 255) if self.motion_detected else (128, 128, 128)
-            cv2.putText(frame, f"Motion: {motion_status}", (10, text_h + 52),
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, motion_color, 1)
+        # Show phase state
+        phase_colors = {
+            "IDLE": (128, 128, 128),
+            "ACQUISITION": (0, 255, 255),
+            "TRACKING": (0, 255, 0),
+            "WATCH": (0, 165, 255)
+        }
+        phase_color = phase_colors.get(self._phase, (255, 255, 255))
+        cv2.putText(frame, f"Phase: {self._phase}", (10, text_h + 52),
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, phase_color, 1)
         
         timestamp = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
         (ts_w, ts_h), _ = cv2.getTextSize(timestamp, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
@@ -675,7 +776,8 @@ class VideoProcessor:
             "motion_detected": self.motion_detected,
             "show_motion_regions": self.show_motion_regions,
             "ai_detections_count": self.ai_detections_count,
-            "performance_profile": self.current_profile
+            "performance_profile": self.current_profile,
+            "phase": self._phase
         }
     
     # =========================================================================
