@@ -323,10 +323,29 @@ class VideoProcessor:
             pass
         return self._inject_cat_size
     
+    def _get_perimeter_vertices(self, frame_w, frame_h):
+        """Get Detection Zone vertices scaled to current frame resolution."""
+        perim = self.perimeter.get_points() if self.perimeter else []
+        if len(perim) < 3:
+            return []
+        saved_res = self.perimeter.saved_resolution if hasattr(self.perimeter, 'saved_resolution') else None
+        pts = []
+        for p in perim:
+            px, py = float(p[0]), float(p[1])
+            if saved_res and saved_res[0] > 0 and saved_res[1] > 0:
+                px = px * frame_w / saved_res[0]
+                py = py * frame_h / saved_res[1]
+            pts.append((px, py))
+        return pts
+    
+    def _get_opposite_vertex(self, idx, n):
+        """Get the index of the vertex roughly opposite (diagonal) to idx."""
+        return (idx + n // 2) % n
+    
     def _init_inject_cat_position(self, frame_w, frame_h):
-        """Start cat at centroid of Detection Zone (guaranteed inside),
-        walk towards a random edge. Each respawn picks a new direction."""
-        import random, math
+        """Place cat at a vertex of the Detection Zone, heading towards
+        the opposite diagonal vertex. Cycles through vertices sequentially."""
+        import math
         
         # Cat size offsets to convert bottom-center → top-left
         if hasattr(self, '_inject_cat_cached_h') and self._inject_cat_cached_h:
@@ -336,35 +355,39 @@ class VideoProcessor:
             cat_h = 60
             cat_w_half = 50
         
-        perim = self.perimeter.get_points() if self.perimeter else []
-        if len(perim) >= 3:
-            # Scale perimeter points to current frame resolution
-            saved_res = self.perimeter.saved_resolution if hasattr(self.perimeter, 'saved_resolution') else None
-            pts = []
-            for p in perim:
-                px, py = float(p[0]), float(p[1])
-                if saved_res and saved_res[0] > 0 and saved_res[1] > 0:
-                    px = px * frame_w / saved_res[0]
-                    py = py * frame_h / saved_res[1]
-                pts.append((px, py))
-            
+        pts = self._get_perimeter_vertices(frame_w, frame_h)
+        if len(pts) >= 3:
             n = len(pts)
+            
+            # Track which vertex we're starting from (cycle sequentially)
+            if not hasattr(self, '_inject_vertex_idx'):
+                self._inject_vertex_idx = 0
+            start_idx = self._inject_vertex_idx % n
+            target_idx = self._get_opposite_vertex(start_idx, n)
+            
+            # Advance to next vertex for the next respawn
+            self._inject_vertex_idx = (self._inject_vertex_idx + 1) % n
+            
+            start_pt = pts[start_idx]
+            target_pt = pts[target_idx]
+            
+            # Store target for arrival check
+            self._inject_target_x = target_pt[0]
+            self._inject_target_y = target_pt[1]
+            
+            # Push start 15% inward from vertex towards centroid (stay inside perimeter)
             cx = sum(p[0] for p in pts) / n
             cy = sum(p[1] for p in pts) / n
+            sx = start_pt[0] + 0.15 * (cx - start_pt[0])
+            sy = start_pt[1] + 0.15 * (cy - start_pt[1])
             
-            # Bottom-center at centroid → top-left offset
-            self._inject_cat_x = float(cx - cat_w_half)
-            self._inject_cat_y = float(cy - cat_h)
+            # Position top-left so bottom-center is at start point
+            self._inject_cat_x = float(sx - cat_w_half)
+            self._inject_cat_y = float(sy - cat_h)
             
-            # Pick a random edge midpoint, walk TOWARDS it (outward from centroid)
-            edge_idx = random.randint(0, n - 1)
-            p1 = pts[edge_idx]
-            p2 = pts[(edge_idx + 1) % n]
-            target_x = (p1[0] + p2[0]) / 2
-            target_y = (p1[1] + p2[1]) / 2
-            
-            dx = target_x - cx
-            dy = target_y - cy
+            # Direction: towards target vertex
+            dx = target_pt[0] - sx
+            dy = target_pt[1] - sy
             length = math.sqrt(dx * dx + dy * dy)
             if length > 0:
                 self._inject_cat_dx = dx / length
@@ -373,14 +396,20 @@ class VideoProcessor:
                 self._inject_cat_dx = 1.0
                 self._inject_cat_dy = 0.0
             
-            print(f"[INJECT] Cat at centroid ({cx:.0f},{cy:.0f}), "
-                  f"walking towards edge {edge_idx+1}/{n} at ({target_x:.0f},{target_y:.0f})")
+            # Store distance to target for arrival check
+            self._inject_target_dist = length
+            
+            print(f"[INJECT] Vertex {start_idx+1}→{target_idx+1} (of {n}): "
+                  f"start≈({sx:.0f},{sy:.0f}), target=({target_pt[0]:.0f},{target_pt[1]:.0f}), "
+                  f"dist={length:.0f}px")
         else:
             self._inject_cat_x = float(frame_w // 2 - cat_w_half)
             self._inject_cat_y = float(frame_h // 2 - cat_h)
-            angle = random.uniform(0, 2 * math.pi)
-            self._inject_cat_dx = math.cos(angle)
-            self._inject_cat_dy = math.sin(angle)
+            self._inject_cat_dx = 1.0
+            self._inject_cat_dy = 0.0
+            self._inject_target_x = float(frame_w - 100)
+            self._inject_target_y = float(frame_h // 2)
+            self._inject_target_dist = float(frame_w // 2)
             print(f"[INJECT] No Detection Zone — starting at frame center")
         
         self._inject_cat_initialized = True
@@ -531,19 +560,23 @@ class VideoProcessor:
         bcx = self._inject_cat_x + new_w // 2
         bcy = self._inject_cat_y + new_h  # bottom of bounding box
         
-        # Check if cat left the frame
-        out_of_frame = bcx < 0 or bcx > w or bcy < 0 or bcy > h
+        # Check if cat arrived near the target vertex (within 20px)
+        import math
+        target_dx = bcx - getattr(self, '_inject_target_x', bcx)
+        target_dy = bcy - getattr(self, '_inject_target_y', bcy)
+        dist_to_target = math.sqrt(target_dx * target_dx + target_dy * target_dy)
         
-        # Check if cat left the Detection Zone
-        out_of_zone = not self._is_inside_perimeter_px(bcx, bcy, w, h)
+        # Also check if cat left the frame entirely (safety)
+        out_of_frame = bcx < -50 or bcx > w + 50 or bcy < -50 or bcy > h + 50
         
-        if out_of_frame or out_of_zone:
-            reason = "frame" if out_of_frame else "Detection Zone"
-            print(f"[INJECT] Cat left {reason}: bottom-center=({bcx:.0f},{bcy:.0f}), "
-                  f"respawning on new edge immediately")
-            # Immediately reappear on a new edge — no delay
+        if dist_to_target < 25 or out_of_frame:
+            if out_of_frame:
+                print(f"[INJECT] Cat out of frame, respawning at next vertex")
+            else:
+                print(f"[INJECT] Cat reached target vertex (dist={dist_to_target:.0f}px), "
+                      f"moving to next vertex")
             self._inject_cat_initialized = False
-            self._inject_cat_bbox = None  # Clear bbox so no detection this frame
+            self._inject_cat_bbox = None
             self._init_inject_cat_position(w, h)
             return frame
         
