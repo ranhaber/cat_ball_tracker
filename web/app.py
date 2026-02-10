@@ -160,7 +160,7 @@ class VideoProcessor:
         print(f"Loaded settings: Capture={self.current_resolution[0]}x{self.current_resolution[1]}, "
               f"Stream={self.current_stream_resolution[0]}x{self.current_stream_resolution[1]}, "
               f"motion-first={self.motion_first_enabled}, profile={self.current_profile}")
-    
+        
     def start(self):
         """Initialize and start all components"""
         print("Initializing video processor...")
@@ -219,7 +219,7 @@ class VideoProcessor:
         
         mode_str = "MOTION-FIRST" if self.motion_first_enabled else "ALWAYS-ON"
         print(f"Video processor started (Detection mode: {mode_str})")
-    
+        
     def stop(self):
         """Stop all components"""
         self.running = False
@@ -230,7 +230,7 @@ class VideoProcessor:
         if self.camera:
             self.camera.stop()
         print("Video processor stopped")
-    
+        
     # =========================================================================
     # Main Processing Loop
     # =========================================================================
@@ -341,8 +341,8 @@ class VideoProcessor:
                                 cx, cy = rx + rw // 2, ry + rh // 2
                                 if self.perimeter.is_inside((cx, cy), frame_res):
                                     motion_regions_in_perimeter.append(region)
-                        
-                        self.motion_detected = len(motion_regions_in_perimeter) > 0
+                            
+                            self.motion_detected = len(motion_regions_in_perimeter) > 0
                         if self.motion_detected:
                             self._last_motion_time = now
                         
@@ -528,11 +528,13 @@ class VideoProcessor:
                                 "world_position": world_pos,
                                 "injected": is_injected
                             })
-                
+                    
                 # ── Tracking ──
                 tracked_objects = self.tracker.update(last_detections) if last_detections else {}
                 
                 # ── Annotation & frame storage ──
+                # Note: status overlay (_draw_status) is drawn AFTER resize in
+                # get_frame_jpeg() so text is readable at any stream resolution.
                 if self.stream_clients > 0:
                     annotated = frame
                     if self.show_motion_regions and self.motion_first_enabled:
@@ -542,7 +544,6 @@ class VideoProcessor:
                         cv2.rectangle(annotated, (cx, cy), (cx+cw, cy+ch), (255, 0, 255), 2)
                     annotated = self.perimeter.draw(annotated)
                     annotated = self.detector.draw_detections(annotated, last_detections, tracked_objects)
-                    self._draw_status(annotated)
                     with self.frame_lock:
                         self.current_frame = annotated
                 else:
@@ -573,7 +574,7 @@ class VideoProcessor:
                 import traceback
                 traceback.print_exc()
                 time.sleep(0.1)
-    
+                
     # =========================================================================
     # Frame Annotation & FPS
     # =========================================================================
@@ -607,7 +608,7 @@ class VideoProcessor:
         ts_y = ts_h + 10
         cv2.rectangle(frame, (ts_x - 5, 5), (frame.shape[1] - 5, ts_y + 5), (0, 0, 0), -1)
         cv2.putText(frame, timestamp, (ts_x, ts_y), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
-    
+        
     def _update_fps(self):
         """Update FPS calculation"""
         self._fps_count += 1
@@ -661,7 +662,7 @@ class VideoProcessor:
         self._recording_filename = None
         self._recording_start_time = None
         self._recording_last_detection_time = None
-    
+            
     # =========================================================================
     # Frame JPEG Encoding
     # =========================================================================
@@ -679,6 +680,9 @@ class VideoProcessor:
         
         if stream_w != capture_w or stream_h != capture_h:
             frame = cv2.resize(frame, (stream_w, stream_h), interpolation=cv2.INTER_AREA)
+        
+        # Draw status overlay AFTER resize so text is always readable
+        self._draw_status(frame)
         
         ret, jpeg = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, jpeg_quality])
         if ret:
@@ -699,7 +703,7 @@ class VideoProcessor:
         if ret:
             return jpeg.tobytes()
         return None
-    
+        
     # =========================================================================
     # Detection & Tracking Settings
     # =========================================================================
@@ -710,7 +714,7 @@ class VideoProcessor:
             self.tracker.reset()
             settings.update_setting("detection_mode", mode)
             print(f"[SETTING] Detection mode changed to: {mode}")
-    
+            
     def get_detection_mode(self):
         if self.detector:
             return self.detector.get_detection_mode()
@@ -732,22 +736,22 @@ class VideoProcessor:
         self.detection_history = []
         settings.update_setting("confirm_frames", self.confirm_frames)
         print(f"[SETTING] Confirmation frames changed to: {self.confirm_frames}")
-    
+        
     def set_perimeter(self, points):
         if self.perimeter:
             return self.perimeter.set_points(points)
         return False
-    
+        
     def get_perimeter(self):
         if self.perimeter:
             return self.perimeter.get_points()
         return []
-    
+        
     def clear_perimeter(self):
         if self.perimeter:
             self.perimeter.clear()
             print("[SETTING] Perimeter cleared")
-    
+            
     def get_status(self):
         """Get current system status"""
         import main as main_module
@@ -798,7 +802,7 @@ class VideoProcessor:
                 undistorted.append([ux, uy])
             return undistorted
         return points_pixel
-    
+
     def _redistort_pixels(self, points_pixel):
         """Convert undistorted+cropped pixels back to raw (distorted) pixels."""
         if self.lens_calibration and self.lens_calibration.is_calibrated:
@@ -818,7 +822,7 @@ class VideoProcessor:
                     p["pixel"] = [ux, uy]
             return self.calibration.set_calibration_points(points)
         return False
-    
+
     def set_calibration_from_rectangles(self, rectangles):
         """Set calibration from multiple rectangles.
         Pixels are in undistorted+cropped space (user clicks on corrected snapshot)."""
@@ -1031,7 +1035,7 @@ def create_app():
     app.register_blueprint(calibration_bp)
     app.register_blueprint(video_bp)
     app.register_blueprint(dev_bp)
-    
+        
     return app
 
 
