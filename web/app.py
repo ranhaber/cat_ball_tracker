@@ -634,42 +634,29 @@ class VideoProcessor:
                         self._inject_cooldown_until = 0
                         print("[INJECT] Cooldown ended, resuming normal processing")
                 
-                # Inject cat mode: skip camera entirely, use synthetic frame
-                if self.inject_cat:
-                    cam_res = self.camera.get_resolution() if self.camera else (2304, 1296)
-                    # Reuse green frame buffer — avoid allocating 9MB every iteration
-                    # (picamera2 reuses camera buffers; we must do the same for synthetic frames)
-                    if not hasattr(self, '_inject_green_frame') or self._inject_green_frame is None \
-                            or self._inject_green_frame.shape != (cam_res[1], cam_res[0], 3):
-                        self._inject_green_frame = np.full((cam_res[1], cam_res[0], 3), (50, 120, 50), dtype=np.uint8)
-                        print(f"[INJECT] Green frame buffer allocated: {cam_res[0]}x{cam_res[1]} "
-                              f"({self._inject_green_frame.nbytes // 1024}KB)")
-                    # Reset to green (cat paste from last frame is still there)
-                    self._inject_green_frame[:] = (50, 120, 50)
-                    frame = self._inject_green_frame
+                # Always get a real camera frame (inject mode pastes cat on top)
+                frame = None
+                if self.video_source == "file" and self.file_camera and self.file_camera.running:
+                    frame = self.file_camera.get_frame()
+                    if frame is None:
+                        time.sleep(0.05)
+                        continue
                 else:
-                    frame = None
-                    if self.video_source == "file" and self.file_camera and self.file_camera.running:
-                        frame = self.file_camera.get_frame()
+                    request = self.camera.get_request()
+                    if request is None:
+                        frame = self.camera.get_frame()
                         if frame is None:
-                            time.sleep(0.05)
+                            time.sleep(0.01)
                             continue
                     else:
-                        request = self.camera.get_request()
-                        if request is None:
-                            frame = self.camera.get_frame()
-                            if frame is None:
-                                time.sleep(0.01)
-                                continue
-                        else:
-                            with request as req:
-                                # picamera2 "RGB888" format actually stores BGR bytes in memory
-                                # (reversed naming convention), which is exactly what OpenCV needs
-                                frame = req.make_array("main")
+                        with request as req:
+                            # picamera2 "RGB888" format actually stores BGR bytes in memory
+                            # (reversed naming convention), which is exactly what OpenCV needs
+                            frame = req.make_array("main")
                 
                 frame_h, frame_w = frame.shape[:2]
                 
-                # ===== Inject cat mode: paste cat on synthetic frame, then use NORMAL pipeline =====
+                # ===== Inject cat mode: paste cat on real camera frame =====
                 if self.inject_cat:
                     frame = self._inject_cat_on_frame(frame)
                     # Debug: log inject state periodically
@@ -923,13 +910,13 @@ class VideoProcessor:
                     self._draw_status(annotated)
                     
                     # Store for MJPEG streaming
-                    # In inject mode, copy because we reuse the green buffer
+                    # Store for MJPEG streaming
                     with self.frame_lock:
-                        self.current_frame = annotated.copy() if self.inject_cat else annotated
+                        self.current_frame = annotated
                 else:
                     # No stream clients — store raw frame (for snapshots) without annotation
                     with self.frame_lock:
-                        self.current_frame = frame.copy() if self.inject_cat else frame
+                        self.current_frame = frame
                 
                 # Recording on detection (live only, when enabled)
                 if self.video_source == "live" and self.recording_enabled:
@@ -2255,12 +2242,7 @@ def create_app():
             if hasattr(video_processor, '_jpeg_first_logged'):
                 del video_processor._jpeg_first_logged
             
-            # Pause camera to free ~18MB of DMA buffers (not used during inject)
-            # pause() keeps device open, resume() is fast and reliable
-            if video_processor.camera:
-                video_processor.camera.pause()
-                print("[INJECT] Camera paused to free ~18MB for TFLite")
-                video_processor._reclaim_memory()
+            print("[INJECT] Cat injection enabled — pasting on real camera frames")
         else:
             # === DISABLE: aggressive cleanup to free RAM and CPU ===
             video_processor._inject_cat_bbox = None
@@ -2275,50 +2257,17 @@ def create_app():
                 video_processor._inject_cat_cached_w = 0
                 video_processor._inject_cat_cached_h = 0
             
-            # Free the original cat image too (5MB numpy array — reload on next enable)
+            # Free the original cat image (reload on next enable)
             video_processor._inject_cat_img = None
-            
-            # Free the reusable green frame buffer
-            if hasattr(video_processor, '_inject_green_frame'):
-                video_processor._inject_green_frame = None
-            
-            # Clear the current frame buffer (large numpy array)
-            with video_processor.frame_lock:
-                video_processor.current_frame = None
-            
-            # Reset motion detector background model — prevents false motion
-            # triggers when camera resumes (scene looks different from green frames)
-            video_processor.motion_detector.reset()
-            video_processor.motion_detected = False
-            video_processor._last_motion_time = 0  # Force immediate idle timeout
-            
-            # Unload TFLite immediately (was force-loaded by inject mode)
-            video_processor.detector.unload_model()
-            
-            # Reduce OpenCV threads back to idle state
-            cv2.setNumThreads(1)
             
             # Clear detection state
             video_processor.last_detections_with_world = []
             video_processor.detection_history = []
             
-            # Set cooldown — processing loop will sleep for 5s to let system recover
-            video_processor._inject_cooldown_until = time.time() + 5.0
-            
-            # Suppress TFLite loading for 30s after cooldown ends
-            # Gives OS time to reclaim swap pages before TFLite uses 80MB
-            video_processor._tflite_suppress_until = time.time() + 35.0  # 5s cooldown + 30s grace
-            
             # Force memory reclaim (gc + malloc_trim)
             video_processor._reclaim_memory()
             
-            # Resume camera (was paused on inject enable)
-            if video_processor.camera and not video_processor.camera.running:
-                video_processor.camera.resume()
-                print("[INJECT CLEANUP] Camera resumed")
-            
-            print(f"[INJECT CLEANUP] TFLite unloaded, cat image freed, "
-                  f"frame cleared, camera restarted, GC forced, 5s cooldown")
+            print(f"[INJECT CLEANUP] Cat image freed, memory reclaimed")
         
         status = "active" if video_processor.inject_cat else "stopped"
         print(f"[INJECT API] Cat injection: {status}, "
