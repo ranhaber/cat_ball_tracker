@@ -11,24 +11,16 @@ import unittest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import config
-
-
-try:
-    from web.app import VideoProcessor
-    HAS_FLASK = True
-except ImportError:
-    HAS_FLASK = False
+import tests.conftest  # noqa: F401
+from tests.conftest import get_video_processor
 
 
 class TestPerformanceProfiles(unittest.TestCase):
     """Test performance profile configuration and switching."""
     
     def _make_processor(self):
-        """Create a VideoProcessor for profile testing."""
-        if not HAS_FLASK:
-            self.skipTest("Flask not installed")
-        vp = VideoProcessor()
-        return vp
+        """Create a VideoProcessor for profile testing (no camera/TFLite)."""
+        return get_video_processor()
     
     # ── Config-level tests ──
     

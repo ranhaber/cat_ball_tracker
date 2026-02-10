@@ -22,6 +22,9 @@ import unittest
 # Add project root to path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+# Mock missing modules before any test imports (Flask, picamera2, etc.)
+import tests.conftest  # noqa: F401
+
 
 def run_tests(module_name=None):
     """Run unit tests, optionally filtered by module name."""

@@ -11,22 +11,16 @@ import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-
-try:
-    from web.app import VideoProcessor
-    HAS_FLASK = True
-except ImportError:
-    HAS_FLASK = False
+import tests.conftest  # noqa: F401
+from tests.conftest import get_video_processor
 
 
-@unittest.skipUnless(HAS_FLASK, "Flask not installed — skip VideoProcessor tests")
 class TestRecording(unittest.TestCase):
     """Test recording state management."""
     
     def _make_processor(self):
-        """Create a VideoProcessor for recording tests."""
-        vp = VideoProcessor()
-        return vp
+        """Create a VideoProcessor for recording tests (no camera/TFLite)."""
+        return get_video_processor()
     
     def test_recording_disabled_by_default(self):
         """Recording writer is None initially."""
@@ -66,9 +60,10 @@ class TestRecording(unittest.TestCase):
     
     def test_stop_recording_clears_state(self):
         """Stopping recording clears all recording state."""
+        from unittest.mock import MagicMock
         vp = self._make_processor()
-        # Simulate recording state
-        vp._recording_writer = None  # Would be a cv2.VideoWriter normally
+        # Simulate active recording state (writer must be non-None for stop to clear)
+        vp._recording_writer = MagicMock()  # Mock VideoWriter
         vp._recording_filename = "/tmp/test.mp4"
         vp._recording_start_time = time.time()
         vp._recording_last_detection_time = time.time()

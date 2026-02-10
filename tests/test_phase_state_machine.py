@@ -11,23 +11,17 @@ import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-
-try:
-    from web.app import VideoProcessor
-    HAS_FLASK = True
-except ImportError:
-    HAS_FLASK = False
+# conftest mocks missing modules (Flask, picamera2, etc.) on Windows
+import tests.conftest  # noqa: F401
+from tests.conftest import get_video_processor
 
 
-@unittest.skipUnless(HAS_FLASK, "Flask not installed — skip VideoProcessor tests")
 class TestPhaseStateMachine(unittest.TestCase):
     """Test phase transitions in the detection pipeline."""
     
     def _make_processor(self):
-        """Create a VideoProcessor with enough state for phase testing.
-        Does NOT call start() — no camera, TFLite, or threads."""
-        vp = VideoProcessor()
-        return vp
+        """Create a VideoProcessor for phase testing (no camera/TFLite)."""
+        return get_video_processor()
     
     def test_initial_phase_is_idle(self):
         """System starts in IDLE phase."""
