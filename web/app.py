@@ -515,6 +515,26 @@ class VideoProcessor:
                 # ── Tracking ──
                 tracked_objects = self.tracker.update(last_detections) if last_detections else {}
                 
+                # Merge tracker IDs into last_detections_with_world
+                # Match by bbox proximity so the top-down view shows stable track IDs
+                if tracked_objects and self.last_detections_with_world:
+                    tracked_bboxes = self.tracker.get_bboxes()  # {id: (x1,y1,x2,y2)}
+                    for det in self.last_detections_with_world:
+                        db = det["bbox"]  # [x1, y1, x2, y2]
+                        det_cx = (db[0] + db[2]) / 2
+                        det_cy = (db[1] + db[3]) / 2
+                        best_id = None
+                        best_dist = float('inf')
+                        for tid, tb in tracked_bboxes.items():
+                            tb_cx = (tb[0] + tb[2]) / 2
+                            tb_cy = (tb[1] + tb[3]) / 2
+                            d = abs(det_cx - tb_cx) + abs(det_cy - tb_cy)
+                            if d < best_dist:
+                                best_dist = d
+                                best_id = tid
+                        if best_id is not None and best_dist < 50:
+                            det["track_id"] = best_id
+                
                 # ── Annotation & frame storage ──
                 # Status overlay is drawn AFTER resize in get_frame_jpeg()
                 # so text is readable at any stream resolution.
