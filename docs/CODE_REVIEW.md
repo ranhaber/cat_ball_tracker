@@ -2,6 +2,8 @@
 
 Review date: 2025-02-07. Focus: clarity, consistency, naming, and remaining issues after the init fix.
 
+**Concurrency and deadlocks:** See [CODE_REVIEW_DEADLOCKS.md](CODE_REVIEW_DEADLOCKS.md) for lock inventory, deadlock analysis, and data-race fixes (including `stream_clients`).
+
 ---
 
 ## Summary

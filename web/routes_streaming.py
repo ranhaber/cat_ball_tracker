@@ -42,8 +42,8 @@ def init_streaming_routes(video_processor):
         
         # Otherwise stream continuously (rate-limited to save CPU)
         def generate():
-            video_processor.stream_clients += 1
-            print(f"[STREAM] Client connected ({video_processor.stream_clients} active)")
+            n = video_processor.increment_stream_clients()
+            print(f"[STREAM] Client connected ({n} active)")
             try:
                 while True:
                     jpeg = video_processor.get_frame_jpeg()
@@ -55,8 +55,8 @@ def init_streaming_routes(video_processor):
                     # Limit stream to ~10 FPS max — saves CPU on JPEG encoding
                     time.sleep(0.1)
             finally:
-                video_processor.stream_clients = max(0, video_processor.stream_clients - 1)
-                print(f"[STREAM] Client disconnected ({video_processor.stream_clients} active)")
+                n = video_processor.decrement_stream_clients()
+                print(f"[STREAM] Client disconnected ({n} active)")
                     
         return Response(
             generate(),
