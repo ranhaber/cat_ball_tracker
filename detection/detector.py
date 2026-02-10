@@ -114,6 +114,9 @@ class TFLiteDetector:
             self.input_h = self.input_shape[1]
             self.input_w = self.input_shape[2]
             
+            # Pre-allocate input buffer (avoids ~540KB alloc per inference)
+            self._input_buf = np.empty((1, self.input_h, self.input_w, 3), dtype=np.uint8)
+            
             print(f"Model loaded. Input shape: {self.input_shape}")
             
         except Exception as e:
@@ -186,17 +189,12 @@ class TFLiteDetector:
         # Get frame dimensions
         frame_h, frame_w = frame.shape[:2]
         
-        # OPTIMIZATION I: Use pre-computed dimensions
-        # OPTIMIZATION D: No color conversion needed if camera outputs BGR
-        # But model still expects RGB, so we need this conversion
-        input_frame = cv2.resize(frame, (self.input_w, self.input_h))
-        input_frame = cv2.cvtColor(input_frame, cv2.COLOR_BGR2RGB)
+        # Resize and convert BGR→RGB directly into pre-allocated buffer
+        resized = cv2.resize(frame, (self.input_w, self.input_h))
+        cv2.cvtColor(resized, cv2.COLOR_BGR2RGB, dst=self._input_buf[0])
         
-        # Add batch dimension and ensure uint8
-        input_data = np.expand_dims(input_frame, axis=0).astype(np.uint8)
-        
-        # Run inference
-        self.interpreter.set_tensor(self.input_details[0]['index'], input_data)
+        # Run inference (input buffer already has batch dimension)
+        self.interpreter.set_tensor(self.input_details[0]['index'], self._input_buf)
         self.interpreter.invoke()
         
         # Get outputs
@@ -205,43 +203,26 @@ class TFLiteDetector:
         classes = self.interpreter.get_tensor(self.output_details[1]['index'])[0]
         scores = self.interpreter.get_tensor(self.output_details[2]['index'])[0]
         
-        # Filter detections
+        # Filter detections (no debug allocs in hot path)
         detections = []
-        debug_found = []  # Track what we see for debugging
         
         for i in range(len(scores)):
-            class_id = int(classes[i]) + 1  # COCO classes are 1-indexed in labels
             score = float(scores[i])
-            
-            # Log any detection with score > 0.1 for debugging
-            if score > 0.1:
-                debug_found.append((class_id, score))
-            
             if score < self.threshold:
                 continue
             
-            # Only keep detections of target class
+            class_id = int(classes[i]) + 1  # COCO classes are 1-indexed in labels
             if class_id != self.target_class_id:
                 continue
                 
             # Convert normalized coordinates to pixel coordinates
             y1, x1, y2, x2 = boxes[i]
-            x1 = int(x1 * frame_w)
-            y1 = int(y1 * frame_h)
-            x2 = int(x2 * frame_w)
-            y2 = int(y2 * frame_h)
+            x1 = max(0, min(int(x1 * frame_w), frame_w))
+            y1 = max(0, min(int(y1 * frame_h), frame_h))
+            x2 = max(0, min(int(x2 * frame_w), frame_w))
+            y2 = max(0, min(int(y2 * frame_h), frame_h))
             
-            # Clamp to frame bounds
-            x1 = max(0, min(x1, frame_w))
-            y1 = max(0, min(y1, frame_h))
-            x2 = max(0, min(x2, frame_w))
-            y2 = max(0, min(y2, frame_h))
-            
-            detections.append((x1, y1, x2, y2, float(scores[i]), class_id))
-        
-        # Debug output if anything was found
-        if debug_found:
-            print(f"[DEBUG] Detections found: {[(cid, f'{s:.0%}') for cid, s in debug_found[:5]]} (target={self.target_class_id}, thresh={self.threshold:.0%})")
+            detections.append((x1, y1, x2, y2, score, class_id))
             
         return detections
         

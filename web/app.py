@@ -93,6 +93,11 @@ class VideoProcessor:
         self._stream_clients_lock = threading.Lock()
         self._stream_clients = 0  # Number of active MJPEG stream connections
         
+        # Pre-computed JPEG cache (built in _process_loop, read by get_frame_jpeg)
+        self._cached_jpeg = None        # JPEG bytes for MJPEG stream
+        self._cached_jpeg_lock = threading.Lock()
+        self._cached_capture_frame = None  # Raw frame for snapshot/recording
+        
         # Load saved settings (or defaults)
         saved = settings.load_settings()
         
@@ -535,9 +540,7 @@ class VideoProcessor:
                         if best_id is not None and best_dist < 50:
                             det["track_id"] = best_id
                 
-                # ── Annotation & frame storage ──
-                # Status overlay is drawn AFTER resize in get_frame_jpeg()
-                # so text is readable at any stream resolution.
+                # ── Annotation, JPEG pre-compute & frame storage ──
                 annotated = frame  # Always defined (used by recording below)
                 if self.stream_clients > 0:
                     if self.show_motion_regions and self.motion_first_enabled:
@@ -547,11 +550,24 @@ class VideoProcessor:
                         cv2.rectangle(annotated, (rcx, rcy), (rcx+rcw, rcy+rch), (255, 0, 255), 2)
                     annotated = self.perimeter.draw(annotated)
                     annotated = self.detector.draw_detections(annotated, last_detections, tracked_objects)
-                    with self.frame_lock:
-                        self.current_frame = annotated
-                else:
-                    with self.frame_lock:
-                        self.current_frame = frame
+                    
+                    # Pre-compute JPEG here (avoids 9MB copy + resize in Flask thread)
+                    stream_w, stream_h = self.current_stream_resolution
+                    capture_h, capture_w = annotated.shape[:2]
+                    if stream_w != capture_w or stream_h != capture_h:
+                        stream_frame = cv2.resize(annotated, (stream_w, stream_h), interpolation=cv2.INTER_AREA)
+                    else:
+                        stream_frame = annotated
+                    self._draw_status(stream_frame)
+                    ret, jpeg_buf = cv2.imencode('.jpg', stream_frame,
+                                                  [cv2.IMWRITE_JPEG_QUALITY, self.current_jpeg_quality])
+                    with self._cached_jpeg_lock:
+                        self._cached_jpeg = jpeg_buf.tobytes() if ret else None
+                
+                # Store raw frame for snapshot and recording (no copy needed —
+                # frame is replaced by a new camera buffer on the next iteration)
+                with self.frame_lock:
+                    self.current_frame = frame
                 
                 # ── Recording ──
                 if self.video_source == "live" and self.recording_enabled:
@@ -701,26 +717,13 @@ class VideoProcessor:
     # =========================================================================
     
     def get_frame_jpeg(self):
-        """Get current frame as JPEG bytes at stream resolution."""
-        with self.frame_lock:
-            if self.current_frame is None:
-                return None
-            frame = self.current_frame.copy()
+        """Get pre-computed JPEG bytes at stream resolution.
         
-        jpeg_quality = self.current_jpeg_quality
-        stream_w, stream_h = self.current_stream_resolution
-        capture_h, capture_w = frame.shape[:2]
-        
-        if stream_w != capture_w or stream_h != capture_h:
-            frame = cv2.resize(frame, (stream_w, stream_h), interpolation=cv2.INTER_AREA)
-        
-        # Draw status overlay AFTER resize so text is always readable
-        self._draw_status(frame)
-        
-        ret, jpeg = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, jpeg_quality])
-        if ret:
-            return jpeg.tobytes()
-        return None
+        The JPEG is built in _process_loop (resize + overlay + encode)
+        so this method is zero-copy — just returns cached bytes.
+        """
+        with self._cached_jpeg_lock:
+            return self._cached_jpeg
     
     def get_frame_jpeg_capture_resolution(self, undistort=False):
         """Get current frame as JPEG at capture resolution.
