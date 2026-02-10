@@ -90,7 +90,8 @@ class VideoProcessor:
         # Frame storage for streaming
         self.current_frame = None
         self.frame_lock = threading.Lock()
-        self.stream_clients = 0  # Number of active MJPEG stream connections
+        self._stream_clients_lock = threading.Lock()
+        self._stream_clients = 0  # Number of active MJPEG stream connections
         
         # Load saved settings (or defaults)
         saved = settings.load_settings()
@@ -116,6 +117,7 @@ class VideoProcessor:
             saved_profile = config.DEFAULT_PERFORMANCE_PROFILE
         self.current_profile = saved_profile
         self.current_jpeg_quality = config.JPEG_QUALITY
+        self.current_motion_crop_size = config.PERFORMANCE_PROFILES[saved_profile]["motion_crop_size"]
         
         # Video source and recording
         self.video_library_path = saved.get("video_library_path", getattr(config, 'VIDEO_LIBRARY_PATH', '/home/ranhaber/cat_dome_videos'))
@@ -139,8 +141,8 @@ class VideoProcessor:
         self._last_detection_time = 0    # Time of last successful cat detection
         self._last_motion_time = 0       # Time of last motion in Detection Zone
         self._phase_frame_counter = 0    # Frames since entering current phase
-        self._detection_timeout = 30     # Seconds with no detection → back to IDLE
-        self._acquisition_timeout = 10   # Seconds with no cat found → back to IDLE
+        self._detection_timeout = config.PHASE_DETECTION_TIMEOUT
+        self._acquisition_timeout = config.PHASE_ACQUISITION_TIMEOUT
         
         # Motion detection stats (exposed to API)
         self.motion_detected = False
@@ -160,6 +162,16 @@ class VideoProcessor:
         print(f"Loaded settings: Capture={self.current_resolution[0]}x{self.current_resolution[1]}, "
               f"Stream={self.current_stream_resolution[0]}x{self.current_stream_resolution[1]}, "
               f"motion-first={self.motion_first_enabled}, profile={self.current_profile}")
+    
+    @property
+    def stream_clients(self):
+        """Thread-safe access to stream client count."""
+        return self._stream_clients
+    
+    @stream_clients.setter
+    def stream_clients(self, value):
+        with self._stream_clients_lock:
+            self._stream_clients = max(0, value)
         
     def start(self):
         """Initialize and start all components"""
@@ -246,7 +258,8 @@ class VideoProcessor:
         try:
             import ctypes
             libc = ctypes.CDLL('libc.so.6')
-            libc.prctl(15, b'CatDome-Proc', 0, 0, 0)
+            PR_SET_NAME = 15  # Linux prctl constant for setting thread name
+            libc.prctl(PR_SET_NAME, b'CatDome-Proc', 0, 0, 0)
         except Exception:
             pass
         
@@ -306,19 +319,9 @@ class VideoProcessor:
                     # ── PHASE: IDLE ──
                     # Motion detection only. TFLite not loaded. Low power.
                     if self._phase == "IDLE":
-                        motion_start = time.time()
                         motion_result = self.motion_detector.detect(frame)
-                        motion_time_ms = (time.time() - motion_start) * 1000
-                        
-                        # Filter motion to Detection Zone only
-                        if motion_result["motion_detected"] and motion_result["regions"]:
-                            frame_res = (frame_w, frame_h)
-                            for region in motion_result["regions"]:
-                                rx, ry, rw, rh = region
-                                cx, cy = rx + rw // 2, ry + rh // 2
-                                if self.perimeter.is_inside((cx, cy), frame_res):
-                                    motion_regions_in_perimeter.append(region)
-                        
+                        motion_regions_in_perimeter = self._filter_motion_to_perimeter(
+                            motion_result, frame_w, frame_h)
                         self.motion_detected = len(motion_regions_in_perimeter) > 0
                         
                         if self.motion_detected or self.inject_cat:
@@ -332,23 +335,16 @@ class VideoProcessor:
                     # ── PHASE: ACQUISITION ──
                     # TFLite runs every frame, searching for cat.
                     elif self._phase == "ACQUISITION":
-                        # Run motion detection to get crop region
                         motion_result = self.motion_detector.detect(frame)
-                        if motion_result["motion_detected"] and motion_result["regions"]:
-                            frame_res = (frame_w, frame_h)
-                            for region in motion_result["regions"]:
-                                rx, ry, rw, rh = region
-                                cx, cy = rx + rw // 2, ry + rh // 2
-                                if self.perimeter.is_inside((cx, cy), frame_res):
-                                    motion_regions_in_perimeter.append(region)
-                            
-                            self.motion_detected = len(motion_regions_in_perimeter) > 0
+                        motion_regions_in_perimeter = self._filter_motion_to_perimeter(
+                            motion_result, frame_w, frame_h)
+                        self.motion_detected = len(motion_regions_in_perimeter) > 0
                         if self.motion_detected:
                             self._last_motion_time = now
                         
                         # AI runs every frame during acquisition
                         run_ai_detection = True
-                        crop_size = getattr(config, 'MOTION_CROP_SIZE', (380, 380))
+                        crop_size = self.current_motion_crop_size
                         if self.inject_cat and self.inject_cat_handler:
                             crop_region = self.inject_cat_handler.get_crop_region(
                                 frame_w, frame_h, crop_size)
@@ -368,24 +364,16 @@ class VideoProcessor:
                     # ── PHASE: TRACKING ──
                     # Cat confirmed. TFLite every 3rd processed frame with motion crop.
                     elif self._phase == "TRACKING":
-                        # Run motion detection for crop region
                         motion_result = self.motion_detector.detect(frame)
-                        if motion_result["motion_detected"] and motion_result["regions"]:
-                            frame_res = (frame_w, frame_h)
-                            for region in motion_result["regions"]:
-                                rx, ry, rw, rh = region
-                                cx, cy = rx + rw // 2, ry + rh // 2
-                                if self.perimeter.is_inside((cx, cy), frame_res):
-                                    motion_regions_in_perimeter.append(region)
-                        
+                        motion_regions_in_perimeter = self._filter_motion_to_perimeter(
+                            motion_result, frame_w, frame_h)
                         self.motion_detected = len(motion_regions_in_perimeter) > 0
                         if self.motion_detected:
                             self._last_motion_time = now
                         
-                        # TFLite every 3rd processed frame
-                        if self._phase_frame_counter % 3 == 0:
+                        if self._phase_frame_counter % config.PHASE_TRACKING_AI_INTERVAL == 0:
                             run_ai_detection = True
-                            crop_size = getattr(config, 'MOTION_CROP_SIZE', (380, 380))
+                            crop_size = self.current_motion_crop_size
                             if self.inject_cat and self.inject_cat_handler:
                                 crop_region = self.inject_cat_handler.get_crop_region(
                                     frame_w, frame_h, crop_size)
@@ -413,16 +401,9 @@ class VideoProcessor:
                     # ── PHASE: WATCH ──
                     # No motion but cat was recently detected. TFLite every 2nd frame.
                     elif self._phase == "WATCH":
-                        # Check for motion (cat might move again)
                         motion_result = self.motion_detector.detect(frame)
-                        if motion_result["motion_detected"] and motion_result["regions"]:
-                            frame_res = (frame_w, frame_h)
-                            for region in motion_result["regions"]:
-                                rx, ry, rw, rh = region
-                                cx, cy = rx + rw // 2, ry + rh // 2
-                                if self.perimeter.is_inside((cx, cy), frame_res):
-                                    motion_regions_in_perimeter.append(region)
-                        
+                        motion_regions_in_perimeter = self._filter_motion_to_perimeter(
+                            motion_result, frame_w, frame_h)
                         self.motion_detected = len(motion_regions_in_perimeter) > 0
                         
                         # Cat moved again → back to TRACKING
@@ -432,8 +413,7 @@ class VideoProcessor:
                             self._phase_frame_counter = 0
                             print(f"[PHASE] WATCH → TRACKING (motion resumed)")
                         
-                        # TFLite every 2nd processed frame (no crop — full Detection Zone)
-                        if self._phase_frame_counter % 2 == 0:
+                        if self._phase_frame_counter % config.PHASE_WATCH_AI_INTERVAL == 0:
                             run_ai_detection = True
                             # No crop in WATCH — scan wider area
                         
@@ -468,13 +448,15 @@ class VideoProcessor:
                         if self.inject_cat and self.inject_cat_handler and self.inject_cat_handler.bbox:
                             bbox = self.inject_cat_handler.bbox
                             cat_class_id = config.COCO_CLASSES.get('cat', 17)
+                            proximity = config.INJECT_BBOX_PROXIMITY_PX
                             tflite_found = any(
-                                abs((d[0]+d[2])/2 - (bbox[0]+bbox[2])/2) < 100 and
-                                abs((d[1]+d[3])/2 - (bbox[1]+bbox[3])/2) < 100
+                                abs((d[0]+d[2])/2 - (bbox[0]+bbox[2])/2) < proximity and
+                                abs((d[1]+d[3])/2 - (bbox[1]+bbox[3])/2) < proximity
                                 for d in detections
                             )
                             if not tflite_found:
-                                detections.append((bbox[0], bbox[1], bbox[2], bbox[3], 0.95, cat_class_id))
+                                detections.append((bbox[0], bbox[1], bbox[2], bbox[3],
+                                                   config.INJECT_FALLBACK_CONFIDENCE, cat_class_id))
                         
                         # Filter by perimeter
                         frame_res = (frame_w, frame_h)
@@ -518,7 +500,8 @@ class VideoProcessor:
                                 wp = self.pixel_to_world(bcx, bcy, already_undistorted=False)
                                 if wp:
                                     world_pos = {"world_x": round(wp[0], 2), "world_y": round(wp[1], 2)}
-                            is_injected = (self.inject_cat and conf == 0.95 and 
+                            is_injected = (self.inject_cat and
+                                          conf == config.INJECT_FALLBACK_CONFIDENCE and 
                                           self.inject_cat_handler and self.inject_cat_handler.bbox and
                                           abs(x1 - self.inject_cat_handler.bbox[0]) < 5)
                             self.last_detections_with_world.append({
@@ -533,15 +516,15 @@ class VideoProcessor:
                 tracked_objects = self.tracker.update(last_detections) if last_detections else {}
                 
                 # ── Annotation & frame storage ──
-                # Note: status overlay (_draw_status) is drawn AFTER resize in
-                # get_frame_jpeg() so text is readable at any stream resolution.
+                # Status overlay is drawn AFTER resize in get_frame_jpeg()
+                # so text is readable at any stream resolution.
+                annotated = frame  # Always defined (used by recording below)
                 if self.stream_clients > 0:
-                    annotated = frame
                     if self.show_motion_regions and self.motion_first_enabled:
                         self.motion_detector.draw_motion(annotated, regions=motion_regions_in_perimeter)
                     if crop_region and self.show_motion_regions:
-                        cx, cy, cw, ch = crop_region
-                        cv2.rectangle(annotated, (cx, cy), (cx+cw, cy+ch), (255, 0, 255), 2)
+                        rcx, rcy, rcw, rch = crop_region
+                        cv2.rectangle(annotated, (rcx, rcy), (rcx+rcw, rcy+rch), (255, 0, 255), 2)
                     annotated = self.perimeter.draw(annotated)
                     annotated = self.detector.draw_detections(annotated, last_detections, tracked_objects)
                     with self.frame_lock:
@@ -567,7 +550,7 @@ class VideoProcessor:
                 
                 # Rate-limit inject mode
                 if self.inject_cat:
-                    time.sleep(0.15)
+                    time.sleep(config.INJECT_MODE_SLEEP_SEC)
                 
             except Exception as e:
                 print(f"Processing error: {e}")
@@ -580,18 +563,26 @@ class VideoProcessor:
     # =========================================================================
     
     def _draw_status(self, frame):
-        """Draw status overlay (mode, FPS, object count, motion, timestamp)"""
+        """Draw status overlay (mode, FPS, object count, phase, timestamp)."""
+        pad = config.STATUS_BOX_PADDING
+        min_w = config.STATUS_BOX_MIN_WIDTH
+        text_pad = config.STATUS_TEXT_PADDING
+        extra_h = config.STATUS_BOX_HEIGHT_EXTRA
+        fs_main = config.STATUS_FONT_SCALE_MAIN
+        fs_sub = config.STATUS_FONT_SCALE_SUB
+        thick_main = config.STATUS_FONT_THICKNESS_MAIN
+        thick_sub = config.STATUS_FONT_THICKNESS_SUB
+        ts_margin = config.STATUS_TIMESTAMP_MARGIN
+
         mode_text = self.detector.get_detection_mode().upper()
         status_text = f"Mode: {mode_text} | FPS: {self.fps:.1f}"
-        
-        (text_w, text_h), _ = cv2.getTextSize(status_text, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2)
-        cv2.rectangle(frame, (5, 5), (max(text_w + 15, 250), text_h + 55), (0, 0, 0), -1)
-        cv2.putText(frame, status_text, (10, text_h + 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
-        
+        (text_w, text_h), _ = cv2.getTextSize(status_text, cv2.FONT_HERSHEY_SIMPLEX, fs_main, thick_main)
+        cv2.rectangle(frame, (pad, pad), (max(text_w + text_pad, min_w), text_h + extra_h), (0, 0, 0), -1)
+        cv2.putText(frame, status_text, (pad + 5, text_h + 10), cv2.FONT_HERSHEY_SIMPLEX, fs_main, (0, 255, 0), thick_main)
+
         count_text = f"Objects: {self.tracker.get_object_count()}"
-        cv2.putText(frame, count_text, (10, text_h + 32), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 0), 1)
-        
-        # Show phase state
+        cv2.putText(frame, count_text, (pad + 5, text_h + 32), cv2.FONT_HERSHEY_SIMPLEX, fs_sub, (255, 255, 0), thick_sub)
+
         phase_colors = {
             "IDLE": (128, 128, 128),
             "ACQUISITION": (0, 255, 255),
@@ -599,16 +590,38 @@ class VideoProcessor:
             "WATCH": (0, 165, 255)
         }
         phase_color = phase_colors.get(self._phase, (255, 255, 255))
-        cv2.putText(frame, f"Phase: {self._phase}", (10, text_h + 52),
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, phase_color, 1)
-        
+        cv2.putText(frame, f"Phase: {self._phase}", (pad + 5, text_h + 52),
+                    cv2.FONT_HERSHEY_SIMPLEX, fs_sub, phase_color, thick_sub)
+
         timestamp = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
-        (ts_w, ts_h), _ = cv2.getTextSize(timestamp, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
-        ts_x = frame.shape[1] - ts_w - 10
-        ts_y = ts_h + 10
-        cv2.rectangle(frame, (ts_x - 5, 5), (frame.shape[1] - 5, ts_y + 5), (0, 0, 0), -1)
-        cv2.putText(frame, timestamp, (ts_x, ts_y), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+        (ts_w, ts_h), _ = cv2.getTextSize(timestamp, cv2.FONT_HERSHEY_SIMPLEX, fs_sub, thick_sub)
+        ts_x = frame.shape[1] - ts_w - ts_margin
+        ts_y = ts_h + pad
+        cv2.rectangle(frame, (ts_x - pad, pad), (frame.shape[1] - pad, ts_y + pad), (0, 0, 0), -1)
+        cv2.putText(frame, timestamp, (ts_x, ts_y), cv2.FONT_HERSHEY_SIMPLEX, fs_sub, (255, 255, 255), thick_sub)
         
+    def _filter_motion_to_perimeter(self, motion_result, frame_w, frame_h):
+        """Filter motion regions to only those inside the Detection Zone.
+        
+        Args:
+            motion_result: Dict from motion_detector.detect() with 'motion_detected' and 'regions'
+            frame_w: Frame width in pixels
+            frame_h: Frame height in pixels
+            
+        Returns:
+            List of (x, y, w, h) regions that are inside the Detection Zone
+        """
+        regions_in_perimeter = []
+        if motion_result["motion_detected"] and motion_result["regions"]:
+            frame_res = (frame_w, frame_h)
+            for region in motion_result["regions"]:
+                rx, ry, rw, rh = region
+                center_x = rx + rw // 2
+                center_y = ry + rh // 2
+                if self.perimeter.is_inside((center_x, center_y), frame_res):
+                    regions_in_perimeter.append(region)
+        return regions_in_perimeter
+    
     def _update_fps(self):
         """Update FPS calculation"""
         self._fps_count += 1
@@ -976,7 +989,7 @@ class VideoProcessor:
         if self.detector and profile["tflite_threads"] != self.detector.num_threads:
             self.detector.num_threads = profile["tflite_threads"]
         
-        config.MOTION_CROP_SIZE = profile["motion_crop_size"]
+        self.current_motion_crop_size = profile["motion_crop_size"]
         self.current_profile = profile_name
         
         if save:

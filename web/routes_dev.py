@@ -22,6 +22,8 @@ def init_dev_routes(video_processor):
     @dev_bp.route('/api/dev/inject_cat', methods=['POST'])
     def dev_inject_cat():
         """Toggle cat injection test mode."""
+        if not getattr(video_processor, 'inject_cat_handler', None):
+            return jsonify({"error": "Video processor not started"}), 503
         data = request.get_json() or {}
         action = data.get('action', 'toggle')
         

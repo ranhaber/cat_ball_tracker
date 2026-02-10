@@ -79,6 +79,7 @@ def init_video_routes(video_processor):
     
     @video_bp.route('/api/video/recording', methods=['GET'])
     def get_recording_settings():
+        """Get current recording settings."""
         return jsonify({
             "recording_enabled": video_processor.recording_enabled,
             "record_after_detection_sec": video_processor.record_after_detection_sec,
@@ -87,6 +88,7 @@ def init_video_routes(video_processor):
     
     @video_bp.route('/api/video/recording', methods=['POST'])
     def set_recording_settings():
+        """Update recording settings (enabled, duration, library path)."""
         data = request.get_json() or {}
         if "recording_enabled" in data:
             video_processor.recording_enabled = bool(data["recording_enabled"])

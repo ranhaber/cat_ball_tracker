@@ -14,7 +14,6 @@ MODELS_DIR = os.path.join(BASE_DIR, "models")
 # TFLite model settings
 MODEL_URL = "https://storage.googleapis.com/download.tensorflow.org/models/tflite/coco_ssd_mobilenet_v1_1.0_quant_2018_06_29.zip"
 MODEL_FILENAME = "detect.tflite"
-LABELS_FILENAME = "labelmap.txt"
 
 # ============================================================================
 # DETECTION SETTINGS
@@ -82,7 +81,7 @@ DEFAULT_PERIMETER = [
 ]
 
 # Perimeter line color (BGR)
-PERIMETER_COLOR = (255, 200, 0)  # Light blue
+PERIMETER_COLOR = (255, 200, 0)  # Cyan/teal (BGR)
 PERIMETER_THICKNESS = 2
 
 # ============================================================================
@@ -98,6 +97,17 @@ FONT_SCALE = 0.6
 FONT_THICKNESS = 2
 TEXT_COLOR = (255, 255, 255)     # White
 TEXT_BG_COLOR = (0, 0, 0)        # Black background
+
+# Status overlay (stream / get_frame_jpeg)
+STATUS_BOX_PADDING = 5
+STATUS_BOX_MIN_WIDTH = 250
+STATUS_TEXT_PADDING = 15
+STATUS_BOX_HEIGHT_EXTRA = 55
+STATUS_FONT_SCALE_MAIN = 0.6
+STATUS_FONT_SCALE_SUB = 0.5
+STATUS_FONT_THICKNESS_MAIN = 2
+STATUS_FONT_THICKNESS_SUB = 1
+STATUS_TIMESTAMP_MARGIN = 10
 
 # ============================================================================
 # WEB SERVER SETTINGS
@@ -127,6 +137,17 @@ TFLITE_NUM_THREADS = 3  # Use 3 of 4 cores (leave 1 for system)
 # Set to True to attempt GPU-accelerated operations
 # Falls back to CPU if GPU not available
 USE_GPU_ACCELERATION = True
+
+# ============================================================================
+# PHASE STATE MACHINE CONSTANTS
+# ============================================================================
+PHASE_DETECTION_TIMEOUT = 30      # Seconds with no detection → back to IDLE
+PHASE_ACQUISITION_TIMEOUT = 10    # Seconds with no motion in ACQUISITION → back to IDLE
+PHASE_TRACKING_AI_INTERVAL = 3    # Run TFLite every Nth processed frame in TRACKING
+PHASE_WATCH_AI_INTERVAL = 2       # Run TFLite every Nth processed frame in WATCH
+INJECT_FALLBACK_CONFIDENCE = 0.95 # Confidence for injected fake detections
+INJECT_BBOX_PROXIMITY_PX = 100    # Pixel threshold for matching TFLite detection to injected cat
+INJECT_MODE_SLEEP_SEC = 0.15      # Rate-limit sleep per frame in inject mode
 
 # ============================================================================
 # PERFORMANCE PROFILES - 3 Hard-coded profiles for 2304×1296 capture
@@ -225,9 +246,10 @@ MOTION_THRESHOLD = 15            # Pixel difference threshold (lower = more sens
 MOTION_MIN_AREA = 100            # Minimum contour area for motion (lower = smaller objects)
 MOTION_HISTORY_FRAMES = 3        # Frames to average for background
 
-# Crop size for AI detection when motion detected
-# Use fixed 300x300 crop (no scaling) for better small object detection
-MOTION_CROP_SIZE = (300, 300)      # Fixed crop size matching AI input (no scaling!)
+# Crop size for AI detection when motion detected.
+# Default before any performance profile is applied; profiles override at runtime
+# via VideoProcessor.current_motion_crop_size (380/400/450 per profile).
+MOTION_CROP_SIZE = (300, 300)
 MOTION_CROP_MIN_SIZE = (640, 480)  # Legacy - not used with fixed crop
 
 # Temporal confirmation - require detection in N consecutive frames

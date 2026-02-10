@@ -3,6 +3,7 @@ Camera Calibration and Perspective Transform
 Converts pixel coordinates to real-world coordinates (meters)
 """
 
+import math
 import cv2
 import numpy as np
 import json
@@ -106,8 +107,6 @@ class CameraCalibration:
         Returns:
             list of 4 [wx, wy] world coordinates, or None on error.
         """
-        import math
-        
         L01, L12, L23, L30 = [float(s) for s in side_lengths]
         
         # Pixel winding
@@ -241,8 +240,6 @@ class CameraCalibration:
         Returns:
             bool: True if calibration successful
         """
-        import math
-        
         if not rectangles or len(rectangles) < 1:
             print("Error: Need at least 1 rectangle")
             return False
@@ -470,7 +467,7 @@ class CameraCalibration:
             x1, y1, x2, y2: Bounding box in pixels
             
         Returns:
-            dict: {"center": (wx, wy), "bottom_center": (wx, wy)} or None
+            dict: {"world_x": float, "world_y": float} or None
         """
         if not self.is_calibrated:
             return None

@@ -292,7 +292,7 @@ class LensCalibration:
                 alpha=1.0,  # 1.0 = retain all source pixels (may have black corners)
                 newImgSize=(self.image_width, self.image_height))
             rx, ry, rw, rh = self.undistort_roi
-            print(f"[LENS] Optimal camera matrix computed (alpha=0.7, crop ROI={rx},{ry},{rw}x{rh})")
+            print(f"[LENS] Optimal camera matrix computed (alpha=1.0, crop ROI={rx},{ry},{rw}x{rh})")
         else:
             self.optimal_camera_matrix = self.camera_matrix
             self.undistort_roi = (0, 0, self.image_width, self.image_height)
@@ -408,7 +408,7 @@ class LensCalibration:
             with open(self.calibration_file, 'r') as f:
                 data = json.load(f)
             self.camera_matrix = np.array(data["camera_matrix"], dtype=np.float64)
-            self.model_type = "standard"
+            self.model_type = data.get("model_type", "rational")
             k1 = data.get("k1", 0)
             k2 = data.get("k2", 0)
             p1 = data.get("p1", 0)
@@ -710,7 +710,7 @@ class LensCalibration:
         dc = self.dist_coeffs.flatten()
         return {
             "is_calibrated": True,
-            "model": "standard",
+            "model": self.model_type,
             "k1": round(float(dc[0]), 8),
             "k2": round(float(dc[1]), 8),
             "p1": round(float(dc[2]), 8) if len(dc) > 2 else 0,

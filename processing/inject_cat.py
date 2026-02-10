@@ -68,9 +68,6 @@ class InjectCat:
         self._target_x = 0.0     # Target vertex X
         self._target_y = 0.0     # Target vertex Y
         
-        # Debug
-        self._debug_count = 0
-        
         # Load cat image at init
         self._load_image()
     

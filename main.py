@@ -4,10 +4,10 @@ Cat Dome - Detection & Tracking System
 Main entry point
 
 Usage:
-    python main.py [--host HOST] [--port PORT] [--debug]
+    python main.py [--host HOST] [--port PORT] [--debug] [--mode cat|ball]
 """
 
-__version__ = "3.6.1"
+__version__ = "3.6.2"
 
 import sys
 import argparse
@@ -82,7 +82,8 @@ def main():
     try:
         import ctypes
         libc = ctypes.CDLL('libc.so.6')
-        libc.prctl(15, b'CatDome-Main', 0, 0, 0)
+        PR_SET_NAME = 15  # Linux prctl constant for setting thread name
+        libc.prctl(PR_SET_NAME, b'CatDome-Main', 0, 0, 0)
     except Exception:
         pass
     

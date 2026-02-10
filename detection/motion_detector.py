@@ -66,7 +66,7 @@ class MotionDetector:
             # Test UMat creation
             test = cv2.UMat(np.zeros((10, 10), dtype=np.uint8))
             return cv2.ocl.haveOpenCL()
-        except:
+        except Exception:
             return False
         
     def reset(self):
