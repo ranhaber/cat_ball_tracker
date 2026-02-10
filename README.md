@@ -2,7 +2,7 @@
 
 A real-time cat and ball detection system for Raspberry Pi Zero 2W with Camera Module 3. Features motion-first detection for efficiency, a web interface for live streaming, and zone-based tracking.
 
-**Version:** 3.5.0
+**Version:** 3.6.0
 
 ---
 
@@ -553,6 +553,7 @@ sudo journalctl -u cat_ball_tracker -n 50
 
 ## 📝 Version History
 
+- **v3.6.0** - Phase state machine (IDLE/ACQUISITION/TRACKING/WATCH): TFLite stays active while cat is in Detection Zone. Removed RAM safety valve. Motion detection only inside Detection Zone. Cat gone for 30s -> IDLE.
 - **v3.5.0** - Modular refactoring: split 2500-line app.py into processing/ module + Flask Blueprint routes + unit tests. Added processing/memory.py (RAM stats, gc+malloc_trim reclaim), processing/inject_cat.py (InjectCat class). 7 route Blueprint files. Core requirement documented: track cat until it leaves Detection Zone (max 13m).
 - **v3.4.0** - Inject Cat test mode: overlay a real cat photo on camera frames to test the full pipeline (motion → TFLite → tracking → world position → top-down view). Cat walks vertex-to-vertex across Detection Zone. Toggle from Developer tab.
 - **v3.3.1** - Developer tab: add swap activity monitoring (swap in/out since boot, swappiness value); setup script adds rpi-connect-lite installation, sudoers for web UI service control, swappiness=10
