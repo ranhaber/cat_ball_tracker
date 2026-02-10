@@ -6,6 +6,12 @@ A real-time cat and ball detection system for Raspberry Pi Zero 2W with Camera M
 
 ---
 
+## 🎯 Core Requirement
+
+The system must identify and track a cat that enters the Detection Zone and continue tracking until the cat leaves the zone. Maximum detection and tracking range: **13 meters**. TFLite AI must remain active as long as a cat is detected — it does not unload while a cat is present.
+
+---
+
 ## 🏗️ System Architecture
 
 Detection and tracking work **independently of the web UI** — the system runs headless via systemd.
@@ -18,8 +24,10 @@ Detection and tracking work **independently of the web UI** — the system runs 
 │  ┌───────────┐    ┌──────────────┐    ┌──────────────────┐         │
 │  │  Camera   │───▶│   Motion     │───▶│  TFLite AI       │         │
 │  │ Module 3  │    │  Detector    │    │  (load on motion, │         │
-│  │ 2304×1296 │    │ (every 2nd   │    │   unload after   │         │
-│  │ 2 buffers │    │  frame)      │    │   10s idle)      │         │
+│  │ 2304×1296 │    │ (every 2nd   │    │   active while   │         │
+│  │ 2 buffers │    │  frame)      │    │   cat in zone,   │         │
+│  │           │    │              │    │   unload 10s     │         │
+│  │           │    │              │    │   after leaves)  │         │
 │  └───────────┘    └──────────────┘    └──────────────────┘         │
 │       │                 │                    │                       │
 │       │                 │                    ▼                       │
