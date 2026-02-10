@@ -160,7 +160,7 @@ PERFORMANCE_PROFILES = {
         "jpeg_quality": 60,  # Reduced from 65 to save memory
         "motion_crop_size": (380, 380),  # Reduced from 400 to save RAM
         "motion_scale": 0.30,
-        "motion_threshold": 18,
+        "motion_threshold": 25,
         "motion_min_area": 80,
         "tflite_threads": 3,
         "estimated_fps": "5-7 FPS",
@@ -174,7 +174,7 @@ PERFORMANCE_PROFILES = {
         "jpeg_quality": 55,  # Reduced from 60 to save memory
         "motion_crop_size": (400, 400),  # Reduced from 420 to save RAM
         "motion_scale": 0.35,
-        "motion_threshold": 18,
+        "motion_threshold": 25,
         "motion_min_area": 50,
         "tflite_threads": 3,
         "estimated_fps": "4-6 FPS",
@@ -188,7 +188,7 @@ PERFORMANCE_PROFILES = {
         "jpeg_quality": 70,  # Reduced from 75 to save memory
         "motion_crop_size": (450, 450),  # Reduced from 480 to save RAM
         "motion_scale": 0.35,
-        "motion_threshold": 15,
+        "motion_threshold": 18,
         "motion_min_area": 80,
         "tflite_threads": 3,  # Reduced from 4 to leave headroom
         "estimated_fps": "3-5 FPS",
