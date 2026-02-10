@@ -13,7 +13,22 @@ class TestPerimeter(unittest.TestCase):
     """Test Detection Zone perimeter logic."""
     
     def setUp(self):
-        self.pm = PerimeterManager()
+        # Use a test-specific filename so we NEVER touch the user's real perimeter.json
+        import config
+        self._test_file = '_test_perimeter_temp.json'
+        full_path = os.path.join(config.BASE_DIR, self._test_file)
+        if os.path.exists(full_path):
+            os.remove(full_path)
+        self.pm = PerimeterManager(perimeter_file=self._test_file)
+        # Test data: square perimeter at 640x480 resolution
+        self.square_points = [[100, 100], [500, 100], [500, 400], [100, 400]]
+        self.frame_res = (640, 480)
+    
+    def tearDown(self):
+        import config
+        full_path = os.path.join(config.BASE_DIR, self._test_file)
+        if os.path.exists(full_path):
+            os.remove(full_path)
         # Square perimeter: (100,100) to (500,500) at 640x480 resolution
         self.square_points = [[100, 100], [500, 100], [500, 400], [100, 400]]
         self.frame_res = (640, 480)
