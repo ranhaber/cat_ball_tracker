@@ -49,9 +49,19 @@ def init_dev_routes(video_processor):
             video_processor.last_detections_with_world = []
             video_processor.detection_history = []
             
+            # Avoid post-inject thrash: reset motion so next real frame isn't "full motion"
+            if video_processor.motion_detector:
+                video_processor.motion_detector.reset()
+            # Force IDLE and unload TFLite so we don't spike CPU/RAM on first live frames
+            video_processor._phase = "IDLE"
+            video_processor._phase_frame_counter = 0
+            if video_processor.detector:
+                video_processor.detector.unload_model()
+            cv2.setNumThreads(1)
+            
             # Force memory reclaim
             reclaim_memory()
-            print("[INJECT CLEANUP] Cat image freed, memory reclaimed")
+            print("[INJECT CLEANUP] Cat image freed, motion reset, phase=IDLE, memory reclaimed")
         
         status = "active" if video_processor.inject_cat else "stopped"
         print(f"[INJECT API] Cat injection: {status}, "

@@ -293,6 +293,7 @@ class VideoProcessor:
                             frame = req.make_array("main")
                 
                 frame_h, frame_w = frame.shape[:2]
+                tracked_objects = {}  # Used by phase block and by inject stream update below
                 
                 # ── Inject cat: paste cat on real camera frame ──
                 if self.inject_cat and self.inject_cat_handler:
@@ -305,6 +306,20 @@ class VideoProcessor:
                         ram_info = get_ram_stats()
                         print(f"[INJECT DEBUG] {self.inject_cat_handler.get_debug_info()}, "
                               f"clients={self.stream_clients}, RAM: {ram_info}")
+                    # Update stream every frame so the cat moves visibly (phase block only runs every frame_skip)
+                    if self.stream_clients > 0:
+                        ann = frame.copy()
+                        ann = self.perimeter.draw(ann)
+                        ann = self.detector.draw_detections(ann, last_detections, tracked_objects)
+                        stream_w, stream_h = self.current_stream_resolution
+                        if stream_w != frame_w or stream_h != frame_h:
+                            ann = cv2.resize(ann, (stream_w, stream_h), interpolation=cv2.INTER_AREA)
+                        self._draw_status(ann)
+                        ret, jpeg_buf = cv2.imencode('.jpg', ann, [cv2.IMWRITE_JPEG_QUALITY, self.current_jpeg_quality])
+                        with self._cached_jpeg_lock:
+                            self._cached_jpeg = jpeg_buf.tobytes() if ret else None
+                        with self.frame_lock:
+                            self.current_frame = frame
                 
                 # ══════════════════════════════════════════════════════════
                 # PHASE STATE MACHINE: IDLE → ACQUISITION → TRACKING → WATCH
