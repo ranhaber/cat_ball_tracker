@@ -2,7 +2,7 @@
 
 A real-time cat and ball detection system for Raspberry Pi Zero 2W with Camera Module 3. Features motion-first detection for efficiency, a web interface for live streaming, and zone-based tracking.
 
-**Version:** 3.4.0
+**Version:** 3.5.0
 
 ---
 
@@ -101,48 +101,66 @@ Detection and tracking work **independently of the web UI** — the system runs 
 
 ```
 cat_ball_tracker/
-├── README.md                    # This file
+├── main.py                      # Application entry point
+├── config.py                    # Configuration settings & performance profiles
+├── settings.py                  # User settings persistence (JSON)
 ├── requirements.txt             # Python dependencies
-├── config.py                    # Configuration settings
-├── main.py                      # Application entry point (v3.2.2)
-├── settings.py                  # Settings persistence
-├── cat_dome.service             # Systemd service file
-├── start_Cat_Dome.sh            # Startup wrapper with logging
-├── install_rpi.sh               # RPi installation script
-├── setup_car_dome.sh            # Full setup script (systemd, venv, model)
-├── test_installation.py         # Dependency verification tests
-├── test_lens_calibration.py     # Lens calibration unit tests
+├── README.md                    # This file
 │
 ├── camera/
 │   ├── __init__.py
-│   └── camera_handler.py        # RPi Camera Module 3 interface
+│   └── camera_handler.py        # RPi Camera Module 3 interface (pause/resume)
 │
-├── detection/
+├── detection/                   # Detection & calibration modules
 │   ├── __init__.py
-│   ├── detector.py              # TensorFlow Lite detector
-│   ├── tracker.py               # Centroid-based tracking
-│   ├── perimeter.py             # Detection zone management
+│   ├── detector.py              # TFLite MobileNet SSD (lazy load/unload)
+│   ├── tracker.py               # Centroid-based object tracking
+│   ├── perimeter.py             # Detection Zone polygon management
 │   ├── motion_detector.py       # Lightweight motion detection
 │   ├── calibration.py           # Multi-rectangle perspective calibration
-│   └── lens_calibration.py      # Rational model (k1-k6) lens distortion correction
+│   └── lens_calibration.py      # Rational model (k1-k6) lens distortion
 │
-├── web/
+├── processing/                  # Core processing pipeline
 │   ├── __init__.py
-│   ├── app.py                   # Flask server & video processor
+│   ├── memory.py                # RAM stats, reclaim_memory (gc + malloc_trim)
+│   └── inject_cat.py            # Inject Cat test feature (vertex-to-vertex)
+│
+├── web/                         # Flask web server & API routes
+│   ├── __init__.py
+│   ├── app.py                   # VideoProcessor + Flask app factory
+│   ├── routes_streaming.py      # /, /video_feed, /api/snapshot
+│   ├── routes_status.py         # /api/status, /api/mode
+│   ├── routes_perimeter.py      # /api/perimeter, /api/topdown
+│   ├── routes_performance.py    # /api/performance/*
+│   ├── routes_calibration.py    # /api/calibration/*, /api/lens_calibration/*
+│   ├── routes_video.py          # /api/video/*, /api/motion/*
+│   ├── routes_dev.py            # /api/dev/* (system info, inject cat, services)
 │   ├── templates/
-│   │   └── index.html           # Web interface (3 tabs)
+│   │   └── index.html           # Web interface (Video, Calibration, Developer)
 │   └── static/
 │       ├── css/style.css
 │       └── js/app.js
 │
+├── tests/                       # Unit tests (run manually)
+│   ├── __init__.py
+│   ├── run_tests.py             # Test runner: python tests/run_tests.py [module]
+│   ├── test_calibration.py      # Homography, world coords, rectangles
+│   ├── test_perimeter.py        # Point-in-polygon, filter_detections
+│   ├── test_tracker.py          # ID assignment, persistence, reset
+│   ├── test_memory.py           # RAM stats, reclaim_memory
+│   └── test_inject_cat.py       # Movement, vertex cycling, paste
+│
+├── models/
+│   ├── .gitkeep
+│   └── test_cat.png             # Cat image for inject test
+│
 ├── docs/
-│   └── cloudflared-low-ram-config.md  # Cloudflare Tunnel RAM optimization
+│   └── cloudflared-low-ram-config.md
 │
-├── scripts/
-│   └── README_LOGGING.md        # Logging system documentation
-│
-└── models/
-    └── (downloaded on first run)
+├── cat_dome.service             # Systemd service file
+├── start_Cat_Dome.sh            # Startup wrapper with logging
+├── setup_car_dome.sh            # Full setup script (systemd, venv, model)
+└── test_installation.py         # Dependency verification
 ```
 
 ---
@@ -494,7 +512,8 @@ sudo journalctl -u cat_ball_tracker -n 50
 
 ## 📝 Version History
 
-- **v3.4.0** - Inject Cat test mode: overlay a real cat photo on camera frames to test the full pipeline (motion → TFLite → tracking → world position → top-down view). Cat bounces across the frame. Toggle from Developer tab.
+- **v3.5.0** - Modular refactoring: split 2500-line app.py into processing/ module + Flask Blueprint routes + unit tests. Added processing/memory.py (RAM stats, gc+malloc_trim reclaim), processing/inject_cat.py (InjectCat class). 7 route Blueprint files. Core requirement documented: track cat until it leaves Detection Zone (max 13m).
+- **v3.4.0** - Inject Cat test mode: overlay a real cat photo on camera frames to test the full pipeline (motion → TFLite → tracking → world position → top-down view). Cat walks vertex-to-vertex across Detection Zone. Toggle from Developer tab.
 - **v3.3.1** - Developer tab: add swap activity monitoring (swap in/out since boot, swappiness value); setup script adds rpi-connect-lite installation, sudoers for web UI service control, swappiness=10
 - **v3.3.0** - Developer tab: system info (RAM, swap, CPU temp, uptime, disk, process RSS/swap/threads), RPi Connect toggle (start/stop from web UI), color-coded indicators
 - **v3.2.2** - Reduce camera buffers from 4 to 2 (saves ~18 MB RAM); update README architecture diagram with current design
