@@ -4,6 +4,12 @@ This document consolidates knowledge from README, code reviews, and optimization
 
 **When making architectural changes, always update AGENTS.md and README** (logging, threads, new modules, concurrency, or behavior that affects debugging or performance).
 
+### Workflow rule: explain first, code only after approval
+
+1. **Explain** what you plan to do and why (analysis, design, trade-offs) before writing any code or modifying any file.
+2. **Wait for the user's explicit approval** before creating or editing files. Never write code, create files, or push changes without permission.
+3. This applies to all changes: new features, bug fixes, optimizations, config edits, documentation updates, and commits/pushes.
+
 ---
 
 ## 1. What this project is
@@ -43,7 +49,8 @@ When **inject_cat** is True, the phase block (motion + AI + annotation inside th
 ### Crop vs resize
 
 - **Crop:** One place — AI region. We take a rectangle from the full frame at **same resolution** (e.g. 380×380 or 400×400 from profile). Slice only: `frame[cy:cy+ch, cx:cx+cw]`.
-- **Resize:** Three places — (1) motion: full frame → ¼ size for motion; (2) TFLite: crop or full frame → model input (e.g. 300×300); (3) stream: annotated frame → stream resolution. Detector skips resize when input already matches model size (e.g. crop 300×300).
+- **Resize:** Three places — (1) motion: full frame → ¼ size for motion; (2) TFLite: crop or full frame → model input (e.g. 300×300); (3) stream: raw frame → stream resolution **first**, then draw annotations on the small frame (avoids drawing on the 9 MB capture frame). Detector skips resize when input already matches model size (e.g. crop 300×300).
+- **Scaled perimeter cache:** Perimeter polygon scaled to stream resolution is pre-computed once (`_get_scaled_perimeter`) and cached. Invalidated when perimeter is set/cleared or stream resolution changes. Detection boxes and motion regions are scaled inline with simple multiply (cheap).
 
 Crop size 400×400 is used for the "Performance (13 m)" profile for robustness at long range; 300×300 is more efficient but less margin. See README § "Why not crop to TFLite size?" and § "Effect on detection and tracking to 13 m".
 

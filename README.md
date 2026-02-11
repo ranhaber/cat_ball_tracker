@@ -2,7 +2,7 @@
 
 A real-time cat and ball detection system for Raspberry Pi Zero 2W with Camera Module 3. Features motion-first detection for efficiency, a web interface for live streaming, and zone-based tracking.
 
-**Version:** 3.8.0
+**Version:** 3.8.1
 
 **For agents and developers:** See **[AGENTS.md](AGENTS.md)** for project guidelines, concurrency rules, and where to find things. Use it as the single entry point before diving into code or other docs.
 
@@ -771,6 +771,7 @@ The **displayed FPS** is processed frames per second (how often the phase block 
 
 ## 📝 Version History
 
+- **v3.8.1** - Annotation optimization: resize raw frame to stream resolution first, then draw all annotations (perimeter, detections, motion, crop) on the small frame. Pre-computed scaled perimeter cache (invalidated on perimeter/stream-res change). Saves ~30-80ms per frame on RPi Zero 2W. Stop Stream button already skips entire annotation path (250ms saving).
 - **v3.8.0** - Non-blocking async logging (queue + writer thread, plog); per-step performance log every processed frame ([PERF] cap/motion/crop/tflite/track/annot); FPS diagnostics in status API and UI (Cap/Mot ms); heartbeat log every 30s; Inject Cat stop CPU fix (rate-limit sleep); AGENTS.md and README updated for architectural changes.
 - **v3.7.1** - Minor fixes.
 - **v3.7.0** - Real-time performance optimizations: pre-compute JPEG in process loop (zero-copy streaming), running-sum background model in motion detector (eliminates np.mean alloc), pre-allocated TFLite input buffer, narrowed motion detector lock (5-15ms -> <0.1ms), removed debug allocations from hot path, skip unused motion_mask allocation.

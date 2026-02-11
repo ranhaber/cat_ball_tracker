@@ -113,6 +113,7 @@ class VideoProcessor:
             settings.update_setting("resolution", list(config.DEFAULT_RESOLUTION))
         
         self.current_stream_resolution = tuple(saved.get("stream_resolution", config.DEFAULT_STREAM_RESOLUTION))
+        self._scaled_perimeter_cache = None  # (stream_w, stream_h, np.array) — pre-computed for draw
         self.current_framerate = saved.get("framerate", config.DEFAULT_FRAMERATE)
         self.current_frame_skip = saved.get("frame_skip", config.DEFAULT_FRAME_SKIP)
         
@@ -342,12 +343,16 @@ class VideoProcessor:
                              self.inject_cat_handler.get_debug_info(), self.stream_clients, ram_info)
                     # Update stream every frame so the cat moves visibly (phase block only runs every frame_skip)
                     if self.stream_clients > 0:
-                        ann = frame.copy()
-                        ann = self.perimeter.draw(ann)
-                        ann = self.detector.draw_detections(ann, last_detections, tracked_objects)
                         stream_w, stream_h = self.current_stream_resolution
                         if stream_w != frame_w or stream_h != frame_h:
-                            ann = cv2.resize(ann, (stream_w, stream_h), interpolation=cv2.INTER_AREA)
+                            ann = cv2.resize(frame, (stream_w, stream_h), interpolation=cv2.INTER_AREA)
+                        else:
+                            ann = frame.copy()
+                        # Draw perimeter (cached scaled)
+                        perim_polygon, perim_pts = self._get_scaled_perimeter(stream_w, stream_h)
+                        if perim_polygon is not None and len(perim_polygon) >= 3:
+                            cv2.polylines(ann, [perim_polygon], True,
+                                          config.PERIMETER_COLOR, config.PERIMETER_THICKNESS)
                         self._draw_status(ann)
                         ret, jpeg_buf = cv2.imencode('.jpg', ann, [cv2.IMWRITE_JPEG_QUALITY, self.current_jpeg_quality])
                         with self._cached_jpeg_lock:
@@ -615,21 +620,68 @@ class VideoProcessor:
                         annotated = frame  # Always defined (used by recording below)
                         if self.stream_clients > 0:
                             t_annot_start = time.perf_counter()
-                            if self.show_motion_regions and self.motion_first_enabled:
-                                self.motion_detector.draw_motion(annotated, regions=motion_regions_in_perimeter)
+                            
+                            # Resize FIRST, then draw on small frame (saves ~30-80ms on RPi)
+                            stream_w, stream_h = self.current_stream_resolution
+                            capture_h, capture_w = frame.shape[:2]
+                            if stream_w != capture_w or stream_h != capture_h:
+                                stream_frame = cv2.resize(frame, (stream_w, stream_h), interpolation=cv2.INTER_AREA)
+                                sx = stream_w / capture_w
+                                sy = stream_h / capture_h
+                            else:
+                                stream_frame = frame.copy()
+                                sx = sy = 1.0
+                            
+                            # Draw motion regions (scaled to stream res)
+                            if self.show_motion_regions and self.motion_first_enabled and motion_regions_in_perimeter:
+                                for mx, my, mw, mh in motion_regions_in_perimeter:
+                                    cv2.rectangle(stream_frame,
+                                                  (int(mx * sx), int(my * sy)),
+                                                  (int((mx + mw) * sx), int((my + mh) * sy)),
+                                                  (0, 255, 255), 2)
+                                cv2.putText(stream_frame, "MOTION",
+                                            (10, stream_h - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+                            
+                            # Draw crop region (scaled)
                             if crop_region and self.show_motion_regions:
                                 rcx, rcy, rcw, rch = crop_region
-                                cv2.rectangle(annotated, (rcx, rcy), (rcx+rcw, rcy+rch), (255, 0, 255), 2)
-                            annotated = self.perimeter.draw(annotated)
-                            annotated = self.detector.draw_detections(annotated, last_detections, tracked_objects)
+                                cv2.rectangle(stream_frame,
+                                              (int(rcx * sx), int(rcy * sy)),
+                                              (int((rcx + rcw) * sx), int((rcy + rch) * sy)),
+                                              (255, 0, 255), 2)
                             
-                            # Pre-compute JPEG here (avoids 9MB copy + resize in Flask thread)
-                            stream_w, stream_h = self.current_stream_resolution
-                            capture_h, capture_w = annotated.shape[:2]
-                            if stream_w != capture_w or stream_h != capture_h:
-                                stream_frame = cv2.resize(annotated, (stream_w, stream_h), interpolation=cv2.INTER_AREA)
-                            else:
-                                stream_frame = annotated
+                            # Draw perimeter (pre-computed scaled cache)
+                            perim_polygon, perim_pts = self._get_scaled_perimeter(stream_w, stream_h)
+                            if perim_polygon is not None and len(perim_polygon) >= 3:
+                                cv2.polylines(stream_frame, [perim_polygon], True,
+                                              config.PERIMETER_COLOR, config.PERIMETER_THICKNESS)
+                                for pt in perim_pts:
+                                    cv2.circle(stream_frame, pt, 3, config.PERIMETER_COLOR, -1)
+                            
+                            # Draw detections (scaled to stream res)
+                            if last_detections:
+                                box_color = config.BOX_COLOR_CAT if self.detector.detection_mode == "cat" else config.BOX_COLOR_BALL
+                                for det in last_detections:
+                                    x1, y1, x2, y2, conf, class_id = det
+                                    sx1, sy1 = int(x1 * sx), int(y1 * sy)
+                                    sx2, sy2 = int(x2 * sx), int(y2 * sy)
+                                    cv2.rectangle(stream_frame, (sx1, sy1), (sx2, sy2), box_color, config.BOX_THICKNESS)
+                                    class_name = config.CLASS_NAMES.get(class_id, f"Class {class_id}")
+                                    label = f"{class_name}: {conf:.2f}"
+                                    if tracked_objects:
+                                        cx_det, cy_det = (sx1 + sx2) // 2, (sy1 + sy2) // 2
+                                        for obj_id, centroid in tracked_objects.items():
+                                            if abs(int(centroid[0] * sx) - cx_det) < 20 and abs(int(centroid[1] * sy) - cy_det) < 20:
+                                                label = f"ID:{obj_id} {label}"
+                                                break
+                                    (tw, th), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX,
+                                                                   config.FONT_SCALE, config.FONT_THICKNESS)
+                                    cv2.rectangle(stream_frame, (sx1, sy1 - th - 10), (sx1 + tw + 5, sy1),
+                                                  config.TEXT_BG_COLOR, -1)
+                                    cv2.putText(stream_frame, label, (sx1 + 2, sy1 - 5),
+                                                cv2.FONT_HERSHEY_SIMPLEX, config.FONT_SCALE,
+                                                config.TEXT_COLOR, config.FONT_THICKNESS)
+                            
                             self._draw_status(stream_frame)
                             ret, jpeg_buf = cv2.imencode('.jpg', stream_frame,
                                                           [cv2.IMWRITE_JPEG_QUALITY, self.current_jpeg_quality])
@@ -861,7 +913,9 @@ class VideoProcessor:
         
     def set_perimeter(self, points):
         if self.perimeter:
-            return self.perimeter.set_points(points)
+            result = self.perimeter.set_points(points)
+            self._scaled_perimeter_cache = None  # invalidate
+            return result
         return False
         
     def get_perimeter(self):
@@ -872,7 +926,26 @@ class VideoProcessor:
     def clear_perimeter(self):
         if self.perimeter:
             self.perimeter.clear()
+            self._scaled_perimeter_cache = None  # invalidate
             print("[SETTING] Perimeter cleared")
+    
+    def _get_scaled_perimeter(self, stream_w, stream_h):
+        """Return pre-computed perimeter polygon and points scaled for stream resolution.
+        Cached — only recomputed when perimeter or stream resolution changes."""
+        cache = self._scaled_perimeter_cache
+        if cache is not None and cache[0] == stream_w and cache[1] == stream_h:
+            return cache[2], cache[3]  # (polygon_np, points_list)
+        # Compute
+        if not self.perimeter or self.perimeter.polygon is None or len(self.perimeter.polygon) < 3:
+            self._scaled_perimeter_cache = (stream_w, stream_h, None, [])
+            return None, []
+        saved_w, saved_h = self.perimeter.saved_resolution
+        scale_x = stream_w / saved_w
+        scale_y = stream_h / saved_h
+        scaled_pts = [(int(x * scale_x), int(y * scale_y)) for x, y in self.perimeter.points]
+        polygon = np.array(scaled_pts, dtype=np.int32)
+        self._scaled_perimeter_cache = (stream_w, stream_h, polygon, scaled_pts)
+        return polygon, scaled_pts
             
     def get_status(self):
         """Get current system status"""
@@ -1045,6 +1118,7 @@ class VideoProcessor:
         if new_res not in config.STREAM_RESOLUTION_OPTIONS:
             return False
         self.current_stream_resolution = new_res
+        self._scaled_perimeter_cache = None  # invalidate
         settings.update_setting("stream_resolution", list(new_res))
         print(f"[SETTING] Stream resolution changed to: {width}x{height}")
         return True
