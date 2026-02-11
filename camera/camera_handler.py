@@ -198,7 +198,8 @@ class CameraHandler:
             #
             # CONSTRAINTS:
             #   - lores MUST use YUV format (ISP limitation). The processing loop converts
-            #     YUV420→BGR after capture (~3ms on 960×540, negligible vs 460ms saving).
+            #     I420→BGR after capture using COLOR_YUV2BGR_I420 (NOT YV12/COLOR_YUV420p2BGR
+            #     which swaps U/V and produces wrong colors).
             #   - lores size must be ≤ main in both dimensions.
             #   - lores can be reconfigured at runtime via reconfigure_lores() (brief ~0.5s pause).
             #

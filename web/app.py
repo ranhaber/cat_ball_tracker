@@ -465,9 +465,11 @@ class VideoProcessor:
                         with request as req:
                             frame = req.make_array("main")
                             if self._using_lores:
-                                # ISP lores is YUV420 (only format supported); convert to BGR for OpenCV
+                                # ISP lores is YUV420 / I420 (only YUV formats supported by ISP lores).
+                                # picamera2 "YUV420" = I420 (planar Y, U, V) — NOT YV12 (Y, V, U).
+                                # Using the wrong conversion (YV12) swaps U/V → orange instead of blue.
                                 lores_yuv = req.make_array("lores")
-                                frame_lores = cv2.cvtColor(lores_yuv, cv2.COLOR_YUV420p2BGR)
+                                frame_lores = cv2.cvtColor(lores_yuv, cv2.COLOR_YUV2BGR_I420)
                 self._last_capture_ms = round((time.perf_counter() - t_capture_start) * 1000, 1)
                 
                 frame_h, frame_w = frame.shape[:2]
