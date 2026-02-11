@@ -275,6 +275,7 @@ class CameraHandler:
                         "size": (lores_w, lores_h),
                         "format": "YUV420"  # ISP lores requires YUV; converted to BGR in processing loop
                     },
+                    raw=None,  # Disable raw Bayer stream — saves ~20MB DMA RAM (not used by Cat Dome)
                     controls=self._build_controls(),
                     buffer_count=buf_count
                 )
@@ -289,6 +290,7 @@ class CameraHandler:
                         "size": (self.width, self.height),
                         "format": "RGB888"
                     },
+                    raw=None,  # No raw stream needed
                     controls=self._build_controls(),
                     buffer_count=buf_count
                 )
@@ -428,6 +430,7 @@ class CameraHandler:
                     "size": (width, height),
                     "format": "YUV420"
                 },
+                raw=None,
                 controls=self._build_controls(),
                 buffer_count=buf_count
             )
@@ -439,11 +442,11 @@ class CameraHandler:
             return True
         except Exception as e:
             print(f"[LORES] Reconfigure to {width}×{height} failed: {e}")
-            # Try to restart with previous config
             try:
                 camera_config = self.camera.create_video_configuration(
                     main={"size": (self.width, self.height), "format": "RGB888"},
                     lores={"size": self.lores_size, "format": "YUV420"},
+                    raw=None,
                     controls=self._build_controls(),
                     buffer_count=buf_count
                 )
@@ -454,6 +457,7 @@ class CameraHandler:
                 print(f"[LORES] Restore also failed ({e2}), restarting main-only")
                 camera_config = self.camera.create_video_configuration(
                     main={"size": (self.width, self.height), "format": "RGB888"},
+                    raw=None,
                     controls=self._build_controls(),
                     buffer_count=buf_count
                 )

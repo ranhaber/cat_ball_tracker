@@ -171,7 +171,7 @@ class VideoProcessor:
         # Video source and recording
         self.video_library_path = saved.get("video_library_path", getattr(config, 'VIDEO_LIBRARY_PATH', '/home/ranhaber/cat_dome_videos'))
         self.record_after_detection_sec = saved.get("record_after_detection_sec", getattr(config, 'RECORD_AFTER_DETECTION_SEC', 5))
-        self.recording_enabled = saved.get("recording_enabled", True)
+        self.recording_enabled = saved.get("recording_enabled", False)
         self.video_source = saved.get("video_source", "live")
         self.video_file_path = saved.get("video_file_path")
         self.file_camera = None
@@ -591,13 +591,13 @@ class VideoProcessor:
                 try:
                     request = self._ai_request_queue.get(timeout=1.0)
                 except queue.Empty:
-                    # No work — unload model quickly to free ~20MB RAM on Pi Zero
+                    # Only unload when phase is IDLE (not during TRACKING/ACQUISITION/WATCH)
                     if self.detector and self.detector.is_loaded():
-                        if time.time() - idle_since > 3.0:
+                        if self._phase == "IDLE" and time.time() - idle_since > 3.0:
                             self.detector.unload_model()
                             cv2.setNumThreads(1)
                             reclaim_memory()
-                            plog("[AI] Model unloaded after 3s idle")
+                            plog("[AI] Model unloaded (IDLE for 3s)")
                     continue
                 
                 if request is None:
