@@ -445,8 +445,10 @@ sudo apt install -y python3-full python3-pip python3-venv \
 python3 -m venv venv --system-site-packages
 source venv/bin/activate
 
-# Install TFLite (optional - works without it in mock mode)
-pip install tflite-runtime --extra-index-url https://www.piwheels.org/simple
+# Install Python packages
+pip install simplejpeg      # Fast JPEG encoding via libjpeg-turbo (NEON SIMD). Falls back to cv2 if missing.
+pip install flask-sock       # WebSocket support for H.264 hardware streaming. Falls back to MJPEG if missing.
+pip install tflite-runtime --extra-index-url https://www.piwheels.org/simple  # Optional — mock mode without it
 
 # Run the application
 python main.py

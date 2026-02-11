@@ -55,6 +55,16 @@ def main():
     if not picamera_ok:
         print("     ⚠️  picamera2 not available - will use MOCK camera")
     
+    # simplejpeg - optional, faster JPEG encoding via libjpeg-turbo
+    simplejpeg_ok = check_package("simplejpeg")
+    if not simplejpeg_ok:
+        print("     ⚠️  simplejpeg not installed - JPEG will use cv2 (slower)")
+    
+    # flask-sock - optional, WebSocket for H.264 hardware streaming
+    flasksock_ok = check_package("flask-sock", "flask_sock")
+    if not flasksock_ok:
+        print("     ⚠️  flask-sock not installed - H.264 streaming disabled (MJPEG fallback)")
+    
     print()
     print("=" * 60)
     

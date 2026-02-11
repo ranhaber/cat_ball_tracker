@@ -209,6 +209,12 @@ echo "━━━━━━━━━━━━━━━━━━━━━━━━�
 pip install gunicorn
 print_status "Gunicorn installed"
 
+pip install simplejpeg || echo "Warning: simplejpeg not installed (JPEG encoding will use cv2 fallback)"
+print_status "simplejpeg installed (libjpeg-turbo NEON SIMD for fast JPEG)"
+
+pip install flask-sock || echo "Warning: flask-sock not installed (H.264 streaming disabled, MJPEG fallback)"
+print_status "flask-sock installed (WebSocket for H.264 hardware streaming)"
+
 # ============================================================================
 # Step 8: Download TFLite Model
 # ============================================================================
