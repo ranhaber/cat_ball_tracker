@@ -2,7 +2,7 @@
 
 A real-time cat and ball detection system for Raspberry Pi Zero 2W with Camera Module 3. Features motion-first detection for efficiency, a web interface for live streaming, and zone-based tracking.
 
-**Version:** 3.10.1
+**Version:** 3.10.2
 
 **For agents and developers:** See **[AGENTS.md](AGENTS.md)** for project guidelines, concurrency rules, and where to find things. Use it as the single entry point before diving into code or other docs.
 
@@ -811,6 +811,7 @@ The **displayed FPS** is processed frames per second (how often the phase block 
 
 ## 📝 Version History
 
+- **v3.10.2** - Inject Cat test runs full pipeline (motion → AI → tracking → world → top-down); TFLite file-cache warmup at boot (first detection 3.5s → ~0.5s); cat drawn on H.264 overlay via inject_cat_bbox; new GET /api/dev/inject_cat_image route; pipelined architecture plan (Phase 0-3) documented.
 - **v3.10.1** - Fix H.264 encoder startup (wrap output in FileOutput), prevent WebSocket CPU burn when encoder has no frames, add 26 unit tests for v3.9-3.10 features (motion gray_input, H264StreamOutput, overlay data, lores helpers, camera controls), fix Unicode in log messages for Windows compatibility.
 - **v3.10.0** - H.264 hardware streaming: VideoCore H.264 encoder on lores YUV420 (zero CPU), WebSocket /ws/stream with jMuxer browser decode (GPU), Canvas overlay for detections/perimeter/phase (eliminates server-side cv2 annotation + JPEG encode ~41ms/frame). Manual focus (AfMode=0, fixed LensPosition) eliminates autofocus hunting. Stream mode selector (H.264 default, MJPEG fallback). MJPEG /video_feed kept for snapshots and simple clients. flask-sock for WebSocket support.
 - **v3.9.1** - Y-plane optimization: motion detector receives the I420 Y channel directly (already grayscale), skipping both YUV→BGR (~15-25ms) and BGR→Gray (~2-3ms) conversions. BGR conversion deferred to stream annotation and skipped entirely when no clients are watching. Fix I420 color conversion (was YV12 → orange/blue swap). Dynamic lores reconfigure: when user picks stream resolution > 960×540, the ISP lores stream is reconfigured on-the-fly (~0.5s camera pause) instead of falling back to main-frame resize. Measured: ~498ms/frame (2 FPS) → ~108ms/frame (9 FPS) with streaming, further improved without stream clients.
