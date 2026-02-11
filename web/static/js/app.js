@@ -111,6 +111,7 @@ let h264Ws = null;
 let h264Jmuxer = null;
 let h264ReconnectTimer = null;
 let h264Overlays = null;  // Latest overlay data from server
+let injectCatOverlayImage = null;  // Test cat image for H.264 overlay when Inject Cat is active
 
 function initH264Stream() {
     // Default to H.264 if jMuxer is available, otherwise fall back to MJPEG
@@ -278,6 +279,23 @@ function drawH264Overlays() {
     const sx = canvas.width / capW;
     const sy = canvas.height / capH;
     
+    // Draw injected cat (H.264 overlay: video is raw lores, cat is drawn from server bbox)
+    if (data.inject_cat_bbox && data.inject_cat_bbox.length === 4) {
+        const [x1, y1, x2, y2] = data.inject_cat_bbox;
+        const dx = x1 * sx, dy = y1 * sy, dw = (x2 - x1) * sx, dh = (y2 - y1) * sy;
+        if (!injectCatOverlayImage) {
+            injectCatOverlayImage = new Image();
+            injectCatOverlayImage.crossOrigin = 'anonymous';
+            injectCatOverlayImage.onload = () => drawH264Overlays();
+            injectCatOverlayImage.src = `/api/dev/inject_cat_image?t=${Date.now()}`;
+        }
+        if (injectCatOverlayImage.complete && injectCatOverlayImage.naturalWidth) {
+            ctx.drawImage(injectCatOverlayImage, dx, dy, dw, dh);
+        }
+    } else {
+        injectCatOverlayImage = null;
+    }
+
     // Draw perimeter
     if (data.perimeter && data.perimeter.length >= 3) {
         ctx.strokeStyle = 'rgba(255, 200, 0, 0.8)';  // Cyan/teal (matches config.PERIMETER_COLOR in BGR→RGB)

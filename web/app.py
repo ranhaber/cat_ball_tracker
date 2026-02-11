@@ -607,6 +607,31 @@ class VideoProcessor:
                             self._cached_jpeg = self._encode_jpeg(ann, self.current_jpeg_quality)
                         with self.frame_lock:
                             self.current_frame = frame
+                    # Update H.264 overlay so the injected cat is drawn on the client overlay canvas
+                    cap_w, cap_h = self.current_resolution
+                    perim_points = []
+                    if self.perimeter and hasattr(self.perimeter, 'get_points'):
+                        raw = self.perimeter.get_points()
+                        if raw:
+                            perim_points = [[int(p[0]), int(p[1])] for p in raw]
+                    inject_bbox = None
+                    if self.inject_cat_handler and self.inject_cat_handler.bbox:
+                        b = self.inject_cat_handler.bbox
+                        inject_bbox = [int(b[0]), int(b[1]), int(b[2]), int(b[3])]
+                    overlay = {
+                        "phase": self._phase,
+                        "fps": round(self.fps, 1),
+                        "mode": self.detector.get_detection_mode() if self.detector else "cat",
+                        "objects": self.tracker.get_object_count() if self.tracker else 0,
+                        "detections": [],
+                        "motion_regions": [],
+                        "crop_region": None,
+                        "perimeter": perim_points,
+                        "capture_res": [cap_w, cap_h],
+                        "inject_cat_bbox": inject_bbox,
+                    }
+                    with self._overlay_data_lock:
+                        self._overlay_data = overlay
                 
                 # ══════════════════════════════════════════════════════════
                 # PHASE STATE MACHINE: IDLE → ACQUISITION → TRACKING → WATCH

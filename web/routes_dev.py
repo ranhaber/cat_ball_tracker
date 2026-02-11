@@ -3,6 +3,7 @@ Developer API routes — system info, inject cat test, service control.
 
 Routes:
     POST /api/dev/inject_cat        — Toggle cat injection test mode
+    GET  /api/dev/inject_cat_image  — Test cat image for H.264 overlay
     GET  /api/dev/system            — Detailed system information
     GET  /api/dev/service/<name>    — Service status
     POST /api/dev/service/<name>    — Start/stop service
@@ -10,8 +11,9 @@ Routes:
 
 import os
 import cv2
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, jsonify, request, send_file
 from processing.memory import reclaim_memory
+import config
 
 dev_bp = Blueprint('dev', __name__)
 
@@ -65,6 +67,14 @@ def init_dev_routes(video_processor):
               f"current_frame={'SET' if video_processor.current_frame is not None else 'NONE'}, "
               f"stream_clients={video_processor.stream_clients}")
         return jsonify({"inject_cat": video_processor.inject_cat, "status": status})
+    
+    @dev_bp.route('/api/dev/inject_cat_image', methods=['GET'])
+    def dev_inject_cat_image():
+        """Serve the test cat image for H.264 overlay drawing."""
+        cat_path = os.path.join(config.BASE_DIR, 'models', 'test_cat.png')
+        if not os.path.isfile(cat_path):
+            return jsonify({"error": "test_cat.png not found"}), 404
+        return send_file(cat_path, mimetype='image/png')
     
     @dev_bp.route('/api/dev/system', methods=['GET'])
     def dev_system_info():
