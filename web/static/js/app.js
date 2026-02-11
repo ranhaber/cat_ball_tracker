@@ -22,6 +22,7 @@ document.addEventListener('DOMContentLoaded', () => {
     initProfileSelector();
     initVideoSource();
     initLensCalibration();
+    initH264Stream();
     loadCurrentState();
 });
 
@@ -41,31 +42,316 @@ function initTabs() {
 }
 
 // ============================================================================
-// Video Stream Toggle (Start/Stop)
+// Video Stream Toggle (Start/Stop) + Mode Switch (H.264 / MJPEG)
 // ============================================================================
-let streamActive = true;
+let streamActive = false;  // Start inactive — initH264Stream or initVideoReconnect will activate
+let streamMode = 'h264';   // 'h264' or 'mjpeg'
 
 function toggleStream() {
-    const videoStream = document.getElementById('video-stream');
     const btn = document.getElementById('toggle-stream');
     
     if (streamActive) {
-        // Set flag BEFORE clearing src (clearing src triggers onerror)
         streamActive = false;
-        videoStream.src = '';
-        videoStream.alt = 'Stream paused — click ▶ Start Stream to resume';
+        stopCurrentStream();
         btn.textContent = '▶ Start Stream';
         btn.classList.remove('btn-primary');
         btn.classList.add('btn-success');
     } else {
-        // Start: set src back to video feed
-        videoStream.src = `/video_feed?t=${Date.now()}`;
-        videoStream.alt = 'Video Stream';
+        streamActive = true;
+        startCurrentStream();
         btn.textContent = '⏸ Stop Stream';
         btn.classList.remove('btn-success');
         btn.classList.add('btn-primary');
-        streamActive = true;
     }
+}
+
+function switchStreamMode(mode) {
+    if (mode === streamMode) return;
+    const wasActive = streamActive;
+    if (wasActive) stopCurrentStream();
+    streamMode = mode;
+    if (wasActive) startCurrentStream();
+}
+
+function startCurrentStream() {
+    if (streamMode === 'h264') {
+        startH264Stream();
+    } else {
+        startMjpegStream();
+    }
+}
+
+function stopCurrentStream() {
+    stopH264Stream();
+    stopMjpegStream();
+}
+
+function startMjpegStream() {
+    const videoStream = document.getElementById('video-stream');
+    const h264Video = document.getElementById('h264-video');
+    const overlayCanvas = document.getElementById('overlay-canvas');
+    
+    h264Video.style.display = 'none';
+    overlayCanvas.style.display = 'none';
+    videoStream.style.display = '';
+    videoStream.src = `/video_feed?t=${Date.now()}`;
+    videoStream.alt = 'Video Stream';
+}
+
+function stopMjpegStream() {
+    const videoStream = document.getElementById('video-stream');
+    videoStream.src = '';
+    videoStream.style.display = 'none';
+}
+
+// ============================================================================
+// H.264 Hardware-Accelerated Streaming (WebSocket + jMuxer + Canvas Overlay)
+// ============================================================================
+let h264Ws = null;
+let h264Jmuxer = null;
+let h264ReconnectTimer = null;
+let h264Overlays = null;  // Latest overlay data from server
+
+function initH264Stream() {
+    // Default to H.264 if jMuxer is available, otherwise fall back to MJPEG
+    if (typeof JMuxer === 'undefined') {
+        console.log('[H264] jMuxer not loaded, falling back to MJPEG');
+        streamMode = 'mjpeg';
+        const sel = document.getElementById('stream-mode-select');
+        if (sel) sel.value = 'mjpeg';
+    }
+    // Start streaming
+    streamActive = true;
+    startCurrentStream();
+    const btn = document.getElementById('toggle-stream');
+    if (btn) {
+        btn.textContent = '⏸ Stop Stream';
+        btn.classList.remove('btn-success');
+        btn.classList.add('btn-primary');
+    }
+}
+
+function startH264Stream() {
+    const h264Video = document.getElementById('h264-video');
+    const videoStream = document.getElementById('video-stream');
+    const overlayCanvas = document.getElementById('overlay-canvas');
+    
+    if (!h264Video || typeof JMuxer === 'undefined') {
+        // Fall back to MJPEG
+        streamMode = 'mjpeg';
+        startMjpegStream();
+        return;
+    }
+    
+    // Show H.264 elements, hide MJPEG
+    videoStream.style.display = 'none';
+    h264Video.style.display = '';
+    overlayCanvas.style.display = '';
+    
+    // Create jMuxer instance
+    if (h264Jmuxer) {
+        try { h264Jmuxer.destroy(); } catch(e) {}
+    }
+    h264Jmuxer = new JMuxer({
+        node: 'h264-video',
+        mode: 'video',
+        fps: 15,
+        flushingTime: 100,
+        debug: false
+    });
+    
+    // Connect WebSocket
+    const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const wsUrl = `${protocol}//${location.host}/ws/stream`;
+    
+    if (h264Ws) {
+        try { h264Ws.close(); } catch(e) {}
+    }
+    
+    h264Ws = new WebSocket(wsUrl);
+    h264Ws.binaryType = 'arraybuffer';
+    
+    h264Ws.onopen = () => {
+        console.log('[H264] WebSocket connected');
+        showConnectionStatus('connected');
+    };
+    
+    h264Ws.onmessage = (event) => {
+        if (event.data instanceof ArrayBuffer) {
+            // Binary: H.264 NALU data → feed to jMuxer
+            if (h264Jmuxer) {
+                h264Jmuxer.feed({ video: new Uint8Array(event.data) });
+            }
+        } else {
+            // Text: JSON overlay data → draw on canvas
+            try {
+                h264Overlays = JSON.parse(event.data);
+                drawH264Overlays();
+            } catch(e) {
+                console.warn('[H264] Invalid overlay JSON:', e);
+            }
+        }
+    };
+    
+    h264Ws.onclose = () => {
+        console.log('[H264] WebSocket closed');
+        if (streamActive && streamMode === 'h264') {
+            showConnectionStatus('disconnected');
+            // Auto-reconnect after 3 seconds
+            h264ReconnectTimer = setTimeout(() => {
+                if (streamActive && streamMode === 'h264') {
+                    console.log('[H264] Reconnecting...');
+                    startH264Stream();
+                }
+            }, 3000);
+        }
+    };
+    
+    h264Ws.onerror = (err) => {
+        console.warn('[H264] WebSocket error:', err);
+    };
+}
+
+function stopH264Stream() {
+    if (h264ReconnectTimer) {
+        clearTimeout(h264ReconnectTimer);
+        h264ReconnectTimer = null;
+    }
+    if (h264Ws) {
+        try { h264Ws.close(); } catch(e) {}
+        h264Ws = null;
+    }
+    if (h264Jmuxer) {
+        try { h264Jmuxer.destroy(); } catch(e) {}
+        h264Jmuxer = null;
+    }
+    const h264Video = document.getElementById('h264-video');
+    const overlayCanvas = document.getElementById('overlay-canvas');
+    if (h264Video) h264Video.style.display = 'none';
+    if (overlayCanvas) overlayCanvas.style.display = 'none';
+}
+
+// ============================================================================
+// Canvas Overlay Drawing (for H.264 mode — replaces server-side cv2 annotations)
+// ============================================================================
+function drawH264Overlays() {
+    const canvas = document.getElementById('overlay-canvas');
+    const video = document.getElementById('h264-video');
+    if (!canvas || !video || !h264Overlays) return;
+    
+    // Match canvas size to video display size
+    const rect = video.getBoundingClientRect();
+    if (canvas.width !== rect.width || canvas.height !== rect.height) {
+        canvas.width = rect.width;
+        canvas.height = rect.height;
+    }
+    
+    const ctx = canvas.getContext('2d');
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    
+    const data = h264Overlays;
+    const capW = data.capture_res ? data.capture_res[0] : 2304;
+    const capH = data.capture_res ? data.capture_res[1] : 1296;
+    
+    // Scale factors: capture coords → canvas pixels
+    // The H.264 stream encodes the lores frame, but overlay coords are in capture resolution
+    const sx = canvas.width / capW;
+    const sy = canvas.height / capH;
+    
+    // Draw perimeter
+    if (data.perimeter && data.perimeter.length >= 3) {
+        ctx.strokeStyle = 'rgba(255, 200, 0, 0.8)';  // Cyan/teal (matches config.PERIMETER_COLOR in BGR→RGB)
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(data.perimeter[0][0] * sx, data.perimeter[0][1] * sy);
+        for (let i = 1; i < data.perimeter.length; i++) {
+            ctx.lineTo(data.perimeter[i][0] * sx, data.perimeter[i][1] * sy);
+        }
+        ctx.closePath();
+        ctx.stroke();
+        
+        // Draw perimeter vertices
+        ctx.fillStyle = 'rgba(255, 200, 0, 0.8)';
+        for (const pt of data.perimeter) {
+            ctx.beginPath();
+            ctx.arc(pt[0] * sx, pt[1] * sy, 3, 0, Math.PI * 2);
+            ctx.fill();
+        }
+    }
+    
+    // Draw motion regions (yellow)
+    if (data.motion_regions && data.motion_regions.length > 0) {
+        ctx.strokeStyle = 'rgba(0, 255, 255, 0.8)';  // Yellow in BGR → Cyan in RGB
+        ctx.lineWidth = 2;
+        for (const [mx, my, mw, mh] of data.motion_regions) {
+            ctx.strokeRect(mx * sx, my * sy, mw * sx, mh * sy);
+        }
+        // MOTION label
+        ctx.fillStyle = 'rgba(255, 0, 0, 0.9)';
+        ctx.font = 'bold 14px sans-serif';
+        ctx.fillText('MOTION', 10, canvas.height - 20);
+    }
+    
+    // Draw crop region (magenta)
+    if (data.crop_region) {
+        const [cx, cy, cw, ch] = data.crop_region;
+        ctx.strokeStyle = 'rgba(255, 0, 255, 0.8)';
+        ctx.lineWidth = 2;
+        ctx.strokeRect(cx * sx, cy * sy, cw * sx, ch * sy);
+    }
+    
+    // Draw detections
+    if (data.detections && data.detections.length > 0) {
+        const boxColor = data.mode === 'cat' ? 'rgba(0, 255, 0, 0.9)' : 'rgba(255, 165, 0, 0.9)';
+        ctx.strokeStyle = boxColor;
+        ctx.lineWidth = 2;
+        
+        for (const det of data.detections) {
+            const dx1 = det.x1 * sx, dy1 = det.y1 * sy;
+            const dx2 = det.x2 * sx, dy2 = det.y2 * sy;
+            ctx.strokeRect(dx1, dy1, dx2 - dx1, dy2 - dy1);
+            
+            // Label
+            let label = `${det.class}: ${det.conf}`;
+            if (det.track_id !== undefined) label = `ID:${det.track_id} ${label}`;
+            
+            ctx.font = 'bold 12px sans-serif';
+            const tm = ctx.measureText(label);
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+            ctx.fillRect(dx1, dy1 - 16, tm.width + 6, 16);
+            ctx.fillStyle = 'white';
+            ctx.fillText(label, dx1 + 3, dy1 - 4);
+        }
+    }
+    
+    // Draw status overlay (top-left)
+    const phaseColors = {
+        'IDLE': '#808080', 'ACQUISITION': '#00ffff',
+        'TRACKING': '#00ff00', 'WATCH': '#ffa500'
+    };
+    
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
+    ctx.fillRect(5, 5, 250, 55);
+    
+    ctx.font = 'bold 13px sans-serif';
+    ctx.fillStyle = '#00ff00';
+    ctx.fillText(`Mode: ${(data.mode || '--').toUpperCase()} | FPS: ${data.fps || '--'}`, 10, 20);
+    
+    ctx.font = '12px sans-serif';
+    ctx.fillStyle = '#ffff00';
+    ctx.fillText(`Objects: ${data.objects || 0}`, 10, 35);
+    
+    ctx.fillStyle = phaseColors[data.phase] || '#ffffff';
+    ctx.fillText(`Phase: ${data.phase || '--'}`, 10, 50);
+    
+    // Timestamp (top-right)
+    const ts = new Date().toLocaleString('en-GB');
+    ctx.font = '11px sans-serif';
+    const tsWidth = ctx.measureText(ts).width;
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
+    ctx.fillRect(canvas.width - tsWidth - 15, 5, tsWidth + 10, 18);
+    ctx.fillStyle = 'white';
+    ctx.fillText(ts, canvas.width - tsWidth - 10, 18);
 }
 
 // ============================================================================

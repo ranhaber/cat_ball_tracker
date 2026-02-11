@@ -22,6 +22,10 @@ gunicorn==21.2.0
 # Falls back to cv2.imencode gracefully if not installed
 simplejpeg
 
+# WebSocket support for H.264 hardware streaming (v3.10.0+)
+# Falls back to MJPEG streaming gracefully if not installed
+flask-sock
+
 # ============================================
 # Below packages are usually pre-installed via apt on RPi
 # Only needed if running on non-RPi systems:

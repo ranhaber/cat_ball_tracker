@@ -56,6 +56,14 @@ STREAM_HEIGHT = 540  # Updated below
 # Target FPS (actual FPS limited by detection speed)
 TARGET_FPS = 15
 
+# Autofocus: Camera Module 3 has hardware PDAF. For a ceiling-mounted camera at a
+# fixed height watching a known room, manual focus eliminates AF hunting/blur during
+# fast cat movement and saves CPU.
+# AfMode: 0=Manual (recommended), 1=Auto (trigger once), 2=Continuous (default if unset)
+# LensPosition: diopters (1/distance_in_meters). 0.0=infinity, 0.5=2m, 1.0=1m
+AF_MODE = 0          # Manual — no autofocus hunting
+LENS_POSITION = 0.0  # Infinity — best depth of field for 0-13m range. Tune if needed.
+
 # Camera warmup time in seconds
 CAMERA_WARMUP = 2.0
 
@@ -118,6 +126,13 @@ DEBUG = True        # Enable detailed performance logging
 
 # MJPEG streaming quality (0-100)
 JPEG_QUALITY = 70
+
+# H.264 hardware streaming (v3.10.0+)
+# The Pi's VideoCore has a dedicated H.264 encoder — zero CPU cost.
+# H.264 is streamed via WebSocket + jMuxer in the browser (GPU-decoded).
+# MJPEG /video_feed is kept as fallback for snapshots and simple clients.
+H264_QP = 24           # Quantization parameter (lower = higher quality/bitrate). 20-30 is typical.
+H264_ENABLED = True    # Enable H.264 WebSocket streaming (disable to save ~3MB RAM from encoder)
 
 # ============================================================================
 # PERFORMANCE SETTINGS (for RPi Zero 2W optimization)

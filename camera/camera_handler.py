@@ -3,6 +3,7 @@ Camera Handler for Raspberry Pi Camera Module 3
 Uses picamera2 library for hardware-accelerated capture
 """
 
+import io
 import time
 import threading
 import numpy as np
@@ -14,8 +15,43 @@ except ImportError:
     PICAMERA_AVAILABLE = False
     print("Warning: picamera2 not available. Using mock camera for testing.")
 
+try:
+    from picamera2.encoders import H264Encoder
+    H264_AVAILABLE = True
+except ImportError:
+    H264_AVAILABLE = False
+
 import cv2
 import config
+
+
+class H264StreamOutput(io.BufferedIOBase):
+    """Receives H.264 NALUs from picamera2's hardware encoder and buffers them
+    for WebSocket streaming to browser clients.
+    
+    Protocol: Each write() call contains one or more complete NALUs (Annex B format
+    with 0x00000001 start codes). The WebSocket route reads frames via get_frame()
+    and sends them as binary messages to connected jMuxer clients.
+    """
+    
+    def __init__(self):
+        self.frame = None
+        self.condition = threading.Condition()
+    
+    def write(self, buf):
+        with self.condition:
+            self.frame = bytes(buf)
+            self.condition.notify_all()
+        return len(buf)
+    
+    def get_frame(self, timeout=1.0):
+        """Block until a new H.264 frame is available, or timeout."""
+        with self.condition:
+            if self.condition.wait_for(lambda: self.frame is not None, timeout):
+                frame = self.frame
+                self.frame = None
+                return frame
+            return None
 
 
 class MockCamera:
@@ -138,11 +174,21 @@ class CameraHandler:
         self.use_mock = False  # Will be set in start()
         self.has_lores = False  # Set to True when ISP lores stream is active
         self.lores_size = getattr(config, 'LORES_RESOLUTION', (960, 540))
+        self.h264_encoder = None  # Set up in _init_picamera if H.264 streaming enabled
         
         self._frame_count = 0
         self._start_time = None
         self._current_fps = 0.0
         
+    def _build_controls(self):
+        """Build picamera2 controls dict with framerate + manual focus."""
+        controls = {"FrameRate": self.fps}
+        af_mode = getattr(config, 'AF_MODE', None)
+        if af_mode is not None:
+            controls["AfMode"] = af_mode
+            controls["LensPosition"] = getattr(config, 'LENS_POSITION', 0.0)
+        return controls
+    
     def start(self):
         """Start the camera and capture thread"""
         if self.running:
@@ -220,9 +266,7 @@ class CameraHandler:
                         "size": (lores_w, lores_h),
                         "format": "YUV420"  # ISP lores requires YUV; converted to BGR in processing loop
                     },
-                    controls={
-                        "FrameRate": self.fps
-                    },
+                    controls=self._build_controls(),
                     buffer_count=2  # 2 buffer sets (main+lores each). Saves RAM vs 4.
                 )
                 self.camera.configure(camera_config)
@@ -236,9 +280,7 @@ class CameraHandler:
                         "size": (self.width, self.height),
                         "format": "RGB888"
                     },
-                    controls={
-                        "FrameRate": self.fps
-                    },
+                    controls=self._build_controls(),
                     buffer_count=2
                 )
                 self.camera.configure(camera_config)
@@ -248,7 +290,9 @@ class CameraHandler:
             try:
                 self.camera.start()
                 lores_str = f", lores={lores_w}×{lores_h}" if self.has_lores else ""
-                print(f"✅ Camera started successfully (2×2 binned, full 120° FOV{lores_str})")
+                af_mode = getattr(config, 'AF_MODE', None)
+                af_str = f", AF=manual(pos={getattr(config, 'LENS_POSITION', 0.0)})" if af_mode == 0 else ""
+                print(f"✅ Camera started successfully (2×2 binned, full 120° FOV{lores_str}{af_str})")
             except Exception as e:
                 print(f"❌ Camera start failed: {e}")
                 raise
@@ -374,9 +418,7 @@ class CameraHandler:
                     "size": (width, height),
                     "format": "YUV420"
                 },
-                controls={
-                    "FrameRate": self.fps
-                },
+                controls=self._build_controls(),
                 buffer_count=2
             )
             self.camera.configure(camera_config)
@@ -392,7 +434,7 @@ class CameraHandler:
                 camera_config = self.camera.create_video_configuration(
                     main={"size": (self.width, self.height), "format": "RGB888"},
                     lores={"size": self.lores_size, "format": "YUV420"},
-                    controls={"FrameRate": self.fps},
+                    controls=self._build_controls(),
                     buffer_count=2
                 )
                 self.camera.configure(camera_config)
@@ -402,13 +444,57 @@ class CameraHandler:
                 print(f"[LORES] Restore also failed ({e2}), restarting main-only")
                 camera_config = self.camera.create_video_configuration(
                     main={"size": (self.width, self.height), "format": "RGB888"},
-                    controls={"FrameRate": self.fps},
+                    controls=self._build_controls(),
                     buffer_count=2
                 )
                 self.camera.configure(camera_config)
                 self.camera.start()
                 self.has_lores = False
             return False
+    
+    def start_h264_encoder(self):
+        """Start the hardware H.264 encoder on the lores stream.
+        
+        The VideoCore H.264 encoder runs at near-zero CPU cost. It encodes
+        the lores YUV420 stream directly — no color conversion needed.
+        Called when the first WebSocket client connects.
+        """
+        if self.use_mock or not PICAMERA_AVAILABLE or not H264_AVAILABLE:
+            print("[H264] Not available (mock camera or missing picamera2.encoders)")
+            return False
+        if self.h264_encoder is not None:
+            return True  # Already running
+        
+        try:
+            qp = getattr(config, 'H264_QP', 24)
+            self.h264_output = H264StreamOutput()
+            self.h264_encoder = H264Encoder(qp=qp)
+            self.camera.start_encoder(self.h264_encoder, self.h264_output, name="lores")
+            lw, lh = self.lores_size
+            print(f"[H264] Hardware encoder started on lores {lw}×{lh} (qp={qp})")
+            return True
+        except Exception as e:
+            print(f"[H264] Failed to start encoder: {e}")
+            self.h264_encoder = None
+            self.h264_output = None
+            return False
+    
+    def stop_h264_encoder(self):
+        """Stop the hardware H.264 encoder. Called when the last WebSocket client disconnects."""
+        if self.h264_encoder is not None:
+            try:
+                self.camera.stop_encoder(self.h264_encoder)
+            except Exception as e:
+                print(f"[H264] Error stopping encoder: {e}")
+            self.h264_encoder = None
+            self.h264_output = None
+            print("[H264] Hardware encoder stopped")
+    
+    def get_h264_frame(self, timeout=1.0):
+        """Get the next H.264 encoded frame (blocks until available or timeout)."""
+        if self.h264_output is not None:
+            return self.h264_output.get_frame(timeout)
+        return None
     
     def pause(self):
         """Pause the camera (stop streaming but keep device open).
@@ -449,6 +535,7 @@ class CameraHandler:
     def stop(self):
         """Stop the camera and release resources"""
         self.running = False
+        self.stop_h264_encoder()
         
         if self.capture_thread is not None:
             self.capture_thread.join(timeout=2.0)

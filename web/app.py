@@ -112,6 +112,12 @@ class VideoProcessor:
         self._cached_jpeg_lock = threading.Lock()
         self._cached_capture_frame = None  # Raw frame for snapshot/recording
         
+        # H.264 WebSocket streaming state
+        self._h264_clients = 0
+        self._h264_clients_lock = threading.Lock()
+        self._overlay_data = None       # Latest overlay JSON dict for H.264 Canvas
+        self._overlay_data_lock = threading.Lock()
+        
         # Load saved settings (or defaults)
         saved = settings.load_settings()
         
@@ -212,6 +218,89 @@ class VideoProcessor:
         with self._stream_clients_lock:
             self._stream_clients = max(0, self._stream_clients - 1)
             return self._stream_clients
+    
+    # =========================================================================
+    # H.264 WebSocket Streaming
+    # =========================================================================
+    
+    def increment_h264_clients(self):
+        """Thread-safe increment. Starts H.264 encoder on first client."""
+        with self._h264_clients_lock:
+            self._h264_clients += 1
+            n = self._h264_clients
+        if n == 1 and self.camera:
+            self.camera.start_h264_encoder()
+        return n
+    
+    def decrement_h264_clients(self):
+        """Thread-safe decrement. Stops H.264 encoder when last client leaves."""
+        with self._h264_clients_lock:
+            self._h264_clients = max(0, self._h264_clients - 1)
+            n = self._h264_clients
+        if n == 0 and self.camera:
+            self.camera.stop_h264_encoder()
+        return n
+    
+    @property
+    def h264_clients(self):
+        with self._h264_clients_lock:
+            return self._h264_clients
+    
+    def get_h264_frame(self, timeout=1.0):
+        """Get next H.264 encoded frame from hardware encoder."""
+        if self.camera:
+            return self.camera.get_h264_frame(timeout)
+        return None
+    
+    def get_overlay_data(self):
+        """Get latest overlay data for H.264 Canvas rendering."""
+        with self._overlay_data_lock:
+            return self._overlay_data
+    
+    def _update_overlay_data(self, last_detections, motion_regions_in_perimeter,
+                             crop_region, tracked_objects):
+        """Package current detection state as JSON-serializable dict for Canvas overlay."""
+        capture_w, capture_h = self.current_resolution
+        
+        detections_list = []
+        for det in last_detections:
+            x1, y1, x2, y2, conf, class_id = det
+            entry = {
+                "x1": int(x1), "y1": int(y1), "x2": int(x2), "y2": int(y2),
+                "conf": round(float(conf), 2),
+                "class": config.CLASS_NAMES.get(class_id, f"Class {class_id}"),
+            }
+            # Match track ID if available
+            if tracked_objects:
+                cx_det, cy_det = (x1 + x2) // 2, (y1 + y2) // 2
+                for obj_id, centroid in tracked_objects.items():
+                    if abs(int(centroid[0]) - cx_det) < 20 and abs(int(centroid[1]) - cy_det) < 20:
+                        entry["track_id"] = obj_id
+                        break
+            detections_list.append(entry)
+        
+        # Get perimeter points in capture coords
+        perim_points = []
+        if self.perimeter and hasattr(self.perimeter, 'get_perimeter'):
+            raw = self.perimeter.get_perimeter()
+            if raw:
+                perim_points = [[int(p[0]), int(p[1])] for p in raw]
+        
+        overlay = {
+            "phase": self._phase,
+            "fps": round(self.fps, 1),
+            "mode": self.detector.get_detection_mode() if self.detector else "cat",
+            "objects": self.tracker.get_object_count() if self.tracker else 0,
+            "detections": detections_list,
+            "motion_regions": [[int(x), int(y), int(w), int(h)]
+                               for x, y, w, h in motion_regions_in_perimeter] if self.show_motion_regions else [],
+            "crop_region": [int(v) for v in crop_region] if crop_region and self.show_motion_regions else None,
+            "perimeter": perim_points,
+            "capture_res": [capture_w, capture_h],
+        }
+        
+        with self._overlay_data_lock:
+            self._overlay_data = overlay
     
     # =========================================================================
     # ISP Lores Stream Helpers
@@ -880,6 +969,11 @@ class VideoProcessor:
                             _perf_jpeg_ms = round((time.perf_counter() - t_jpg) * 1000, 1)
                             _perf_annot_ms = round((time.perf_counter() - t_annot_start) * 1000, 1)
                         
+                        # Update overlay data for H.264 Canvas streaming (always, even without clients —
+                        # data is tiny and read by WebSocket route when clients connect)
+                        self._update_overlay_data(last_detections, motion_regions_in_perimeter,
+                                                  crop_region, tracked_objects)
+                        
                         # Store raw frame for snapshot and recording (no copy needed —
                         # frame is replaced by a new camera buffer on the next iteration)
                         with self.frame_lock:
@@ -1439,6 +1533,7 @@ def create_app():
     from web.routes_calibration import calibration_bp, init_calibration_routes
     from web.routes_video import video_bp, init_video_routes
     from web.routes_dev import dev_bp, init_dev_routes
+    from web.routes_h264 import init_h264_routes
     
     # Initialize routes with video processor reference
     init_streaming_routes(video_processor)
@@ -1457,6 +1552,10 @@ def create_app():
     app.register_blueprint(calibration_bp)
     app.register_blueprint(video_bp)
     app.register_blueprint(dev_bp)
+    
+    # H.264 WebSocket route (registered on app, not as blueprint — flask-sock requirement)
+    if getattr(config, 'H264_ENABLED', False):
+        init_h264_routes(app, video_processor)
         
     return app
 

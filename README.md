@@ -2,7 +2,7 @@
 
 A real-time cat and ball detection system for Raspberry Pi Zero 2W with Camera Module 3. Features motion-first detection for efficiency, a web interface for live streaming, and zone-based tracking.
 
-**Version:** 3.9.1
+**Version:** 3.10.0
 
 **For agents and developers:** See **[AGENTS.md](AGENTS.md)** for project guidelines, concurrency rules, and where to find things. Use it as the single entry point before diving into code or other docs.
 
@@ -69,30 +69,40 @@ Detection and tracking work **independently of the web UI** — the system runs 
 │  │  → undistort detection pixel → homography → world xy │            │
 │  └─────────────────────────────────────────────────────┘            │
 │           │                                                         │
-│           ▼ (only if stream clients connected)                      │
+│           ▼ (only if MJPEG clients connected)                       │
 │  ┌─────────────────────────────────────────────────────┐            │
-│  │  Frame Annotation (on lores-derived stream frame)    │            │
-│  │  - Draw perimeter, boxes, FPS overlay                │            │
+│  │  MJPEG Annotation (fallback path, on lores BGR)      │            │
+│  │  - Draw perimeter, boxes, FPS overlay via cv2         │            │
 │  │  - JPEG encode (simplejpeg/libjpeg-turbo NEON SIMD)  │            │
-│  │  - Store for MJPEG streaming                         │            │
+│  │  - Store for MJPEG /video_feed                       │            │
+│  └─────────────────────────────────────────────────────┘            │
+│                                                                     │
+│  ┌─────────────────────────────────────────────────────┐            │
+│  │  H.264 Hardware Stream (v3.10.0+, zero CPU)          │            │
+│  │  - VideoCore H.264 encoder on lores YUV420 directly  │            │
+│  │  - WebSocket /ws/stream → jMuxer in browser          │            │
+│  │  - Overlays sent as JSON, drawn client-side on Canvas│            │
+│  │  - Encoder starts/stops with client connections      │            │
 │  └─────────────────────────────────────────────────────┘            │
 │                                                                     │
 │  Thread: CatDome-Main (Flask web server)                            │
 │  ┌─────────────────────────────────────────────────────┐            │
 │  │  Flask Web Server                                    │            │
-│  │  - MJPEG streaming (rate-limited ~10fps)             │            │
+│  │  - H.264 WebSocket streaming (default, HW-encoded)   │            │
+│  │  - MJPEG streaming (fallback, /video_feed)           │            │
 │  │  - REST API (status, calibration, settings)          │            │
 │  │  - Stream resolution change → lores reconfigure      │            │
 │  │  - Lens-corrected snapshots for calibration          │            │
 │  └─────────────────────────────────────────────────────┘            │
 │                                                                     │
 │  CPU optimization:                                                  │
+│  - H.264: hardware encoder on lores YUV420, zero CPU cost           │
 │  - ISP lores: motion + stream resize offloaded to hardware          │
 │  - Y-plane: motion uses I420 Y channel directly (skips 2 cvtColor)  │
-│  - Deferred BGR: YUV→BGR only when stream clients are watching      │
+│  - Manual focus: fixed LensPosition, no AF hunting/CPU overhead     │
+│  - Deferred BGR: YUV→BGR only when MJPEG clients are watching       │
 │  - OpenCV: 1 thread idle, 4 when tracking                           │
 │  - TFLite: 0 threads idle, 3 when detecting                        │
-│  - MJPEG: simplejpeg NEON SIMD, skipped when no clients             │
 └─────────────────────────────────────────────────────────────────────┘
                           │
                           ▼ (HTTP, optional)
@@ -799,6 +809,7 @@ The **displayed FPS** is processed frames per second (how often the phase block 
 
 ## 📝 Version History
 
+- **v3.10.0** - H.264 hardware streaming: VideoCore H.264 encoder on lores YUV420 (zero CPU), WebSocket /ws/stream with jMuxer browser decode (GPU), Canvas overlay for detections/perimeter/phase (eliminates server-side cv2 annotation + JPEG encode ~41ms/frame). Manual focus (AfMode=0, fixed LensPosition) eliminates autofocus hunting. Stream mode selector (H.264 default, MJPEG fallback). MJPEG /video_feed kept for snapshots and simple clients. flask-sock for WebSocket support.
 - **v3.9.1** - Y-plane optimization: motion detector receives the I420 Y channel directly (already grayscale), skipping both YUV→BGR (~15-25ms) and BGR→Gray (~2-3ms) conversions. BGR conversion deferred to stream annotation and skipped entirely when no clients are watching. Fix I420 color conversion (was YV12 → orange/blue swap). Dynamic lores reconfigure: when user picks stream resolution > 960×540, the ISP lores stream is reconfigured on-the-fly (~0.5s camera pause) instead of falling back to main-frame resize. Measured: ~498ms/frame (2 FPS) → ~108ms/frame (9 FPS) with streaming, further improved without stream clients.
 - **v3.9.0** - ISP lores dual-stream: picamera2 outputs a hardware-downscaled 960×540 lores stream alongside the 2304×1296 main stream, eliminating two expensive cv2.resize calls (~460ms/frame → ~3ms). Motion detection and MJPEG stream now resize from lores instead of main. simplejpeg (libjpeg-turbo NEON SIMD) added for ~50-70% faster JPEG encoding. All resize operations switched from INTER_AREA to INTER_LINEAR. Stream resolution selector continues to work on-the-fly; resolutions ≤960×540 use lores, larger fall back to main.
 - **v3.8.1** - Annotation optimization: resize raw frame to stream resolution first, then draw all annotations (perimeter, detections, motion, crop) on the small frame. Pre-computed scaled perimeter cache (invalidated on perimeter/stream-res change). Saves ~30-80ms per frame on RPi Zero 2W. Stop Stream button already skips entire annotation path (250ms saving).
