@@ -36,17 +36,10 @@
                 
                 <div style="margin-bottom: 8px;">
                     <button id="toggle-stream" class="btn btn-primary" onclick="toggleStream()">⏸ Stop Stream</button>
-                    <select id="stream-mode-select" onchange="switchStreamMode(this.value)" style="margin-left: 8px; padding: 4px;">
-                        <option value="h264">H.264 (HW)</option>
-                        <option value="mjpeg">MJPEG (fallback)</option>
-                    </select>
                 </div>
                 <div class="video-container" style="position: relative;">
-                    <!-- H.264 mode: video element + canvas overlay (default) -->
                     <video id="h264-video" autoplay muted playsinline style="width: 100%; display: none;"></video>
                     <canvas id="overlay-canvas" style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; display: none;"></canvas>
-                    <!-- MJPEG fallback mode -->
-                    <img id="video-stream" src="" alt="Video Stream" style="display: none;">
                 </div>
                 
                 <!-- Top-Down View (Bird's Eye) -->

@@ -42,66 +42,26 @@ function initTabs() {
 }
 
 // ============================================================================
-// Video Stream Toggle (Start/Stop) + Mode Switch (H.264 / MJPEG)
+// Video Stream Toggle (Start/Stop) — H.264 only
 // ============================================================================
-let streamActive = false;  // Start inactive — initH264Stream or initVideoReconnect will activate
-let streamMode = 'h264';   // 'h264' or 'mjpeg'
+let streamActive = false;
 
 function toggleStream() {
     const btn = document.getElementById('toggle-stream');
     
     if (streamActive) {
         streamActive = false;
-        stopCurrentStream();
+        stopH264Stream();
         btn.textContent = '▶ Start Stream';
         btn.classList.remove('btn-primary');
         btn.classList.add('btn-success');
     } else {
         streamActive = true;
-        startCurrentStream();
+        startH264Stream();
         btn.textContent = '⏸ Stop Stream';
         btn.classList.remove('btn-success');
         btn.classList.add('btn-primary');
     }
-}
-
-function switchStreamMode(mode) {
-    if (mode === streamMode) return;
-    const wasActive = streamActive;
-    if (wasActive) stopCurrentStream();
-    streamMode = mode;
-    if (wasActive) startCurrentStream();
-}
-
-function startCurrentStream() {
-    if (streamMode === 'h264') {
-        startH264Stream();
-    } else {
-        startMjpegStream();
-    }
-}
-
-function stopCurrentStream() {
-    stopH264Stream();
-    stopMjpegStream();
-}
-
-function startMjpegStream() {
-    const videoStream = document.getElementById('video-stream');
-    const h264Video = document.getElementById('h264-video');
-    const overlayCanvas = document.getElementById('overlay-canvas');
-    
-    h264Video.style.display = 'none';
-    overlayCanvas.style.display = 'none';
-    videoStream.style.display = '';
-    videoStream.src = `/video_feed?t=${Date.now()}`;
-    videoStream.alt = 'Video Stream';
-}
-
-function stopMjpegStream() {
-    const videoStream = document.getElementById('video-stream');
-    videoStream.src = '';
-    videoStream.style.display = 'none';
 }
 
 // ============================================================================
@@ -114,16 +74,12 @@ let h264Overlays = null;  // Latest overlay data from server
 let injectCatOverlayImage = null;  // Test cat image for H.264 overlay when Inject Cat is active
 
 function initH264Stream() {
-    // Default to H.264 if jMuxer is available, otherwise fall back to MJPEG
     if (typeof JMuxer === 'undefined') {
-        console.log('[H264] jMuxer not loaded, falling back to MJPEG');
-        streamMode = 'mjpeg';
-        const sel = document.getElementById('stream-mode-select');
-        if (sel) sel.value = 'mjpeg';
+        console.error('[H264] jMuxer not loaded — streaming unavailable');
+        return;
     }
-    // Start streaming
     streamActive = true;
-    startCurrentStream();
+    startH264Stream();
     const btn = document.getElementById('toggle-stream');
     if (btn) {
         btn.textContent = '⏸ Stop Stream';
@@ -134,18 +90,13 @@ function initH264Stream() {
 
 function startH264Stream() {
     const h264Video = document.getElementById('h264-video');
-    const videoStream = document.getElementById('video-stream');
     const overlayCanvas = document.getElementById('overlay-canvas');
     
     if (!h264Video || typeof JMuxer === 'undefined') {
-        // Fall back to MJPEG
-        streamMode = 'mjpeg';
-        startMjpegStream();
+        console.error('[H264] Cannot start — jMuxer or video element missing');
         return;
     }
     
-    // Show H.264 elements, hide MJPEG
-    videoStream.style.display = 'none';
     h264Video.style.display = '';
     overlayCanvas.style.display = '';
     
@@ -197,11 +148,11 @@ function startH264Stream() {
     
     h264Ws.onclose = () => {
         console.log('[H264] WebSocket closed');
-        if (streamActive && streamMode === 'h264') {
+        if (streamActive) {
             showConnectionStatus('disconnected');
             // Auto-reconnect after 3 seconds
             h264ReconnectTimer = setTimeout(() => {
-                if (streamActive && streamMode === 'h264') {
+                if (streamActive) {
                     console.log('[H264] Reconnecting...');
                     startH264Stream();
                 }
@@ -243,7 +194,7 @@ function startOverlayLoop() {
     if (_overlayAnimFrame) return;
     function loop() {
         drawH264Overlays();
-        if (streamActive && streamMode === 'h264') {
+        if (streamActive) {
             _overlayAnimFrame = requestAnimationFrame(loop);
         } else {
             _overlayAnimFrame = null;
@@ -393,71 +344,10 @@ function drawH264Overlays() {
 }
 
 // ============================================================================
-// Video Stream with Auto-Reconnect
+// Connection Status Indicator
 // ============================================================================
-let reconnectAttempts = 0;
-const MAX_RECONNECT_ATTEMPTS = 100;
-const RECONNECT_DELAY = 3000; // 3 seconds
-
 function initVideoReconnect() {
-    const videoStream = document.getElementById('video-stream');
-    
-    videoStream.onerror = () => {
-        if (!streamActive) return;  // Don't reconnect if user stopped stream
-        console.log('Video stream error - attempting reconnect...');
-        showConnectionStatus('disconnected');
-        scheduleReconnect();
-    };
-    
-    // Periodic check if stream is stale
-    setInterval(checkVideoHealth, 5000);
-}
-
-function scheduleReconnect() {
-    if (!streamActive) return;  // Don't reconnect if user stopped stream
-    if (reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
-        showConnectionStatus('failed');
-        return;
-    }
-    
-    reconnectAttempts++;
-    console.log(`Reconnect attempt ${reconnectAttempts}...`);
-    
-    setTimeout(() => {
-        reconnectVideo();
-    }, RECONNECT_DELAY);
-}
-
-function reconnectVideo() {
-    const videoStream = document.getElementById('video-stream');
-    const timestamp = new Date().getTime();
-    
-    // Add timestamp to force reload
-    videoStream.src = `/video_feed?t=${timestamp}`;
-    
-    showConnectionStatus('connecting');
-    
-    // Check if reconnect was successful
-    setTimeout(() => {
-        if (videoStream.complete && videoStream.naturalWidth > 0) {
-            reconnectAttempts = 0;
-            showConnectionStatus('connected');
-        }
-    }, 2000);
-}
-
-function checkVideoHealth() {
-    if (!streamActive) return;  // Don't check if user stopped stream
-    const videoStream = document.getElementById('video-stream');
-    
-    // If image seems broken, try reconnect
-    if (!videoStream.complete || videoStream.naturalWidth === 0) {
-        if (reconnectAttempts === 0) {
-            scheduleReconnect();
-        }
-    } else {
-        showConnectionStatus('connected');
-    }
+    // H.264 WebSocket handles its own reconnection — nothing to do here for MJPEG
 }
 
 function showConnectionStatus(status) {
