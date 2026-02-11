@@ -438,15 +438,19 @@ class VideoProcessor:
                              old_lores[0], old_lores[1], new_lores_w, new_lores_h, adjusted_scale)
                 
                 # ── Frame capture (main + ISP lores) ──
+                # Lores pipeline: extract Y plane (grayscale) for motion detection (zero-copy),
+                # defer YUV→BGR conversion until stream annotation needs it (only when clients watch).
                 t_capture_start = time.perf_counter()
                 frame = None
-                frame_lores = None  # ISP-downscaled frame (free on real camera)
+                frame_lores = None       # BGR lores (computed lazily or from inject/mock resize)
+                frame_lores_y = None     # Grayscale Y plane from I420 (for motion — skips 2 cvtColors)
+                _lores_from_isp = False  # True when lores comes from ISP (has raw YUV for deferred BGR)
                 if self.video_source == "file" and self.file_camera and self.file_camera.running:
                     frame = self.file_camera.get_frame()
                     if frame is None:
                         time.sleep(0.05)
                         continue
-                    # File source: no ISP lores, derive from main if needed
+                    # File source: no ISP lores, derive BGR from main
                     if self._using_lores:
                         frame_lores = cv2.resize(frame, self._lores_resolution,
                                                  interpolation=cv2.INTER_LINEAR)
@@ -465,11 +469,19 @@ class VideoProcessor:
                         with request as req:
                             frame = req.make_array("main")
                             if self._using_lores:
-                                # ISP lores is YUV420 / I420 (only YUV formats supported by ISP lores).
-                                # picamera2 "YUV420" = I420 (planar Y, U, V) — NOT YV12 (Y, V, U).
-                                # Using the wrong conversion (YV12) swaps U/V → orange instead of blue.
-                                lores_yuv = req.make_array("lores")
-                                frame_lores = cv2.cvtColor(lores_yuv, cv2.COLOR_YUV2BGR_I420)
+                                # ISP lores is I420 (planar Y, U, V). The Y plane (first h rows)
+                                # IS grayscale — we pass it directly to motion detection, skipping
+                                # both YUV→BGR (~15-25ms) and BGR→Gray (~2-3ms).
+                                # BGR conversion is deferred to the stream annotation section
+                                # and skipped entirely when no stream clients are watching.
+                                lores_raw = req.make_array("lores")
+                                lores_h_px = self._lores_resolution[1]
+                                frame_lores_y = lores_raw[:lores_h_px, :].copy()  # Y plane (grayscale)
+                                # Convert to BGR only if stream clients need it right now
+                                if self.stream_clients > 0:
+                                    frame_lores = cv2.cvtColor(lores_raw, cv2.COLOR_YUV2BGR_I420)
+                                else:
+                                    _lores_from_isp = True  # flag: frame_lores=None but Y is available
                 self._last_capture_ms = round((time.perf_counter() - t_capture_start) * 1000, 1)
                 
                 frame_h, frame_w = frame.shape[:2]
@@ -478,10 +490,12 @@ class VideoProcessor:
                 # ── Inject cat: paste cat on real camera frame ──
                 if self.inject_cat and self.inject_cat_handler:
                     frame = self.inject_cat_handler.paste_on_frame(frame)
-                    # Invalidate ISP lores — cat was pasted on main, derive new lores
+                    # Invalidate ISP lores — cat was pasted on main, derive new BGR lores
                     if self._using_lores:
                         frame_lores = cv2.resize(frame, self._lores_resolution,
                                                  interpolation=cv2.INTER_LINEAR)
+                        frame_lores_y = None   # ISP Y plane is stale (no cat)
+                        _lores_from_isp = False
                     # Debug logging
                     if not hasattr(self, '_inject_debug_count'):
                         self._inject_debug_count = 0
@@ -544,8 +558,11 @@ class VideoProcessor:
                         # Motion detection only. TFLite not loaded. Low power.
                         if self._phase == "IDLE":
                             t_motion_start = time.perf_counter()
-                            motion_input = frame_lores if frame_lores is not None else frame
-                            motion_result = self.motion_detector.detect(motion_input)
+                            if frame_lores_y is not None:
+                                motion_result = self.motion_detector.detect(frame_lores_y, gray_input=True)
+                            else:
+                                motion_input = frame_lores if frame_lores is not None else frame
+                                motion_result = self.motion_detector.detect(motion_input)
                             self._scale_motion_to_main(motion_result, frame_w, frame_h)
                             self._last_motion_ms = round((time.perf_counter() - t_motion_start) * 1000, 1)
                             motion_regions_in_perimeter = self._filter_motion_to_perimeter(
@@ -564,8 +581,11 @@ class VideoProcessor:
                         # TFLite runs every frame, searching for cat.
                         elif self._phase == "ACQUISITION":
                             t_motion_start = time.perf_counter()
-                            motion_input = frame_lores if frame_lores is not None else frame
-                            motion_result = self.motion_detector.detect(motion_input)
+                            if frame_lores_y is not None:
+                                motion_result = self.motion_detector.detect(frame_lores_y, gray_input=True)
+                            else:
+                                motion_input = frame_lores if frame_lores is not None else frame
+                                motion_result = self.motion_detector.detect(motion_input)
                             self._scale_motion_to_main(motion_result, frame_w, frame_h)
                             self._last_motion_ms = round((time.perf_counter() - t_motion_start) * 1000, 1)
                             t_filt_motion = time.perf_counter()
@@ -600,8 +620,11 @@ class VideoProcessor:
                         # Cat confirmed. TFLite every 3rd processed frame with motion crop.
                         elif self._phase == "TRACKING":
                             t_motion_start = time.perf_counter()
-                            motion_input = frame_lores if frame_lores is not None else frame
-                            motion_result = self.motion_detector.detect(motion_input)
+                            if frame_lores_y is not None:
+                                motion_result = self.motion_detector.detect(frame_lores_y, gray_input=True)
+                            else:
+                                motion_input = frame_lores if frame_lores is not None else frame
+                                motion_result = self.motion_detector.detect(motion_input)
                             self._scale_motion_to_main(motion_result, frame_w, frame_h)
                             self._last_motion_ms = round((time.perf_counter() - t_motion_start) * 1000, 1)
                             motion_regions_in_perimeter = self._filter_motion_to_perimeter(
@@ -641,8 +664,11 @@ class VideoProcessor:
                         # No motion but cat was recently detected. TFLite every 2nd frame.
                         elif self._phase == "WATCH":
                             t_motion_start = time.perf_counter()
-                            motion_input = frame_lores if frame_lores is not None else frame
-                            motion_result = self.motion_detector.detect(motion_input)
+                            if frame_lores_y is not None:
+                                motion_result = self.motion_detector.detect(frame_lores_y, gray_input=True)
+                            else:
+                                motion_input = frame_lores if frame_lores is not None else frame
+                                motion_result = self.motion_detector.detect(motion_input)
                             self._scale_motion_to_main(motion_result, frame_w, frame_h)
                             self._last_motion_ms = round((time.perf_counter() - t_motion_start) * 1000, 1)
                             motion_regions_in_perimeter = self._filter_motion_to_perimeter(

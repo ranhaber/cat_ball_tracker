@@ -2,7 +2,7 @@
 
 A real-time cat and ball detection system for Raspberry Pi Zero 2W with Camera Module 3. Features motion-first detection for efficiency, a web interface for live streaming, and zone-based tracking.
 
-**Version:** 3.9.0
+**Version:** 3.9.1
 
 **For agents and developers:** See **[AGENTS.md](AGENTS.md)** for project guidelines, concurrency rules, and where to find things. Use it as the single entry point before diving into code or other docs.
 
@@ -29,10 +29,13 @@ Detection and tracking work **independently of the web UI** — the system runs 
 │  │                                                             │    │
 │  │  ┌──────────────────┐   ┌────────────────────────────┐     │    │
 │  │  │  main stream     │   │  lores stream (ISP h/w)    │     │    │
-│  │  │  2304×1296 RGB   │   │  960×540+ YUV420→BGR       │     │    │
-│  │  │  (AI crop,       │   │  (motion detect, MJPEG     │     │    │
-│  │  │   snapshots,     │   │   stream — zero CPU resize)│     │    │
-│  │  │   recording)     │   │                            │     │    │
+│  │  │  2304×1296 RGB   │   │  960×540+ I420 (YUV420)    │     │    │
+│  │  │  (AI crop,       │   │  ┌─────────┐ ┌──────────┐ │     │    │
+│  │  │   snapshots,     │   │  │ Y plane │ │ I420→BGR │ │     │    │
+│  │  │   recording)     │   │  │ (gray,  │ │ (deferred│ │     │    │
+│  │  │                  │   │  │  free)   │ │  to      │ │     │    │
+│  │  │                  │   │  │  ↓motion │ │  stream) │ │     │    │
+│  │  │                  │   │  └─────────┘ └──────────┘ │     │    │
 │  │  └────────┬─────────┘   └─────────┬──────────────────┘     │    │
 │  │           │                       │                         │    │
 │  │  Fallback: if lores unavailable (unsupported camera, ISP   │    │
@@ -42,7 +45,8 @@ Detection and tracking work **independently of the web UI** — the system runs 
 │           │                       │                                 │
 │           │              ┌────────┴──────────┐                      │
 │           │              │  Motion Detector   │                      │
-│           │              │  (lores frame,     │                      │
+│           │              │  (Y plane direct,  │                      │
+│           │              │   skips 2 cvtColor, │                      │
 │           │              │   every 2nd frame)  │                      │
 │           │              └────────┬──────────┘                      │
 │           │                       │ regions scaled to main coords   │
@@ -84,6 +88,8 @@ Detection and tracking work **independently of the web UI** — the system runs 
 │                                                                     │
 │  CPU optimization:                                                  │
 │  - ISP lores: motion + stream resize offloaded to hardware          │
+│  - Y-plane: motion uses I420 Y channel directly (skips 2 cvtColor)  │
+│  - Deferred BGR: YUV→BGR only when stream clients are watching      │
 │  - OpenCV: 1 thread idle, 4 when tracking                           │
 │  - TFLite: 0 threads idle, 3 when detecting                        │
 │  - MJPEG: simplejpeg NEON SIMD, skipped when no clients             │
@@ -793,7 +799,8 @@ The **displayed FPS** is processed frames per second (how often the phase block 
 
 ## 📝 Version History
 
-- **v3.9.0** - ISP lores dual-stream: picamera2 outputs a hardware-downscaled 960×540 lores stream alongside the 2304×1296 main stream, eliminating two expensive cv2.resize calls (~460ms/frame → ~3ms). Motion detection and MJPEG stream now resize from lores instead of main. simplejpeg (libjpeg-turbo NEON SIMD) added for ~50-70% faster JPEG encoding. All resize operations switched from INTER_AREA to INTER_LINEAR. Stream resolution selector continues to work on-the-fly; resolutions ≤960×540 use lores, larger fall back to main. Expected improvement: ~2 FPS → 15-25+ FPS.
+- **v3.9.1** - Y-plane optimization: motion detector receives the I420 Y channel directly (already grayscale), skipping both YUV→BGR (~15-25ms) and BGR→Gray (~2-3ms) conversions. BGR conversion deferred to stream annotation and skipped entirely when no clients are watching. Fix I420 color conversion (was YV12 → orange/blue swap). Dynamic lores reconfigure: when user picks stream resolution > 960×540, the ISP lores stream is reconfigured on-the-fly (~0.5s camera pause) instead of falling back to main-frame resize. Measured: ~498ms/frame (2 FPS) → ~108ms/frame (9 FPS) with streaming, further improved without stream clients.
+- **v3.9.0** - ISP lores dual-stream: picamera2 outputs a hardware-downscaled 960×540 lores stream alongside the 2304×1296 main stream, eliminating two expensive cv2.resize calls (~460ms/frame → ~3ms). Motion detection and MJPEG stream now resize from lores instead of main. simplejpeg (libjpeg-turbo NEON SIMD) added for ~50-70% faster JPEG encoding. All resize operations switched from INTER_AREA to INTER_LINEAR. Stream resolution selector continues to work on-the-fly; resolutions ≤960×540 use lores, larger fall back to main.
 - **v3.8.1** - Annotation optimization: resize raw frame to stream resolution first, then draw all annotations (perimeter, detections, motion, crop) on the small frame. Pre-computed scaled perimeter cache (invalidated on perimeter/stream-res change). Saves ~30-80ms per frame on RPi Zero 2W. Stop Stream button already skips entire annotation path (250ms saving).
 - **v3.8.0** - Non-blocking async logging (queue + writer thread, plog); per-step performance log every processed frame ([PERF] cap/motion/crop/tflite/track/annot); FPS diagnostics in status API and UI (Cap/Mot ms); heartbeat log every 30s; Inject Cat stop CPU fix (rate-limit sleep); AGENTS.md and README updated for architectural changes.
 - **v3.7.1** - Minor fixes.

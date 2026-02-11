@@ -120,12 +120,15 @@ class MotionDetector:
                 self.background = None
                 self.last_frame_size = None
         
-    def detect(self, frame):
+    def detect(self, frame, gray_input=False):
         """
         Detect motion in frame.
         
         Args:
-            frame: BGR image (full resolution)
+            frame: BGR image or grayscale image (full resolution or lores)
+            gray_input: If True, frame is already single-channel grayscale
+                        (e.g. Y plane from I420 YUV). Skips the BGR→Gray
+                        conversion, saving ~2-3ms per frame.
             
         Returns:
             dict with:
@@ -158,9 +161,13 @@ class MotionDetector:
             self.background = None
         self.last_frame_size = current_scaled_size
         
+        # Y-plane fast path: frame is already grayscale (from ISP lores Y channel).
+        # Skips cvtColor BGR→Gray entirely.
+        if gray_input:
+            small_gray = cv2.resize(frame, (small_w, small_h), interpolation=cv2.INTER_LINEAR)
+            gray = cv2.GaussianBlur(small_gray, (blur, blur), 0)
         # OPTIMIZATION J: Use GPU acceleration if available
-        # INTER_LINEAR is 3-5x faster than INTER_AREA for downscaling with negligible quality difference
-        if self.use_gpu:
+        elif self.use_gpu:
             frame_gpu = cv2.UMat(frame)
             small_frame_gpu = cv2.resize(frame_gpu, (small_w, small_h), interpolation=cv2.INTER_LINEAR)
             gray_gpu = cv2.cvtColor(small_frame_gpu, cv2.COLOR_BGR2GRAY)
