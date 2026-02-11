@@ -17,6 +17,7 @@ except ImportError:
 
 try:
     from picamera2.encoders import H264Encoder
+    from picamera2.outputs import FileOutput
     H264_AVAILABLE = True
 except ImportError:
     H264_AVAILABLE = False
@@ -469,7 +470,11 @@ class CameraHandler:
             qp = getattr(config, 'H264_QP', 24)
             self.h264_output = H264StreamOutput()
             self.h264_encoder = H264Encoder(qp=qp)
-            self.camera.start_encoder(self.h264_encoder, self.h264_output, name="lores")
+            # picamera2 requires output wrapped in FileOutput — raw file-like objects
+            # cause "Must pass Output" error
+            file_output = FileOutput(self.h264_output)
+            self.camera.start_encoder(self.h264_encoder, file_output, name="lores")
+            self._h264_file_output = file_output  # prevent GC
             lw, lh = self.lores_size
             print(f"[H264] Hardware encoder started on lores {lw}×{lh} (qp={qp})")
             return True
@@ -488,6 +493,7 @@ class CameraHandler:
                 print(f"[H264] Error stopping encoder: {e}")
             self.h264_encoder = None
             self.h264_output = None
+            self._h264_file_output = None
             print("[H264] Hardware encoder stopped")
     
     def get_h264_frame(self, timeout=1.0):

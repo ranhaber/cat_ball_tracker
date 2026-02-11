@@ -58,7 +58,7 @@ def init_h264_routes(app, video_processor):
         
         try:
             while True:
-                # Get next H.264 frame from hardware encoder
+                # Get next H.264 frame from hardware encoder (blocks up to timeout)
                 h264_data = video_processor.get_h264_frame(timeout=0.5)
                 
                 if h264_data is not None:
@@ -67,6 +67,10 @@ def init_h264_routes(app, video_processor):
                         ws.send(h264_data)
                     except Exception:
                         break  # Client disconnected
+                else:
+                    # No frame available — sleep to prevent CPU burn
+                    # (encoder may not be running or still initializing)
+                    time.sleep(0.05)
                 
                 # Send overlay data at ~10Hz (not every frame — saves bandwidth)
                 now = time.time()
