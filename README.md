@@ -2,7 +2,7 @@
 
 A real-time cat and ball detection system for Raspberry Pi Zero 2W with Camera Module 3. Features motion-first detection for efficiency, a web interface for live streaming, and zone-based tracking.
 
-**Version:** 3.12.0
+**Version:** 3.13.0
 
 **For agents and developers:** See **[AGENTS.md](AGENTS.md)** for project guidelines, concurrency rules, and where to find things. Use it as the single entry point before diving into code or other docs.
 
@@ -20,89 +20,96 @@ Detection and tracking work **independently of the web UI** — the system runs 
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
-│  RPi Zero 2W (416MB RAM, 4-core ARM Cortex-A53)                     │
-│                                                                     │
-│  Thread: CatDome-Proc (processing loop, always running)             │
+│  RPi Zero 2W (416MB RAM, 4-core ARM Cortex-A53)                    │
 │                                                                     │
 │  ┌─────────────────────────────────────────────────────────────┐    │
 │  │  Camera Module 3 — ISP Dual-Stream (v3.9.0+)               │    │
-│  │                                                             │    │
 │  │  ┌──────────────────┐   ┌────────────────────────────┐     │    │
 │  │  │  main stream     │   │  lores stream (ISP h/w)    │     │    │
-│  │  │  2304×1296 RGB   │   │  960×540+ I420 (YUV420)    │     │    │
-│  │  │  (AI crop,       │   │  ┌─────────┐ ┌──────────┐ │     │    │
-│  │  │   snapshots,     │   │  │ Y plane │ │ I420→BGR │ │     │    │
-│  │  │   recording)     │   │  │ (gray,  │ │ (deferred│ │     │    │
-│  │  │                  │   │  │  free)   │ │  to      │ │     │    │
-│  │  │                  │   │  │  ↓motion │ │  stream) │ │     │    │
-│  │  │                  │   │  └─────────┘ └──────────┘ │     │    │
+│  │  │  2304×1296 RGB   │   │  960×540 I420 (YUV420)     │     │    │
+│  │  │  (AI crop,       │   │  Y plane → motion (free)   │     │    │
+│  │  │   snapshots,     │   │  I420→BGR deferred to       │     │    │
+│  │  │   recording)     │   │  stream annotation          │     │    │
 │  │  └────────┬─────────┘   └─────────┬──────────────────┘     │    │
-│  │           │                       │                         │    │
-│  │  Fallback: if lores unavailable (unsupported camera, ISP   │    │
-│  │  error), main-only mode resizes in software (~2 FPS).      │    │
-│  │  Lores auto-reconfigures when user picks stream res > 960. │    │
-│  └─────────────────────────────────────────────────────────────┘    │
-│           │                       │                                 │
-│           │              ┌────────┴──────────┐                      │
-│           │              │  Motion Detector   │                      │
-│           │              │  (Y plane direct,  │                      │
-│           │              │   skips 2 cvtColor, │                      │
-│           │              │   every 2nd frame)  │                      │
-│           │              └────────┬──────────┘                      │
-│           │                       │ regions scaled to main coords   │
-│           │                       ▼                                  │
-│           │              ┌──────────────────┐                       │
-│           ├─────────────▶│  TFLite AI       │                       │
-│           │ (crop from   │  (load on motion, │                       │
-│           │  main frame) │   active while   │                       │
-│           │              │   cat in zone)   │                       │
-│           │              └────────┬─────────┘                       │
-│           │                       │                                  │
-│           │              ┌────────┴─────────┐                       │
-│           │              │  Tracker (only   │                       │
-│           │              │  when detections)│                       │
-│           │              └────────┬─────────┘                       │
-│           │                       │                                  │
-│           ▼                       ▼                                  │
-│  ┌─────────────────────────────────────────────────────┐            │
-│  │  Lens Calibration (rational k1-k6, 94% improvement) │            │
-│  │  → undistort detection pixel → homography → world xy │            │
-│  └─────────────────────────────────────────────────────┘            │
-│           │                                                         │
-│           ▼ (only if MJPEG clients connected)                       │
-│  ┌─────────────────────────────────────────────────────┐            │
-│  │  MJPEG Annotation (fallback path, on lores BGR)      │            │
-│  │  - Draw perimeter, boxes, FPS overlay via cv2         │            │
-│  │  - JPEG encode (simplejpeg/libjpeg-turbo NEON SIMD)  │            │
-│  │  - Store for MJPEG /video_feed                       │            │
-│  └─────────────────────────────────────────────────────┘            │
+│  └───────────┼───────────────────────┼─────────────────────────┘    │
+│              │                       │                              │
+│  ════════════╪═══════════════════════╪════════════════════════════  │
+│  4-THREAD PIPELINED ARCHITECTURE (v3.11.0+)                        │
+│  ════════════╪═══════════════════════╪════════════════════════════  │
+│              │                       │                              │
+│  ┌───────────┴───────────────────────┴─────────────────────────┐   │
+│  │  Thread: CatDome-Cap (Core 1) — Capture                     │   │
+│  │  - Blocks on camera.captured_request()                      │   │
+│  │  - MappedArray zero-copy for lores (Phase 2)                │   │
+│  │  - Queues (frame, lores, Y-plane) to processing thread      │   │
+│  │  - Handles lores reconfigure                                │   │
+│  └──────────────────────┬──────────────────────────────────────┘   │
+│                         │ queue.Queue(maxsize=1)                    │
+│                         ▼                                           │
+│  ┌──────────────────────────────────────────────────────────────┐  │
+│  │  Thread: CatDome-Proc (Core 0) — Processing                  │  │
+│  │  - queue.get() → inject cat (if active) → motion detect      │  │
+│  │  - Phase state machine (IDLE/ACQUISITION/TRACKING/WATCH)      │  │
+│  │  - Submits crops to AI thread (non-blocking)                  │  │
+│  │  - Fetches AI results (non-blocking), runs tracker            │  │
+│  │  - Annotation → JPEG/overlay → recording                     │  │
+│  │  - NEVER blocked by TFLite inference                          │  │
+│  └────────────┬────────────────────────────────┬────────────────┘  │
+│    submit crop│                                │fetch result       │
+│               ▼                                ▲                    │
+│  ┌──────────────────────────────────────────────────────────────┐  │
+│  │  Thread: CatDome-AI (Cores 2-3) — TFLite Inference           │  │
+│  │  - Blocks on ai_request_queue.get()                           │  │
+│  │  - detector.detect() with XNNPACK (num_threads=2)             │  │
+│  │  - Inject-cat fallback detection                              │  │
+│  │  - Pushes results to ai_result_queue                          │  │
+│  │  - Auto-unloads model after 10s idle (kills XNNPACK spin)     │  │
+│  │  - ONLY thread that touches detector.interpreter              │  │
+│  └──────────────────────────────────────────────────────────────┘  │
 │                                                                     │
-│  ┌─────────────────────────────────────────────────────┐            │
-│  │  H.264 Hardware Stream (v3.10.0+, zero CPU)          │            │
-│  │  - VideoCore H.264 encoder on lores YUV420 directly  │            │
-│  │  - WebSocket /ws/stream → jMuxer in browser          │            │
-│  │  - Overlays sent as JSON, drawn client-side on Canvas│            │
-│  │  - Encoder starts/stops with client connections      │            │
-│  └─────────────────────────────────────────────────────┘            │
+│  ┌──────────────────────────────────────────────────────────────┐  │
+│  │  Thread: CatDome-Log — Async logging (queue → stdout)        │  │
+│  └──────────────────────────────────────────────────────────────┘  │
 │                                                                     │
-│  Thread: CatDome-Main (Flask web server)                            │
-│  ┌─────────────────────────────────────────────────────┐            │
-│  │  Flask Web Server                                    │            │
-│  │  - H.264 WebSocket streaming (default, HW-encoded)   │            │
-│  │  - MJPEG streaming (fallback, /video_feed)           │            │
-│  │  - REST API (status, calibration, settings)          │            │
-│  │  - Stream resolution change → lores reconfigure      │            │
-│  │  - Lens-corrected snapshots for calibration          │            │
-│  └─────────────────────────────────────────────────────┘            │
+│  ┌──────────────────────────────────────────────────────────────┐  │
+│  │  Lens Calibration (rational k1-k6, 94% improvement)          │  │
+│  │  → undistort detection pixel → homography → world xy         │  │
+│  └──────────────────────────────────────────────────────────────┘  │
+│                                                                     │
+│  ┌──────────────────────────────────────────────────────────────┐  │
+│  │  H.264 Hardware Stream (v3.10.0+, zero CPU)                  │  │
+│  │  - VideoCore H.264 encoder on lores YUV420 directly          │  │
+│  │  - WebSocket /ws/stream → jMuxer in browser (GPU decode)     │  │
+│  │  - Overlays sent as JSON, drawn client-side on Canvas        │  │
+│  └──────────────────────────────────────────────────────────────┘  │
+│                                                                     │
+│  ┌──────────────────────────────────────────────────────────────┐  │
+│  │  Flask Web Server (CatDome-Main thread)                      │  │
+│  │  - H.264 WebSocket streaming (default)                       │  │
+│  │  - REST API (status, calibration, settings)                  │  │
+│  │  - Stream resolution change → lores reconfigure              │  │
+│  └──────────────────────────────────────────────────────────────┘  │
+│                                                                     │
+│  Thread Affinity (Pi Zero 2W, 4× Cortex-A53):                     │
+│  ┌─────────┬─────────┬─────────┬─────────┐                        │
+│  │ Core 0  │ Core 1  │ Core 2  │ Core 3  │                        │
+│  │ Process │ Capture │    AI (XNNPACK)    │                        │
+│  │ mot+ann │ cam wait│    TFLite invoke   │                        │
+│  │ ~55ms   │ +memcpy │    ~220ms/invoke   │                        │
+│  │ /frame  │ ~17ms   │    (2 threads)     │                        │
+│  └─────────┴─────────┴─────────┴─────────┘                        │
 │                                                                     │
 │  CPU optimization:                                                  │
-│  - H.264: hardware encoder on lores YUV420, zero CPU cost           │
-│  - ISP lores: motion + stream resize offloaded to hardware          │
-│  - Y-plane: motion uses I420 Y channel directly (skips 2 cvtColor)  │
-│  - Manual focus: fixed LensPosition, no AF hunting/CPU overhead     │
-│  - Deferred BGR: YUV→BGR only when MJPEG clients are watching       │
-│  - OpenCV: 1 thread idle, 4 when tracking                           │
-│  - TFLite: 0 threads idle, 3 when detecting                        │
+│  - Pipelined capture: camera wait overlaps with processing (qw=0)  │
+│  - Async AI: TFLite runs on cores 2-3, never blocks process thread │
+│  - TFLite warmup: file-cache warmed at boot (first detect 3.5s→0.5s)│
+│  - H.264: hardware encoder on lores YUV420, zero CPU cost          │
+│  - ISP lores: motion + stream resize offloaded to camera hardware  │
+│  - Y-plane: motion uses I420 Y channel directly (skips 2 cvtColor) │
+│  - MappedArray: zero-copy lores view, skip full lores memcpy       │
+│  - Manual focus: fixed LensPosition, no AF hunting/CPU overhead    │
+│  - Deferred BGR: YUV→BGR only when stream clients are watching     │
+│  - TFLite: 0 threads idle (auto-unload after 10s), 2 when active  │
 └─────────────────────────────────────────────────────────────────────┘
                           │
                           ▼ (HTTP, optional)
@@ -111,10 +118,28 @@ Detection and tracking work **independently of the web UI** — the system runs 
 │  ┌─────────────────────┐ ┌──────────────┐ ┌──────────────────────┐ │
 │  │ Tab 1: Video Stream │ │ Tab 2: Settng│ │ Tab 3: Zone          │ │
 │  │ - Start/Stop button │ │ - Mode/FPS   │ │ - Detection Zone     │ │
-│  │ - Live MJPEG feed   │ │ - Profiles   │ │ - Perspective Cal    │ │
+│  │ - H.264 live feed   │ │ - Profiles   │ │ - Perspective Cal    │ │
 │  │ - Top-Down View     │ │ - Motion     │ │ - Lens Calibration   │ │
 │  └─────────────────────┘ └──────────────┘ └──────────────────────┘ │
 └─────────────────────────────────────────────────────────────────────┘
+```
+
+### TRACKING Phase Timeline (v3.13.0+)
+
+```
+Before v3.11 (sequential, single-threaded):
+Core 0: |cap(60)│mot(28)│████████ tf(175ms) ████████│ann(26)│ |cap│mot│ann│ |cap│mot│ann│
+         Frame N (AI frame, BLOCKED 175ms)            Frame N+1   Frame N+2
+
+After v3.13 (pipelined capture + async AI):
+Camera:    |──────100ms──────|──────100ms──────|──────100ms──────|
+Core 1:    |---wait---memcpy-|---wait---memcpy-|---wait---memcpy-| (Capture)
+Core 0:    |qw=0|mot|trk|ann|qw=0|mot|trk|ann|qw=0|mot|trk|ann| (Process)
+                 ↑submit crop                   ↑fetch result
+Core 2-3:        |██████████ tf(220ms) █████████|                  (AI)
+                 ↑ started frame N              ↑ result ready
+
+Process thread: ~55ms/frame steady (never blocked by TFLite)
 ```
 
 ---
@@ -811,6 +836,7 @@ The **displayed FPS** is processed frames per second (how often the phase block 
 
 ## 📝 Version History
 
+- **v3.13.0** - Phase 3: Async TFLite inference thread (CatDome-AI on cores 2-3). TFLite invoke no longer blocks processing thread. Tracking FPS ~5→~16. Detection results arrive 2-3 frames late, tracker compensates. AI thread auto-unloads model after 10s idle. TFLITE_NUM_THREADS reduced to 2.
 - **v3.12.0** - Phase 2: Zero-copy DMA buffers via MappedArray. Capture thread passes CompletedRequest through queue; processing thread reads DMA views directly (~18ms memcpy eliminated per frame). DMA buffer released after all processing. Fallback to Phase 1 copy mode when MappedArray unavailable.
 - **v3.11.0** - Pipelined capture: dedicated capture thread (CatDome-Cap) with queue overlaps camera wait (43ms) with processing (37ms). IDLE FPS 10→16 (camera-limited). Thread affinity pins capture/process to separate cores. Lores reconfigure moved to capture thread.
 - **v3.10.3** - Remove MJPEG fallback from frontend (H.264 only); drop stream mode selector, MJPEG reconnect logic, and video-stream element. Backend /video_feed route kept for snapshots.

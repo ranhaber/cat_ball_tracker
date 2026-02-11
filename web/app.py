@@ -111,6 +111,14 @@ class VideoProcessor:
         self._last_motion_ms = None
         self._last_heartbeat_time = 0.0  # for periodic log so journal shows activity when idle
         
+        # Phase 3: async TFLite inference thread
+        self._ai_request_queue = None   # Created in start()
+        self._ai_result_queue = None    # Created in start()
+        self._ai_thread = None
+        self._last_ai_tf_ms = None      # TFLite timing from last AI result (for PERF log)
+        self._last_ai_detail = None     # TFLite sub-breakdown from last AI result
+        self._ai_idle_since = 0.0       # When AI thread last had work (for auto-unload)
+        
         # Frame storage for streaming
         self.current_frame = None
         self.frame_lock = threading.Lock()
@@ -470,12 +478,17 @@ class VideoProcessor:
                 self.file_camera = None
                 self.video_source = "live"
         
-        # Start capture + processing threads (pipelined)
+        # Start capture + AI + processing threads (pipelined + async AI)
         self._frame_queue = queue.Queue(maxsize=1)
+        self._ai_request_queue = queue.Queue(maxsize=1)
+        self._ai_result_queue = queue.Queue(maxsize=1)
         self.running = True
         
         self._capture_thread = threading.Thread(target=self._capture_loop, daemon=True, name="CatDome-Cap")
         self._capture_thread.start()
+        
+        self._ai_thread = threading.Thread(target=self._ai_loop, daemon=True, name="CatDome-AI")
+        self._ai_thread.start()
         
         self.process_thread = threading.Thread(target=self._process_loop, daemon=True, name="CatDome-Process")
         self.process_thread.start()
@@ -487,10 +500,16 @@ class VideoProcessor:
         """Stop all components"""
         self.running = False
         self._stop_recording()
-        # Wait for capture thread to exit (it will unblock from camera.get_request
-        # once camera.stop() is called, or from the running flag on next iteration)
+        # Wait for capture thread to exit
         if hasattr(self, '_capture_thread') and self._capture_thread.is_alive():
             self._capture_thread.join(timeout=3.0)
+        # Send shutdown sentinel to AI thread and wait
+        if hasattr(self, '_ai_thread') and self._ai_thread is not None and self._ai_thread.is_alive():
+            try:
+                self._ai_request_queue.put_nowait(None)  # Sentinel
+            except queue.Full:
+                pass
+            self._ai_thread.join(timeout=3.0)
         if self.file_camera:
             self.file_camera.stop()
             self.file_camera = None
@@ -498,6 +517,134 @@ class VideoProcessor:
             self.camera.stop()
         print("Video processor stopped")
         
+    # =========================================================================
+    # AI Inference Thread (Phase 3: async TFLite)
+    # =========================================================================
+    
+    def _submit_ai(self, frame, crop_region):
+        """Submit a frame/crop to the AI thread for async detection.
+        
+        Called from the process loop during ACQUISITION/TRACKING/WATCH.
+        The crop is copied so it's safe even if the frame is a DMA view.
+        """
+        if crop_region is not None:
+            cx, cy, cw, ch = crop_region
+            crop_frame = frame[cy:cy+ch, cx:cx+cw].copy()
+        else:
+            crop_frame = frame.copy()
+        
+        # Build inject fallback info
+        inject_info = None
+        if (self.inject_cat and self.inject_cat_handler
+                and self.inject_cat_handler.bbox):
+            inject_info = (
+                self.inject_cat_handler.bbox,
+                config.COCO_CLASSES.get('cat', 17),
+                config.INJECT_BBOX_PROXIMITY_PX)
+        
+        # Drop stale request, submit new one
+        try:
+            self._ai_request_queue.get_nowait()
+        except queue.Empty:
+            pass
+        try:
+            self._ai_request_queue.put_nowait((crop_frame, crop_region, inject_info))
+        except queue.Full:
+            pass
+    
+    def _ai_loop(self):
+        """AI inference thread — runs TFLite on submitted crops asynchronously.
+        
+        Blocks on _ai_request_queue. Runs detector.detect(), remaps crop
+        coordinates, applies inject-cat fallback, and pushes results to
+        _ai_result_queue. This is the ONLY thread that touches
+        detector.interpreter (load/invoke/unload).
+        
+        Pinned to cores 2-3 for XNNPACK thread affinity.
+        """
+        # Set OS thread name
+        try:
+            import ctypes
+            libc = ctypes.CDLL('libc.so.6')
+            libc.prctl(15, b'CatDome-AI', 0, 0, 0)
+        except Exception:
+            pass
+        
+        # Pin to cores 2-3
+        if getattr(config, 'THREAD_AFFINITY_ENABLED', False):
+            try:
+                os.sched_setaffinity(0, {2, 3})
+            except Exception:
+                pass
+        
+        idle_since = time.time()
+        
+        while self.running:
+            try:
+                # Block until the process thread submits a crop
+                try:
+                    request = self._ai_request_queue.get(timeout=1.0)
+                except queue.Empty:
+                    # No work — check if we should unload the model
+                    if self.detector and self.detector.is_loaded():
+                        if time.time() - idle_since > 10.0:
+                            self.detector.unload_model()
+                            cv2.setNumThreads(1)
+                            reclaim_memory()
+                            plog("[AI] Model unloaded after 10s idle")
+                    continue
+                
+                if request is None:
+                    break  # Shutdown sentinel
+                
+                crop_frame, crop_region, inject_info = request
+                idle_since = time.time()
+                
+                # Run TFLite inference
+                import time as _time
+                t_total = _time.perf_counter()
+                
+                if crop_region is not None:
+                    detections = self.detector.detect(crop_frame)
+                    # Remap crop-local coords to full-frame
+                    cx, cy, cw, ch = crop_region
+                    detections = [
+                        (x1 + cx, y1 + cy, x2 + cx, y2 + cy, conf, cls)
+                        for x1, y1, x2, y2, conf, cls in detections
+                    ]
+                else:
+                    detections = self.detector.detect(crop_frame)
+                
+                tf_ms = round((_time.perf_counter() - t_total) * 1000, 1)
+                tf_detail = getattr(self.detector, '_last_perf', None)
+                
+                # Inject Cat fallback
+                if inject_info is not None:
+                    bbox, cat_class_id, proximity = inject_info
+                    tflite_found = any(
+                        abs((d[0]+d[2])/2 - (bbox[0]+bbox[2])/2) < proximity and
+                        abs((d[1]+d[3])/2 - (bbox[1]+bbox[3])/2) < proximity
+                        for d in detections
+                    )
+                    if not tflite_found:
+                        detections.append((
+                            bbox[0], bbox[1], bbox[2], bbox[3],
+                            config.INJECT_FALLBACK_CONFIDENCE, cat_class_id))
+                
+                # Put result (drop old if process thread hasn't fetched yet)
+                try:
+                    self._ai_result_queue.get_nowait()
+                except queue.Empty:
+                    pass
+                self._ai_result_queue.put_nowait(
+                    (detections, crop_region, tf_ms, tf_detail))
+                
+            except Exception as e:
+                plog("[AI] Error: %s", e)
+                import traceback
+                traceback.print_exc()
+                time.sleep(0.1)
+    
     # =========================================================================
     # Capture Thread (Phase 2: pipelined zero-copy)
     # =========================================================================
@@ -771,7 +918,6 @@ class VideoProcessor:
                 # ══════════════════════════════════════════════════════════
                 # PHASE STATE MACHINE: IDLE → ACQUISITION → TRACKING → WATCH
                 # ══════════════════════════════════════════════════════════
-                run_ai_detection = False
                 crop_region = None
                 motion_regions_in_perimeter = []
                 
@@ -835,7 +981,7 @@ class VideoProcessor:
                             plog("[PHASE] IDLE → ACQUISITION (motion in Detection Zone)")
                     
                     # ── PHASE: ACQUISITION ──
-                    # TFLite runs every frame, searching for cat.
+                    # AI submitted every frame, searching for cat.
                     elif self._phase == "ACQUISITION":
                         t_motion_start = time.perf_counter()
                         if frame_lores_y is not None:
@@ -845,16 +991,13 @@ class VideoProcessor:
                             motion_result = self.motion_detector.detect(motion_input)
                         self._scale_motion_to_main(motion_result, frame_w, frame_h)
                         self._last_motion_ms = round((time.perf_counter() - t_motion_start) * 1000, 1)
-                        t_filt_motion = time.perf_counter()
                         motion_regions_in_perimeter = self._filter_motion_to_perimeter(
                             motion_result, frame_w, frame_h)
                         self.motion_detected = len(motion_regions_in_perimeter) > 0
                         if self.motion_detected:
                             self._last_motion_time = now
                         
-                        # AI runs every frame during acquisition
-                        run_ai_detection = True
-                        t_getcrop = time.perf_counter()
+                        # Submit crop to AI thread every frame
                         crop_size = self.current_motion_crop_size
                         if self.inject_cat and self.inject_cat_handler:
                             crop_region = self.inject_cat_handler.get_crop_region(
@@ -862,19 +1005,17 @@ class VideoProcessor:
                         elif motion_regions_in_perimeter:
                             crop_region = self.motion_detector.get_fixed_crop_region(
                                 frame.shape, crop_size=crop_size)
-                        _perf_getcrop_ms = round((time.perf_counter() - t_getcrop) * 1000, 1)
+                        self._submit_ai(frame, crop_region)
                         
                         # Timeout: no motion for 10s → back to IDLE
                         if not self.inject_cat and (now - self._last_motion_time > self._acquisition_timeout):
                             self._phase = "IDLE"
                             self._phase_frame_counter = 0
-                            self.detector.unload_model()
-                            cv2.setNumThreads(1)
-                            reclaim_memory()
+                            # AI thread handles unload after idle timeout
                             plog("[PHASE] ACQUISITION → IDLE (no motion for %ss)", self._acquisition_timeout)
                     
                     # ── PHASE: TRACKING ──
-                    # Cat confirmed. TFLite every 3rd processed frame with motion crop.
+                    # Cat confirmed. AI submitted every Nth frame with motion crop.
                     elif self._phase == "TRACKING":
                         t_motion_start = time.perf_counter()
                         if frame_lores_y is not None:
@@ -891,7 +1032,6 @@ class VideoProcessor:
                             self._last_motion_time = now
                         
                         if self._phase_frame_counter % config.PHASE_TRACKING_AI_INTERVAL == 0:
-                            run_ai_detection = True
                             crop_size = self.current_motion_crop_size
                             if self.inject_cat and self.inject_cat_handler:
                                 crop_region = self.inject_cat_handler.get_crop_region(
@@ -899,6 +1039,7 @@ class VideoProcessor:
                             elif motion_regions_in_perimeter:
                                 crop_region = self.motion_detector.get_fixed_crop_region(
                                     frame.shape, crop_size=crop_size)
+                            self._submit_ai(frame, crop_region)
                         
                         # Motion stopped → WATCH
                         if not self.motion_detected and not self.inject_cat:
@@ -910,15 +1051,12 @@ class VideoProcessor:
                         if now - self._last_detection_time > self._detection_timeout:
                             self._phase = "IDLE"
                             self._phase_frame_counter = 0
-                            self.detector.unload_model()
-                            cv2.setNumThreads(1)
-                            reclaim_memory()
                             last_detections = []
                             self.last_detections_with_world = []
                             plog("[PHASE] TRACKING → IDLE (no detection for %ss)", self._detection_timeout)
                     
                     # ── PHASE: WATCH ──
-                    # No motion but cat was recently detected. TFLite every 2nd frame.
+                    # No motion but cat was recently detected. AI submitted every 2nd frame.
                     elif self._phase == "WATCH":
                         t_motion_start = time.perf_counter()
                         if frame_lores_y is not None:
@@ -940,66 +1078,31 @@ class VideoProcessor:
                             plog("[PHASE] WATCH → TRACKING (motion resumed)")
                         
                         if self._phase_frame_counter % config.PHASE_WATCH_AI_INTERVAL == 0:
-                            run_ai_detection = True
-                            # No crop in WATCH — scan wider area
+                            self._submit_ai(frame, None)  # No crop in WATCH — scan wider area
                         
                         # No detection for 30s → IDLE
                         if now - self._last_detection_time > self._detection_timeout:
                             self._phase = "IDLE"
                             self._phase_frame_counter = 0
-                            self.detector.unload_model()
-                            cv2.setNumThreads(1)
-                            reclaim_memory()
                             last_detections = []
                             self.last_detections_with_world = []
                             plog("[PHASE] WATCH → IDLE (no detection for %ss)", self._detection_timeout)
                     
-                    # ── AI DETECTION (shared by ACQUISITION, TRACKING, WATCH) ──
-                    if run_ai_detection:
-                        if crop_region:
-                            cx, cy, cw, ch = crop_region
-                            t0 = time.perf_counter()
-                            cropped_frame = frame[cy:cy+ch, cx:cx+cw]
-                            _perf_crop_ms = round((time.perf_counter() - t0) * 1000, 1)
-                            t1 = time.perf_counter()
-                            crop_detections = self.detector.detect(cropped_frame)
-                            _perf_tflite_ms = round((time.perf_counter() - t1) * 1000, 1)
-                            detections = []
-                            for det in crop_detections:
-                                x1, y1, x2, y2, conf, class_id = det
-                                detections.append((x1 + cx, y1 + cy, x2 + cx, y2 + cy, conf, class_id))
-                        else:
-                            t1 = time.perf_counter()
-                            detections = self.detector.detect(frame)
-                            _perf_tflite_ms = round((time.perf_counter() - t1) * 1000, 1)
-                        
-                        # Grab TFLite sub-breakdown
-                        _perf_tflite_detail = getattr(self.detector, '_last_perf', None)
-                        
-                        ai_time_ms = (_perf_crop_ms or 0) + (_perf_tflite_ms or 0)
-                        
-                        # Inject Cat fallback: if TFLite didn't detect the pasted cat
-                        if self.inject_cat and self.inject_cat_handler and self.inject_cat_handler.bbox:
-                            bbox = self.inject_cat_handler.bbox
-                            cat_class_id = config.COCO_CLASSES.get('cat', 17)
-                            proximity = config.INJECT_BBOX_PROXIMITY_PX
-                            tflite_found = any(
-                                abs((d[0]+d[2])/2 - (bbox[0]+bbox[2])/2) < proximity and
-                                abs((d[1]+d[3])/2 - (bbox[1]+bbox[3])/2) < proximity
-                                for d in detections
-                            )
-                            if not tflite_found:
-                                detections.append((bbox[0], bbox[1], bbox[2], bbox[3],
-                                                   config.INJECT_FALLBACK_CONFIDENCE, cat_class_id))
+                    # ── FETCH AI RESULT (async from AI thread) ──
+                    # Check for a new result from the AI thread (non-blocking).
+                    # If available: filter, confirm, compute world coords, transition phases.
+                    try:
+                        ai_result = self._ai_result_queue.get_nowait()
+                        detections, ai_crop_region, tf_ms, tf_detail = ai_result
+                        self._last_ai_tf_ms = tf_ms
+                        self._last_ai_detail = tf_detail
                         
                         # Filter by perimeter + temporal confirmation
                         t_filter = time.perf_counter()
                         frame_res = (frame_w, frame_h)
-                        raw_count = len(detections)
                         detections = self.perimeter.filter_detections(detections, frame_resolution=frame_res)
                         self.ai_detections_count += 1
                         
-                        # Temporal confirmation
                         self.detection_history.append(len(detections) > 0)
                         if len(self.detection_history) > self.confirm_frames:
                             self.detection_history.pop(0)
@@ -1008,19 +1111,20 @@ class VideoProcessor:
                             if not confirmed:
                                 detections = []
                         _perf_filter_ms = round((time.perf_counter() - t_filter) * 1000, 1)
+                        _perf_tflite_ms = tf_ms
+                        _perf_tflite_detail = tf_detail
                         
                         last_detections = detections
                         
-                        # Phase transitions based on detection results
+                        # Phase transitions
                         if len(detections) > 0:
                             self._last_detection_time = now
-                            # ACQUISITION → TRACKING (cat found!)
                             if self._phase == "ACQUISITION":
                                 self._phase = "TRACKING"
                                 self._phase_frame_counter = 0
                                 plog("[PHASE] ACQUISITION → TRACKING (cat detected!)")
                         
-                        # Compute world coordinates
+                        # World coordinates
                         t_world = time.perf_counter()
                         self.last_detections_with_world = []
                         for det in detections:
@@ -1028,7 +1132,7 @@ class VideoProcessor:
                             world_pos = None
                             if self.calibration and self.calibration.is_calibrated:
                                 bcx = (x1 + x2) / 2
-                                bcy = y2  # bottom-center
+                                bcy = y2
                                 wp = self.pixel_to_world(bcx, bcy, already_undistorted=False)
                                 if wp:
                                     world_pos = {"world_x": round(wp[0], 2), "world_y": round(wp[1], 2)}
@@ -1044,6 +1148,8 @@ class VideoProcessor:
                                 "injected": is_injected
                             })
                         _perf_world_ms = round((time.perf_counter() - t_world) * 1000, 1)
+                    except queue.Empty:
+                        pass  # No new AI result — use previous last_detections
                     
                     # ── Tracking ──
                     t_track_start = time.perf_counter()

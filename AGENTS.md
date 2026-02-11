@@ -24,14 +24,28 @@ This document consolidates knowledge from README, code reviews, and optimization
 
 ## 2. Architecture (threads and flow)
 
-- **CatDome-Proc (process thread):** `web/app.py` — `VideoProcessor._process_loop()`. Runs forever: capture frame → optional inject cat → phase state machine (motion, crop, TFLite, tracker) → annotate/JPEG/recording. **Do not block this loop** with long work or cross-thread calls that can deadlock.
-- **CatDome-Main (Flask):** Serves API and MJPEG. Calls into `VideoProcessor` (get frame JPEG, settings, inject toggle, etc.). **Never call `motion_detector.reset()` or `detector.unload_model()` from Flask** — the process loop might be inside `detect()`. Use flags and let the process loop perform cleanup (see Concurrency).
-- **CatDome-Log (writer thread):** `processing/async_log.py` — drains log queue to stdout so the process loop never blocks on journal/pipe I/O. Hot-path logging uses `plog()` (async).
-- **Capture (optional mock thread):** `camera/camera_handler.py` — only when using mock camera; holds `camera.frame_lock`.
+**4 threads, pinned to separate cores (v3.11.0+):**
 
-**Frame pipeline (short):** Camera → [inject cat if on] → motion detect (resize to ¼) → phase logic → crop (if ACQ/TRACK) → TFLite (resize to model input if needed) → tracker → annotate → JPEG/current_frame → recording.
+| Thread | Core | Role | Key constraint |
+|--------|------|------|----------------|
+| **CatDome-Cap** | 1 | Capture: blocks on camera, queues frames | Owns camera; lores reconfigure happens here |
+| **CatDome-Proc** | 0 | Processing: motion → submit AI → fetch result → track → annotate | Never blocked by TFLite |
+| **CatDome-AI** | 2-3 | TFLite inference (async, num_threads=2) | ONLY thread that calls detector.detect/load/unload |
+| **CatDome-Log** | any | Async logging (queue → stdout) | Non-blocking plog() |
 
-Detailed timeline: **README § Frame-to-TFLite timeline**. Crop vs resize: **README § Crop vs resize**.
+Plus Flask (CatDome-Main) for the web server.
+
+**Frame pipeline:** CatDome-Cap queues frame → CatDome-Proc: inject cat → motion → phase logic → submit crop to AI queue → fetch result (non-blocking) → tracker → annotate → JPEG/overlay → recording.
+
+**AI pipeline (async):** CatDome-Proc submits crop → CatDome-AI runs detector.detect() (~220ms) → result queued → CatDome-Proc fetches on next frame. Detection results are 2-3 frames behind; tracker compensates.
+
+**Critical rules:**
+- **CatDome-AI** is the ONLY thread that touches `detector.interpreter` (load/invoke/unload). The process loop and Flask never call `detector.detect()` or `detector.unload_model()` directly.
+- **CatDome-Cap** is the ONLY thread that calls `camera.get_request()` or `camera.reconfigure_lores()`.
+- **CatDome-Proc** must never block on TFLite or camera — both are async via queues.
+- **Flask** sets flags for cleanup; process loop checks at start of iteration.
+
+Detailed architecture diagram: **README § System Architecture**. Crop vs resize: **README § Crop vs resize**.
 
 ---
 
@@ -44,7 +58,7 @@ Detailed timeline: **README § Frame-to-TFLite timeline**. Crop vs resize: **REA
 - **TRACKING:** TFLite every 3rd frame; motion crop. Motion stops → WATCH. No detection 30 s → IDLE.
 - **WATCH:** TFLite every 2nd frame; often full frame (no crop). Motion again → TRACKING. No detection 30 s → IDLE.
 
-When **inject_cat** is True, the phase block (motion + AI + annotation inside the `skip_counter >= frame_skip` block) is **skipped** so the loop stays fast and the synthetic cat keeps moving. Stream updates every iteration in the inject block.
+When **inject_cat** is True, the cat is pasted on the camera frame (simulating a real cat). The full pipeline runs normally: motion detection sees the cat, AI detects it, tracker tracks it. On first inject frame, IDLE is force-transitioned to ACQUISITION (no motion history yet). The DMA frame is copied before pasting (inject writes to the frame).
 
 ### Crop vs resize
 
@@ -81,8 +95,10 @@ Crop size 400×400 is used for the "Performance (13 m)" profile for robustness a
 
 1. **Lock order when holding two:** Always **`_cached_jpeg_lock` then `frame_lock`** in the process loop. Flask never holds both (only one of get_frame_jpeg / get_frame_jpeg_capture_resolution).
 2. **Never from Flask:** Do not call `motion_detector.reset()` or `detector.unload_model()` from a route. Set flags (`_request_motion_reset_after_inject`, `_request_unload_after_inject`); process loop checks at **start of loop** and performs reset/unload there.
-3. **stream_clients:** Use the **getter** (reads under lock) and **increment_stream_clients() / decrement_stream_clients()** for connect/disconnect. Do not do `stream_clients += 1` or read-modify-write in routes.
-4. **Process loop:** Do not hold any VideoProcessor lock while calling `camera.*` or `motion_detector.detect()`.
+3. **detector.interpreter ownership:** Only the AI thread (CatDome-AI) calls `detector.detect()`, `_load_model()`, `unload_model()`. The process loop and Flask never touch the interpreter. The AI thread auto-unloads after 10s idle.
+4. **stream_clients:** Use the **getter** (reads under lock) and **increment_stream_clients() / decrement_stream_clients()** for connect/disconnect.
+5. **Process loop:** Do not hold any VideoProcessor lock while calling `camera.*` or `motion_detector.detect()`.
+6. **Queue payloads with requests:** If dropping a `"request"` payload from the capture queue, always call `.release()` to avoid DMA buffer leaks.
 
 ---
 
@@ -93,7 +109,10 @@ Crop size 400×400 is used for the "Performance (13 m)" profile for robustness a
 | Version | `main.py` __version__ |
 | Config & profiles | `config.py` |
 | Persisted settings | `settings.py`; loaded in `VideoProcessor.__init__` |
-| Process loop, phase machine, JPEG cache | `web/app.py` — VideoProcessor, _process_loop |
+| Process loop, phase machine, JPEG cache | `web/app.py` — VideoProcessor, `_process_loop` |
+| Capture thread (pipelined) | `web/app.py` — `_capture_loop` (Core 1) |
+| AI thread (async TFLite) | `web/app.py` — `_ai_loop` (Cores 2-3) |
+| AI submit/fetch helpers | `web/app.py` — `_submit_ai` |
 | Frame capture (real/mock) | `camera/camera_handler.py` |
 | Motion detection | `detection/motion_detector.py` |
 | TFLite (load on demand, unload on idle) | `detection/detector.py` |
