@@ -90,6 +90,7 @@ class VideoProcessor:
         # FPS diagnostics: last capture and motion duration (ms) to find bottleneck
         self._last_capture_ms = None
         self._last_motion_ms = None
+        self._last_heartbeat_time = 0.0  # for periodic log so journal shows activity when idle
         
         # Frame storage for streaming
         self.current_frame = None
@@ -368,6 +369,18 @@ class VideoProcessor:
                     self.frame_count += 1
                     self._phase_frame_counter += 1
                     now = time.time()
+                    # Periodic heartbeat so journal shows activity when idle (no phase changes)
+                    if now - self._last_heartbeat_time >= 30.0:
+                        self._last_heartbeat_time = now
+                        cap = self._last_capture_ms if self._last_capture_ms is not None else "--"
+                        mot = self._last_motion_ms if self._last_motion_ms is not None else "--"
+                        plog("[HEARTBEAT] FPS=%.1f phase=%s cap=%sms mot=%sms", self.fps, self._phase, cap, mot)
+                    
+                    # Per-step timings for bottleneck analysis (logged every phase-block iteration)
+                    _perf_crop_ms = None
+                    _perf_tflite_ms = None
+                    _perf_track_ms = None
+                    _perf_annot_ms = None
                     
                     # When inject_cat, skip motion/AI/annotation so loop stays fast and cat keeps moving
                     if not self.inject_cat:
@@ -493,19 +506,24 @@ class VideoProcessor:
                         
                         # ── AI DETECTION (shared by ACQUISITION, TRACKING, WATCH) ──
                         if run_ai_detection:
-                            ai_start = time.time()
                             if crop_region:
                                 cx, cy, cw, ch = crop_region
+                                t0 = time.perf_counter()
                                 cropped_frame = frame[cy:cy+ch, cx:cx+cw]
+                                _perf_crop_ms = round((time.perf_counter() - t0) * 1000, 1)
+                                t1 = time.perf_counter()
                                 crop_detections = self.detector.detect(cropped_frame)
+                                _perf_tflite_ms = round((time.perf_counter() - t1) * 1000, 1)
                                 detections = []
                                 for det in crop_detections:
                                     x1, y1, x2, y2, conf, class_id = det
                                     detections.append((x1 + cx, y1 + cy, x2 + cx, y2 + cy, conf, class_id))
                             else:
+                                t1 = time.perf_counter()
                                 detections = self.detector.detect(frame)
+                                _perf_tflite_ms = round((time.perf_counter() - t1) * 1000, 1)
                             
-                            ai_time_ms = (time.time() - ai_start) * 1000
+                            ai_time_ms = (_perf_crop_ms or 0) + (_perf_tflite_ms or 0)
                             
                             # Inject Cat fallback: if TFLite didn't detect the pasted cat
                             if self.inject_cat and self.inject_cat_handler and self.inject_cat_handler.bbox:
@@ -547,11 +565,6 @@ class VideoProcessor:
                                     self._phase_frame_counter = 0
                                     plog("[PHASE] ACQUISITION → TRACKING (cat detected!)")
                             
-                            if config.DEBUG or raw_count > 0:
-                                confirmed_str = f", Confirmed: {len(detections) > 0}" if self.confirm_frames > 1 else ""
-                                plog("[PERF] Phase=%s AI: %.1fms | Raw: %s, Perimeter: %s%s",
-                                     self._phase, ai_time_ms, raw_count, len(detections), confirmed_str)
-                            
                             # Compute world coordinates
                             self.last_detections_with_world = []
                             for det in detections:
@@ -576,10 +589,9 @@ class VideoProcessor:
                                 })
                         
                         # ── Tracking ──
+                        t_track_start = time.perf_counter()
                         tracked_objects = self.tracker.update(last_detections) if last_detections else {}
-                        
                         # Merge tracker IDs into last_detections_with_world
-                        # Match by bbox proximity so the top-down view shows stable track IDs
                         if tracked_objects and self.last_detections_with_world:
                             tracked_bboxes = self.tracker.get_bboxes()  # {id: (x1,y1,x2,y2)}
                             for det in self.last_detections_with_world:
@@ -597,10 +609,12 @@ class VideoProcessor:
                                         best_id = tid
                                 if best_id is not None and best_dist < 50:
                                     det["track_id"] = best_id
+                        _perf_track_ms = round((time.perf_counter() - t_track_start) * 1000, 1)
                         
                         # ── Annotation, JPEG pre-compute & frame storage ──
                         annotated = frame  # Always defined (used by recording below)
                         if self.stream_clients > 0:
+                            t_annot_start = time.perf_counter()
                             if self.show_motion_regions and self.motion_first_enabled:
                                 self.motion_detector.draw_motion(annotated, regions=motion_regions_in_perimeter)
                             if crop_region and self.show_motion_regions:
@@ -621,6 +635,7 @@ class VideoProcessor:
                                                           [cv2.IMWRITE_JPEG_QUALITY, self.current_jpeg_quality])
                             with self._cached_jpeg_lock:
                                 self._cached_jpeg = jpeg_buf.tobytes() if ret else None
+                            _perf_annot_ms = round((time.perf_counter() - t_annot_start) * 1000, 1)
                         
                         # Store raw frame for snapshot and recording (no copy needed —
                         # frame is replaced by a new camera buffer on the next iteration)
@@ -641,6 +656,16 @@ class VideoProcessor:
                             else:
                                 if self._recording_writer is not None and (now - self._recording_last_detection_time) >= self.record_after_detection_sec:
                                     self._stop_recording()
+                        
+                        # Per-step timings to log every phase-block iteration (bottleneck analysis)
+                        cap = self._last_capture_ms if self._last_capture_ms is not None else 0
+                        mot = self._last_motion_ms if self._last_motion_ms is not None else 0
+                        crop_s = _perf_crop_ms if _perf_crop_ms is not None else "-"
+                        tflite_s = _perf_tflite_ms if _perf_tflite_ms is not None else "-"
+                        track_s = _perf_track_ms if _perf_track_ms is not None else "-"
+                        annot_s = _perf_annot_ms if _perf_annot_ms is not None else "-"
+                        plog("[PERF] cap=%.0fms motion=%.0fms crop=%s tflite=%s track=%s annot=%s phase=%s",
+                             cap, mot, crop_s, tflite_s, track_s, annot_s, self._phase)
                     
                     # Rate-limit inject mode
                 if self.inject_cat:

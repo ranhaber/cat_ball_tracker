@@ -2,7 +2,7 @@
 
 A real-time cat and ball detection system for Raspberry Pi Zero 2W with Camera Module 3. Features motion-first detection for efficiency, a web interface for live streaming, and zone-based tracking.
 
-**Version:** 3.7.1
+**Version:** 3.8.0
 
 **For agents and developers:** See **[AGENTS.md](AGENTS.md)** for project guidelines, concurrency rules, and where to find things. Use it as the single entry point before diving into code or other docs.
 
@@ -692,6 +692,32 @@ sudo journalctl -u cat_ball_tracker -n 50
 - Delete `perimeter.json` and recreate
 - Ensure snapshot resolution matches camera resolution
 
+### Where do application logs (prints) appear?
+
+All application output goes to **stdout** (or via the async log writer to stdout), then through the wrapper script to **journald** and to `logs/latest.log`. You see:
+
+- **Startup:** Banner, "Starting server", "Loaded settings", "[PROFILE] Applied...", "Initializing video processor", "Video processor started", "TFLite model ready", then **libcamera/picamera2** messages when the camera starts (those are from the library, not our code). Scroll **up** in the journal to see our startup lines; they appear just before the libcamera flood.
+- **At runtime:** We only log on **events**: phase changes (`[PHASE] ...`), inject cleanup (`[INJECT CLEANUP]`), recording start/stop (`[REC]`), `[PERF]` when AI runs, and errors. In **IDLE** with no motion there are no phase changes, so the journal is quiet until something happens. That is expected.
+- **To follow live:** `sudo journalctl -u cat_dome -f` or `tail -f ~/cat_ball_tracker/logs/latest.log`.
+
+### Per-step performance log (bottleneck analysis)
+
+Every phase-block iteration (every processed frame) a single line is written to the log:
+
+`[PERF] cap=850ms motion=45ms crop=0.1 tflite=72 track=0.2 annot=12 phase=IDLE`
+
+| Field | Meaning |
+|-------|--------|
+| **cap** | Time (ms) to get one raw frame from the camera (blocking). |
+| **motion** | Time (ms) for motion detection (resize to ¼, background, contours). |
+| **crop** | Time (ms) to slice the crop from the frame (crop only; `-` when no crop). |
+| **tflite** | Time (ms) for TFLite to run on the 300×300 (or full frame); `-` when AI did not run this frame. |
+| **track** | Time (ms) for tracker update + merge IDs. |
+| **annot** | Time (ms) for draw + resize + JPEG encode (when stream has clients); `-` when no stream. |
+| **phase** | IDLE / ACQUISITION / TRACKING / WATCH. |
+
+Use this to find the bottleneck: e.g. high **cap** → camera; high **motion** → motion scale/resolution; high **tflite** → model/threads; high **annot** → stream resolution or JPEG quality.
+
 ### Low FPS (how to find the cause)
 
 The **displayed FPS** is processed frames per second (how often the phase block runs). Expected range is **3–7 FPS** depending on profile (see § Expected FPS from the code).
@@ -745,6 +771,8 @@ The **displayed FPS** is processed frames per second (how often the phase block 
 
 ## 📝 Version History
 
+- **v3.8.0** - Non-blocking async logging (queue + writer thread, plog); per-step performance log every processed frame ([PERF] cap/motion/crop/tflite/track/annot); FPS diagnostics in status API and UI (Cap/Mot ms); heartbeat log every 30s; Inject Cat stop CPU fix (rate-limit sleep); AGENTS.md and README updated for architectural changes.
+- **v3.7.1** - Minor fixes.
 - **v3.7.0** - Real-time performance optimizations: pre-compute JPEG in process loop (zero-copy streaming), running-sum background model in motion detector (eliminates np.mean alloc), pre-allocated TFLite input buffer, narrowed motion detector lock (5-15ms -> <0.1ms), removed debug allocations from hot path, skip unused motion_mask allocation.
 - **v3.6.3** - Fix top-down view: merge tracker IDs into world-coordinate detections so red dots show stable track IDs and update with tracking.
 - **v3.6.2** - Code review: fix current_frame when no stream clients; move motion crop size to VideoProcessor (no config mutation); Inject Cat API returns 503 if processor not started; status overlay uses config constants; MOTION_CROP_SIZE comment updated.
