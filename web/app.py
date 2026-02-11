@@ -1429,13 +1429,13 @@ class VideoProcessor:
                 # Lores needs reconfiguration — schedule for processing thread
                 # (camera operations must happen on the thread that captures frames)
                 self._pending_lores_reconfigure = (min_lores_w, min_lores_h)
-                print(f"[SETTING] Stream resolution → {width}x{height} "
-                      f"(lores reconfigure {lores_w}×{lores_h} → {min_lores_w}×{min_lores_h} pending)")
+                print(f"[SETTING] Stream resolution -> {width}x{height} "
+                      f"(lores reconfigure {lores_w}x{lores_h} -> {min_lores_w}x{min_lores_h} pending)")
             else:
-                src = "no resize" if (width == lores_w and height == lores_h) else f"lores {lores_w}×{lores_h}"
-                print(f"[SETTING] Stream resolution → {width}x{height} ({src})")
+                src = "no resize" if (width == lores_w and height == lores_h) else f"lores {lores_w}x{lores_h}"
+                print(f"[SETTING] Stream resolution -> {width}x{height} ({src})")
         else:
-            print(f"[SETTING] Stream resolution → {width}x{height} (resize from main)")
+            print(f"[SETTING] Stream resolution -> {width}x{height} (resize from main)")
         return True
     
     def set_framerate(self, fps):
