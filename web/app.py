@@ -448,7 +448,9 @@ class VideoProcessor:
                         with request as req:
                             frame = req.make_array("main")
                             if self._using_lores:
-                                frame_lores = req.make_array("lores")
+                                # ISP lores is YUV420 (only format supported); convert to BGR for OpenCV
+                                lores_yuv = req.make_array("lores")
+                                frame_lores = cv2.cvtColor(lores_yuv, cv2.COLOR_YUV420p2BGR)
                 self._last_capture_ms = round((time.perf_counter() - t_capture_start) * 1000, 1)
                 
                 frame_h, frame_w = frame.shape[:2]

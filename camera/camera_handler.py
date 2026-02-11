@@ -189,6 +189,8 @@ class CameraHandler:
             
             # Configure for video capture optimized for RPi Zero 2W
             # Dual-stream: main (full-res for AI crop/snapshots) + lores (ISP-downscaled for motion/stream)
+            # NOTE: picamera2 ISP lores stream MUST be YUV format (RGB not supported).
+            # The processing loop converts YUV420→BGR after capture (~3ms on 960×540).
             lores_w, lores_h = self.lores_size
             try:
                 camera_config = self.camera.create_video_configuration(
@@ -198,17 +200,18 @@ class CameraHandler:
                     },
                     lores={
                         "size": (lores_w, lores_h),
-                        "format": "RGB888"
+                        "format": "YUV420"  # ISP lores requires YUV; converted to BGR in processing loop
                     },
                     controls={
                         "FrameRate": self.fps
                     },
                     buffer_count=2  # 2 buffer sets (main+lores each). Saves RAM vs 4.
                 )
+                self.camera.configure(camera_config)
                 self.has_lores = True
-                print(f"📷 Dual-stream config: main={self.width}×{self.height}, lores={lores_w}×{lores_h}")
+                print(f"📷 Dual-stream config: main={self.width}×{self.height}, lores={lores_w}×{lores_h} (YUV420→BGR)")
             except Exception as e:
-                print(f"⚠️  Lores stream failed ({e}), using main-only config")
+                print(f"⚠️  Lores stream failed ({e}), falling back to main-only")
                 camera_config = self.camera.create_video_configuration(
                     main={
                         "size": (self.width, self.height),
@@ -219,9 +222,8 @@ class CameraHandler:
                     },
                     buffer_count=2
                 )
+                self.camera.configure(camera_config)
                 self.has_lores = False
-            
-            self.camera.configure(camera_config)
             
             print(f"📷 Starting camera at {self.width}×{self.height}...")
             try:
