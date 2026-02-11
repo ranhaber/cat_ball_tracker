@@ -99,6 +99,7 @@ class VideoProcessor:
         self._fps_count = 0
         # FPS diagnostics: last capture and motion duration (ms) to find bottleneck
         self._last_capture_ms = None
+        self._last_queue_wait_ms = None  # How long processing thread waited for next frame
         self._last_motion_ms = None
         self._last_heartbeat_time = 0.0  # for periodic log so journal shows activity when idle
         
@@ -631,10 +632,12 @@ class VideoProcessor:
                     plog("[INJECT CLEANUP] motion reset, TFLite unload, OpenCV threads=1, phase=%s", self._phase)
                 
                 # ── Frame from capture thread (pipelined) ──
+                t_qw = time.perf_counter()
                 try:
                     payload = self._frame_queue.get(timeout=0.5)
                 except queue.Empty:
                     continue
+                self._last_queue_wait_ms = round((time.perf_counter() - t_qw) * 1000, 1)
                 frame, frame_lores, frame_lores_y, _lores_from_isp, cap_ms = payload
                 if frame is None:
                     continue
@@ -1051,7 +1054,10 @@ class VideoProcessor:
                                 self._stop_recording()
                     
                     # Per-step timings to log every phase-block iteration (bottleneck analysis)
+                    # cap = capture thread time (camera wait + memcpy)
+                    # qw = queue wait (how long processing thread blocked for next frame — low = good overlap)
                     cap = self._last_capture_ms if self._last_capture_ms is not None else 0
+                    qw = self._last_queue_wait_ms if self._last_queue_wait_ms is not None else 0
                     mot = self._last_motion_ms if self._last_motion_ms is not None else 0
                     getcrop_s = _perf_getcrop_ms if _perf_getcrop_ms is not None else "-"
                     crop_s = _perf_crop_ms if _perf_crop_ms is not None else "-"
@@ -1074,8 +1080,8 @@ class VideoProcessor:
                         annot_s = "%.0f(rsz=%s jpg=%s)" % (_perf_annot_ms, rsz_s, jpg_s)
                     else:
                         annot_s = "-"
-                    plog("[PERF] cap=%.0fms mot=%.0fms gcrop=%s crop=%s tf=%s filt=%s world=%s trk=%s ann=%s ph=%s",
-                         cap, mot, getcrop_s, crop_s, tflite_s, filt_s, world_s, track_s, annot_s, self._phase)
+                    plog("[PERF] cap=%.0fms qw=%.0fms mot=%.0fms gcrop=%s crop=%s tf=%s filt=%s world=%s trk=%s ann=%s ph=%s",
+                         cap, qw, mot, getcrop_s, crop_s, tflite_s, filt_s, world_s, track_s, annot_s, self._phase)
                     
                     # Rate-limit inject mode
                 if self.inject_cat:
