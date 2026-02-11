@@ -286,6 +286,12 @@ class VideoProcessor:
             if raw:
                 perim_points = [[int(p[0]), int(p[1])] for p in raw]
         
+        # Include inject cat bbox for H.264 overlay when inject test is active
+        inject_bbox = None
+        if self.inject_cat and self.inject_cat_handler and self.inject_cat_handler.bbox:
+            b = self.inject_cat_handler.bbox
+            inject_bbox = [int(b[0]), int(b[1]), int(b[2]), int(b[3])]
+        
         overlay = {
             "phase": self._phase,
             "fps": round(self.fps, 1),
@@ -297,6 +303,7 @@ class VideoProcessor:
             "crop_region": [int(v) for v in crop_region] if crop_region and self.show_motion_regions else None,
             "perimeter": perim_points,
             "capture_res": [capture_w, capture_h],
+            "inject_cat_bbox": inject_bbox,
         }
         
         with self._overlay_data_lock:
@@ -576,62 +583,18 @@ class VideoProcessor:
                 frame_h, frame_w = frame.shape[:2]
                 tracked_objects = {}  # Used by phase block and by inject stream update below
                 
-                # ── Inject cat: paste cat on real camera frame ──
+                # ── Inject cat: simulate a camera frame that contains a moving cat ──
+                # The cat is pasted on BOTH the main frame and lores, so the entire
+                # pipeline (motion → AI → tracking → world → annotation) processes
+                # it exactly as if a real cat walked through the scene.
                 if self.inject_cat and self.inject_cat_handler:
                     frame = self.inject_cat_handler.paste_on_frame(frame)
-                    # Invalidate ISP lores — cat was pasted on main, derive new BGR lores
+                    # Re-derive lores from main so motion detection sees the cat
                     if self._using_lores:
                         frame_lores = cv2.resize(frame, self._lores_resolution,
                                                  interpolation=cv2.INTER_LINEAR)
-                        frame_lores_y = None   # ISP Y plane is stale (no cat)
+                        frame_lores_y = None   # ISP Y plane is stale; motion will use BGR lores
                         _lores_from_isp = False
-                    # Debug logging
-                    if not hasattr(self, '_inject_debug_count'):
-                        self._inject_debug_count = 0
-                    self._inject_debug_count += 1
-                    if self._inject_debug_count <= 5 or self._inject_debug_count % 50 == 0:
-                        ram_info = get_ram_stats()
-                        plog("[INJECT DEBUG] %s, clients=%s, RAM: %s",
-                             self.inject_cat_handler.get_debug_info(), self.stream_clients, ram_info)
-                    # Update stream every frame so the cat moves visibly (phase block only runs every frame_skip)
-                    if self.stream_clients > 0:
-                        stream_w, stream_h = self.current_stream_resolution
-                        ann, _, _ = self._resize_for_stream(frame, frame_lores, stream_w, stream_h)
-                        # Draw perimeter (cached scaled)
-                        perim_polygon, perim_pts = self._get_scaled_perimeter(stream_w, stream_h)
-                        if perim_polygon is not None and len(perim_polygon) >= 3:
-                            cv2.polylines(ann, [perim_polygon], True,
-                                          config.PERIMETER_COLOR, config.PERIMETER_THICKNESS)
-                        self._draw_status(ann)
-                        with self._cached_jpeg_lock:
-                            self._cached_jpeg = self._encode_jpeg(ann, self.current_jpeg_quality)
-                        with self.frame_lock:
-                            self.current_frame = frame
-                    # Update H.264 overlay so the injected cat is drawn on the client overlay canvas
-                    cap_w, cap_h = self.current_resolution
-                    perim_points = []
-                    if self.perimeter and hasattr(self.perimeter, 'get_points'):
-                        raw = self.perimeter.get_points()
-                        if raw:
-                            perim_points = [[int(p[0]), int(p[1])] for p in raw]
-                    inject_bbox = None
-                    if self.inject_cat_handler and self.inject_cat_handler.bbox:
-                        b = self.inject_cat_handler.bbox
-                        inject_bbox = [int(b[0]), int(b[1]), int(b[2]), int(b[3])]
-                    overlay = {
-                        "phase": self._phase,
-                        "fps": round(self.fps, 1),
-                        "mode": self.detector.get_detection_mode() if self.detector else "cat",
-                        "objects": self.tracker.get_object_count() if self.tracker else 0,
-                        "detections": [],
-                        "motion_regions": [],
-                        "crop_region": None,
-                        "perimeter": perim_points,
-                        "capture_res": [cap_w, cap_h],
-                        "inject_cat_bbox": inject_bbox,
-                    }
-                    with self._overlay_data_lock:
-                        self._overlay_data = overlay
                 
                 # ══════════════════════════════════════════════════════════
                 # PHASE STATE MACHINE: IDLE → ACQUISITION → TRACKING → WATCH
@@ -666,52 +629,97 @@ class VideoProcessor:
                     _perf_filter_ms = None   # perimeter filter + temporal confirm
                     _perf_world_ms = None    # world coord computation
                     
-                    # When inject_cat, skip motion/AI/annotation so loop stays fast and cat keeps moving
-                    if not self.inject_cat:
-                        # ── PHASE: IDLE ──
-                        # Motion detection only. TFLite not loaded. Low power.
-                        if self._phase == "IDLE":
-                            t_motion_start = time.perf_counter()
-                            if frame_lores_y is not None:
-                                motion_result = self.motion_detector.detect(frame_lores_y, gray_input=True)
-                            else:
-                                motion_input = frame_lores if frame_lores is not None else frame
-                                motion_result = self.motion_detector.detect(motion_input)
-                            self._scale_motion_to_main(motion_result, frame_w, frame_h)
-                            self._last_motion_ms = round((time.perf_counter() - t_motion_start) * 1000, 1)
-                            motion_regions_in_perimeter = self._filter_motion_to_perimeter(
-                                motion_result, frame_w, frame_h)
-                            self.motion_detected = len(motion_regions_in_perimeter) > 0
-                            
-                            if self.motion_detected or self.inject_cat:
-                                # Transition → ACQUISITION
-                                self._phase = "ACQUISITION"
-                                self._phase_frame_counter = 0
-                                self._last_motion_time = now
-                                cv2.setNumThreads(4)
-                                plog("[PHASE] IDLE → ACQUISITION (motion in Detection Zone)")
+                    # When inject_cat is active, skip IDLE and force straight to ACQUISITION
+                    # (first inject frame has no motion history yet; subsequent frames will
+                    # have natural motion from the cat moving across the scene)
+                    if self.inject_cat and self._phase == "IDLE":
+                        self._phase = "ACQUISITION"
+                        self._phase_frame_counter = 0
+                        self._last_motion_time = now
+                        cv2.setNumThreads(4)
+                        plog("[PHASE] IDLE → ACQUISITION (inject cat)")
+                    
+                    # ── PHASE: IDLE ──
+                    # Motion detection only. TFLite not loaded. Low power.
+                    if self._phase == "IDLE":
+                        t_motion_start = time.perf_counter()
+                        if frame_lores_y is not None:
+                            motion_result = self.motion_detector.detect(frame_lores_y, gray_input=True)
+                        else:
+                            motion_input = frame_lores if frame_lores is not None else frame
+                            motion_result = self.motion_detector.detect(motion_input)
+                        self._scale_motion_to_main(motion_result, frame_w, frame_h)
+                        self._last_motion_ms = round((time.perf_counter() - t_motion_start) * 1000, 1)
+                        motion_regions_in_perimeter = self._filter_motion_to_perimeter(
+                            motion_result, frame_w, frame_h)
+                        self.motion_detected = len(motion_regions_in_perimeter) > 0
                         
-                        # ── PHASE: ACQUISITION ──
-                        # TFLite runs every frame, searching for cat.
-                        elif self._phase == "ACQUISITION":
-                            t_motion_start = time.perf_counter()
-                            if frame_lores_y is not None:
-                                motion_result = self.motion_detector.detect(frame_lores_y, gray_input=True)
-                            else:
-                                motion_input = frame_lores if frame_lores is not None else frame
-                                motion_result = self.motion_detector.detect(motion_input)
-                            self._scale_motion_to_main(motion_result, frame_w, frame_h)
-                            self._last_motion_ms = round((time.perf_counter() - t_motion_start) * 1000, 1)
-                            t_filt_motion = time.perf_counter()
-                            motion_regions_in_perimeter = self._filter_motion_to_perimeter(
-                                motion_result, frame_w, frame_h)
-                            self.motion_detected = len(motion_regions_in_perimeter) > 0
-                            if self.motion_detected:
-                                self._last_motion_time = now
-                            
-                            # AI runs every frame during acquisition
+                        if self.motion_detected:
+                            # Transition → ACQUISITION
+                            self._phase = "ACQUISITION"
+                            self._phase_frame_counter = 0
+                            self._last_motion_time = now
+                            cv2.setNumThreads(4)
+                            plog("[PHASE] IDLE → ACQUISITION (motion in Detection Zone)")
+                    
+                    # ── PHASE: ACQUISITION ──
+                    # TFLite runs every frame, searching for cat.
+                    elif self._phase == "ACQUISITION":
+                        t_motion_start = time.perf_counter()
+                        if frame_lores_y is not None:
+                            motion_result = self.motion_detector.detect(frame_lores_y, gray_input=True)
+                        else:
+                            motion_input = frame_lores if frame_lores is not None else frame
+                            motion_result = self.motion_detector.detect(motion_input)
+                        self._scale_motion_to_main(motion_result, frame_w, frame_h)
+                        self._last_motion_ms = round((time.perf_counter() - t_motion_start) * 1000, 1)
+                        t_filt_motion = time.perf_counter()
+                        motion_regions_in_perimeter = self._filter_motion_to_perimeter(
+                            motion_result, frame_w, frame_h)
+                        self.motion_detected = len(motion_regions_in_perimeter) > 0
+                        if self.motion_detected:
+                            self._last_motion_time = now
+                        
+                        # AI runs every frame during acquisition
+                        run_ai_detection = True
+                        t_getcrop = time.perf_counter()
+                        crop_size = self.current_motion_crop_size
+                        if self.inject_cat and self.inject_cat_handler:
+                            crop_region = self.inject_cat_handler.get_crop_region(
+                                frame_w, frame_h, crop_size)
+                        elif motion_regions_in_perimeter:
+                            crop_region = self.motion_detector.get_fixed_crop_region(
+                                frame.shape, crop_size=crop_size)
+                        _perf_getcrop_ms = round((time.perf_counter() - t_getcrop) * 1000, 1)
+                        
+                        # Timeout: no motion for 10s → back to IDLE
+                        if not self.inject_cat and (now - self._last_motion_time > self._acquisition_timeout):
+                            self._phase = "IDLE"
+                            self._phase_frame_counter = 0
+                            self.detector.unload_model()
+                            cv2.setNumThreads(1)
+                            reclaim_memory()
+                            plog("[PHASE] ACQUISITION → IDLE (no motion for %ss)", self._acquisition_timeout)
+                    
+                    # ── PHASE: TRACKING ──
+                    # Cat confirmed. TFLite every 3rd processed frame with motion crop.
+                    elif self._phase == "TRACKING":
+                        t_motion_start = time.perf_counter()
+                        if frame_lores_y is not None:
+                            motion_result = self.motion_detector.detect(frame_lores_y, gray_input=True)
+                        else:
+                            motion_input = frame_lores if frame_lores is not None else frame
+                            motion_result = self.motion_detector.detect(motion_input)
+                        self._scale_motion_to_main(motion_result, frame_w, frame_h)
+                        self._last_motion_ms = round((time.perf_counter() - t_motion_start) * 1000, 1)
+                        motion_regions_in_perimeter = self._filter_motion_to_perimeter(
+                            motion_result, frame_w, frame_h)
+                        self.motion_detected = len(motion_regions_in_perimeter) > 0
+                        if self.motion_detected:
+                            self._last_motion_time = now
+                        
+                        if self._phase_frame_counter % config.PHASE_TRACKING_AI_INTERVAL == 0:
                             run_ai_detection = True
-                            t_getcrop = time.perf_counter()
                             crop_size = self.current_motion_crop_size
                             if self.inject_cat and self.inject_cat_handler:
                                 crop_region = self.inject_cat_handler.get_crop_region(
@@ -719,332 +727,295 @@ class VideoProcessor:
                             elif motion_regions_in_perimeter:
                                 crop_region = self.motion_detector.get_fixed_crop_region(
                                     frame.shape, crop_size=crop_size)
-                            _perf_getcrop_ms = round((time.perf_counter() - t_getcrop) * 1000, 1)
-                            
-                            # Timeout: no motion for 10s → back to IDLE
-                            if not self.inject_cat and (now - self._last_motion_time > self._acquisition_timeout):
-                                self._phase = "IDLE"
-                                self._phase_frame_counter = 0
-                                self.detector.unload_model()
-                                cv2.setNumThreads(1)
-                                reclaim_memory()
-                                plog("[PHASE] ACQUISITION → IDLE (no motion for %ss)", self._acquisition_timeout)
                         
-                        # ── PHASE: TRACKING ──
-                        # Cat confirmed. TFLite every 3rd processed frame with motion crop.
-                        elif self._phase == "TRACKING":
-                            t_motion_start = time.perf_counter()
-                            if frame_lores_y is not None:
-                                motion_result = self.motion_detector.detect(frame_lores_y, gray_input=True)
-                            else:
-                                motion_input = frame_lores if frame_lores is not None else frame
-                                motion_result = self.motion_detector.detect(motion_input)
-                            self._scale_motion_to_main(motion_result, frame_w, frame_h)
-                            self._last_motion_ms = round((time.perf_counter() - t_motion_start) * 1000, 1)
-                            motion_regions_in_perimeter = self._filter_motion_to_perimeter(
-                                motion_result, frame_w, frame_h)
-                            self.motion_detected = len(motion_regions_in_perimeter) > 0
-                            if self.motion_detected:
-                                self._last_motion_time = now
-                            
-                            if self._phase_frame_counter % config.PHASE_TRACKING_AI_INTERVAL == 0:
-                                run_ai_detection = True
-                                crop_size = self.current_motion_crop_size
-                                if self.inject_cat and self.inject_cat_handler:
-                                    crop_region = self.inject_cat_handler.get_crop_region(
-                                        frame_w, frame_h, crop_size)
-                                elif motion_regions_in_perimeter:
-                                    crop_region = self.motion_detector.get_fixed_crop_region(
-                                        frame.shape, crop_size=crop_size)
-                            
-                            # Motion stopped → WATCH
-                            if not self.motion_detected and not self.inject_cat:
-                                self._phase = "WATCH"
-                                self._phase_frame_counter = 0
-                                plog("[PHASE] TRACKING → WATCH (motion stopped, watching for cat)")
-                            
-                            # No detection for 30s → IDLE
-                            if now - self._last_detection_time > self._detection_timeout:
-                                self._phase = "IDLE"
-                                self._phase_frame_counter = 0
-                                self.detector.unload_model()
-                                cv2.setNumThreads(1)
-                                reclaim_memory()
-                                last_detections = []
-                                self.last_detections_with_world = []
-                                plog("[PHASE] TRACKING → IDLE (no detection for %ss)", self._detection_timeout)
+                        # Motion stopped → WATCH
+                        if not self.motion_detected and not self.inject_cat:
+                            self._phase = "WATCH"
+                            self._phase_frame_counter = 0
+                            plog("[PHASE] TRACKING → WATCH (motion stopped, watching for cat)")
                         
-                        # ── PHASE: WATCH ──
-                        # No motion but cat was recently detected. TFLite every 2nd frame.
-                        elif self._phase == "WATCH":
-                            t_motion_start = time.perf_counter()
-                            if frame_lores_y is not None:
-                                motion_result = self.motion_detector.detect(frame_lores_y, gray_input=True)
-                            else:
-                                motion_input = frame_lores if frame_lores is not None else frame
-                                motion_result = self.motion_detector.detect(motion_input)
-                            self._scale_motion_to_main(motion_result, frame_w, frame_h)
-                            self._last_motion_ms = round((time.perf_counter() - t_motion_start) * 1000, 1)
-                            motion_regions_in_perimeter = self._filter_motion_to_perimeter(
-                                motion_result, frame_w, frame_h)
-                            self.motion_detected = len(motion_regions_in_perimeter) > 0
-                            
-                            # Cat moved again → back to TRACKING
-                            if self.motion_detected:
-                                self._last_motion_time = now
+                        # No detection for 30s → IDLE
+                        if now - self._last_detection_time > self._detection_timeout:
+                            self._phase = "IDLE"
+                            self._phase_frame_counter = 0
+                            self.detector.unload_model()
+                            cv2.setNumThreads(1)
+                            reclaim_memory()
+                            last_detections = []
+                            self.last_detections_with_world = []
+                            plog("[PHASE] TRACKING → IDLE (no detection for %ss)", self._detection_timeout)
+                    
+                    # ── PHASE: WATCH ──
+                    # No motion but cat was recently detected. TFLite every 2nd frame.
+                    elif self._phase == "WATCH":
+                        t_motion_start = time.perf_counter()
+                        if frame_lores_y is not None:
+                            motion_result = self.motion_detector.detect(frame_lores_y, gray_input=True)
+                        else:
+                            motion_input = frame_lores if frame_lores is not None else frame
+                            motion_result = self.motion_detector.detect(motion_input)
+                        self._scale_motion_to_main(motion_result, frame_w, frame_h)
+                        self._last_motion_ms = round((time.perf_counter() - t_motion_start) * 1000, 1)
+                        motion_regions_in_perimeter = self._filter_motion_to_perimeter(
+                            motion_result, frame_w, frame_h)
+                        self.motion_detected = len(motion_regions_in_perimeter) > 0
+                        
+                        # Cat moved again → back to TRACKING
+                        if self.motion_detected:
+                            self._last_motion_time = now
+                            self._phase = "TRACKING"
+                            self._phase_frame_counter = 0
+                            plog("[PHASE] WATCH → TRACKING (motion resumed)")
+                        
+                        if self._phase_frame_counter % config.PHASE_WATCH_AI_INTERVAL == 0:
+                            run_ai_detection = True
+                            # No crop in WATCH — scan wider area
+                        
+                        # No detection for 30s → IDLE
+                        if now - self._last_detection_time > self._detection_timeout:
+                            self._phase = "IDLE"
+                            self._phase_frame_counter = 0
+                            self.detector.unload_model()
+                            cv2.setNumThreads(1)
+                            reclaim_memory()
+                            last_detections = []
+                            self.last_detections_with_world = []
+                            plog("[PHASE] WATCH → IDLE (no detection for %ss)", self._detection_timeout)
+                    
+                    # ── AI DETECTION (shared by ACQUISITION, TRACKING, WATCH) ──
+                    if run_ai_detection:
+                        if crop_region:
+                            cx, cy, cw, ch = crop_region
+                            t0 = time.perf_counter()
+                            cropped_frame = frame[cy:cy+ch, cx:cx+cw]
+                            _perf_crop_ms = round((time.perf_counter() - t0) * 1000, 1)
+                            t1 = time.perf_counter()
+                            crop_detections = self.detector.detect(cropped_frame)
+                            _perf_tflite_ms = round((time.perf_counter() - t1) * 1000, 1)
+                            detections = []
+                            for det in crop_detections:
+                                x1, y1, x2, y2, conf, class_id = det
+                                detections.append((x1 + cx, y1 + cy, x2 + cx, y2 + cy, conf, class_id))
+                        else:
+                            t1 = time.perf_counter()
+                            detections = self.detector.detect(frame)
+                            _perf_tflite_ms = round((time.perf_counter() - t1) * 1000, 1)
+                        
+                        # Grab TFLite sub-breakdown
+                        _perf_tflite_detail = getattr(self.detector, '_last_perf', None)
+                        
+                        ai_time_ms = (_perf_crop_ms or 0) + (_perf_tflite_ms or 0)
+                        
+                        # Inject Cat fallback: if TFLite didn't detect the pasted cat
+                        if self.inject_cat and self.inject_cat_handler and self.inject_cat_handler.bbox:
+                            bbox = self.inject_cat_handler.bbox
+                            cat_class_id = config.COCO_CLASSES.get('cat', 17)
+                            proximity = config.INJECT_BBOX_PROXIMITY_PX
+                            tflite_found = any(
+                                abs((d[0]+d[2])/2 - (bbox[0]+bbox[2])/2) < proximity and
+                                abs((d[1]+d[3])/2 - (bbox[1]+bbox[3])/2) < proximity
+                                for d in detections
+                            )
+                            if not tflite_found:
+                                detections.append((bbox[0], bbox[1], bbox[2], bbox[3],
+                                                   config.INJECT_FALLBACK_CONFIDENCE, cat_class_id))
+                        
+                        # Filter by perimeter + temporal confirmation
+                        t_filter = time.perf_counter()
+                        frame_res = (frame_w, frame_h)
+                        raw_count = len(detections)
+                        detections = self.perimeter.filter_detections(detections, frame_resolution=frame_res)
+                        self.ai_detections_count += 1
+                        
+                        # Temporal confirmation
+                        self.detection_history.append(len(detections) > 0)
+                        if len(self.detection_history) > self.confirm_frames:
+                            self.detection_history.pop(0)
+                        if self.confirm_frames > 1:
+                            confirmed = len(self.detection_history) >= self.confirm_frames and all(self.detection_history)
+                            if not confirmed:
+                                detections = []
+                        _perf_filter_ms = round((time.perf_counter() - t_filter) * 1000, 1)
+                        
+                        last_detections = detections
+                        
+                        # Phase transitions based on detection results
+                        if len(detections) > 0:
+                            self._last_detection_time = now
+                            # ACQUISITION → TRACKING (cat found!)
+                            if self._phase == "ACQUISITION":
                                 self._phase = "TRACKING"
                                 self._phase_frame_counter = 0
-                                plog("[PHASE] WATCH → TRACKING (motion resumed)")
-                            
-                            if self._phase_frame_counter % config.PHASE_WATCH_AI_INTERVAL == 0:
-                                run_ai_detection = True
-                                # No crop in WATCH — scan wider area
-                            
-                            # No detection for 30s → IDLE
-                            if now - self._last_detection_time > self._detection_timeout:
-                                self._phase = "IDLE"
-                                self._phase_frame_counter = 0
-                                self.detector.unload_model()
-                                cv2.setNumThreads(1)
-                                reclaim_memory()
-                                last_detections = []
-                                self.last_detections_with_world = []
-                                plog("[PHASE] WATCH → IDLE (no detection for %ss)", self._detection_timeout)
+                                plog("[PHASE] ACQUISITION → TRACKING (cat detected!)")
                         
-                        # ── AI DETECTION (shared by ACQUISITION, TRACKING, WATCH) ──
-                        if run_ai_detection:
-                            if crop_region:
-                                cx, cy, cw, ch = crop_region
-                                t0 = time.perf_counter()
-                                cropped_frame = frame[cy:cy+ch, cx:cx+cw]
-                                _perf_crop_ms = round((time.perf_counter() - t0) * 1000, 1)
-                                t1 = time.perf_counter()
-                                crop_detections = self.detector.detect(cropped_frame)
-                                _perf_tflite_ms = round((time.perf_counter() - t1) * 1000, 1)
-                                detections = []
-                                for det in crop_detections:
-                                    x1, y1, x2, y2, conf, class_id = det
-                                    detections.append((x1 + cx, y1 + cy, x2 + cx, y2 + cy, conf, class_id))
-                            else:
-                                t1 = time.perf_counter()
-                                detections = self.detector.detect(frame)
-                                _perf_tflite_ms = round((time.perf_counter() - t1) * 1000, 1)
-                            
-                            # Grab TFLite sub-breakdown
-                            _perf_tflite_detail = getattr(self.detector, '_last_perf', None)
-                            
-                            ai_time_ms = (_perf_crop_ms or 0) + (_perf_tflite_ms or 0)
-                            
-                            # Inject Cat fallback: if TFLite didn't detect the pasted cat
-                            if self.inject_cat and self.inject_cat_handler and self.inject_cat_handler.bbox:
-                                bbox = self.inject_cat_handler.bbox
-                                cat_class_id = config.COCO_CLASSES.get('cat', 17)
-                                proximity = config.INJECT_BBOX_PROXIMITY_PX
-                                tflite_found = any(
-                                    abs((d[0]+d[2])/2 - (bbox[0]+bbox[2])/2) < proximity and
-                                    abs((d[1]+d[3])/2 - (bbox[1]+bbox[3])/2) < proximity
-                                    for d in detections
-                                )
-                                if not tflite_found:
-                                    detections.append((bbox[0], bbox[1], bbox[2], bbox[3],
-                                                       config.INJECT_FALLBACK_CONFIDENCE, cat_class_id))
-                            
-                            # Filter by perimeter + temporal confirmation
-                            t_filter = time.perf_counter()
-                            frame_res = (frame_w, frame_h)
-                            raw_count = len(detections)
-                            detections = self.perimeter.filter_detections(detections, frame_resolution=frame_res)
-                            self.ai_detections_count += 1
-                            
-                            # Temporal confirmation
-                            self.detection_history.append(len(detections) > 0)
-                            if len(self.detection_history) > self.confirm_frames:
-                                self.detection_history.pop(0)
-                            if self.confirm_frames > 1:
-                                confirmed = len(self.detection_history) >= self.confirm_frames and all(self.detection_history)
-                                if not confirmed:
-                                    detections = []
-                            _perf_filter_ms = round((time.perf_counter() - t_filter) * 1000, 1)
-                            
-                            last_detections = detections
-                            
-                            # Phase transitions based on detection results
-                            if len(detections) > 0:
-                                self._last_detection_time = now
-                                # ACQUISITION → TRACKING (cat found!)
-                                if self._phase == "ACQUISITION":
-                                    self._phase = "TRACKING"
-                                    self._phase_frame_counter = 0
-                                    plog("[PHASE] ACQUISITION → TRACKING (cat detected!)")
-                            
-                            # Compute world coordinates
-                            t_world = time.perf_counter()
-                            self.last_detections_with_world = []
-                            for det in detections:
-                                x1, y1, x2, y2, conf, class_id = det
-                                world_pos = None
-                                if self.calibration and self.calibration.is_calibrated:
-                                    bcx = (x1 + x2) / 2
-                                    bcy = y2  # bottom-center
-                                    wp = self.pixel_to_world(bcx, bcy, already_undistorted=False)
-                                    if wp:
-                                        world_pos = {"world_x": round(wp[0], 2), "world_y": round(wp[1], 2)}
-                                is_injected = (self.inject_cat and
-                                              conf == config.INJECT_FALLBACK_CONFIDENCE and 
-                                              self.inject_cat_handler and self.inject_cat_handler.bbox and
-                                              abs(x1 - self.inject_cat_handler.bbox[0]) < 5)
-                                self.last_detections_with_world.append({
-                                    "bbox": [x1, y1, x2, y2],
-                                    "confidence": round(conf, 2),
-                                    "class_id": class_id,
-                                    "world_position": world_pos,
-                                    "injected": is_injected
-                                })
-                            _perf_world_ms = round((time.perf_counter() - t_world) * 1000, 1)
+                        # Compute world coordinates
+                        t_world = time.perf_counter()
+                        self.last_detections_with_world = []
+                        for det in detections:
+                            x1, y1, x2, y2, conf, class_id = det
+                            world_pos = None
+                            if self.calibration and self.calibration.is_calibrated:
+                                bcx = (x1 + x2) / 2
+                                bcy = y2  # bottom-center
+                                wp = self.pixel_to_world(bcx, bcy, already_undistorted=False)
+                                if wp:
+                                    world_pos = {"world_x": round(wp[0], 2), "world_y": round(wp[1], 2)}
+                            is_injected = (self.inject_cat and
+                                          conf == config.INJECT_FALLBACK_CONFIDENCE and 
+                                          self.inject_cat_handler and self.inject_cat_handler.bbox and
+                                          abs(x1 - self.inject_cat_handler.bbox[0]) < 5)
+                            self.last_detections_with_world.append({
+                                "bbox": [x1, y1, x2, y2],
+                                "confidence": round(conf, 2),
+                                "class_id": class_id,
+                                "world_position": world_pos,
+                                "injected": is_injected
+                            })
+                        _perf_world_ms = round((time.perf_counter() - t_world) * 1000, 1)
+                    
+                    # ── Tracking ──
+                    t_track_start = time.perf_counter()
+                    tracked_objects = self.tracker.update(last_detections) if last_detections else {}
+                    # Merge tracker IDs into last_detections_with_world
+                    if tracked_objects and self.last_detections_with_world:
+                        tracked_bboxes = self.tracker.get_bboxes()  # {id: (x1,y1,x2,y2)}
+                        for det in self.last_detections_with_world:
+                            db = det["bbox"]  # [x1, y1, x2, y2]
+                            det_cx = (db[0] + db[2]) / 2
+                            det_cy = (db[1] + db[3]) / 2
+                            best_id = None
+                            best_dist = float('inf')
+                            for tid, tb in tracked_bboxes.items():
+                                tb_cx = (tb[0] + tb[2]) / 2
+                                tb_cy = (tb[1] + tb[3]) / 2
+                                d = abs(det_cx - tb_cx) + abs(det_cy - tb_cy)
+                                if d < best_dist:
+                                    best_dist = d
+                                    best_id = tid
+                            if best_id is not None and best_dist < 50:
+                                det["track_id"] = best_id
+                    _perf_track_ms = round((time.perf_counter() - t_track_start) * 1000, 1)
+                    
+                    # ── Annotation, JPEG pre-compute & frame storage ──
+                    annotated = frame  # Always defined (used by recording below)
+                    if self.stream_clients > 0:
+                        t_annot_start = time.perf_counter()
                         
-                        # ── Tracking ──
-                        t_track_start = time.perf_counter()
-                        tracked_objects = self.tracker.update(last_detections) if last_detections else {}
-                        # Merge tracker IDs into last_detections_with_world
-                        if tracked_objects and self.last_detections_with_world:
-                            tracked_bboxes = self.tracker.get_bboxes()  # {id: (x1,y1,x2,y2)}
-                            for det in self.last_detections_with_world:
-                                db = det["bbox"]  # [x1, y1, x2, y2]
-                                det_cx = (db[0] + db[2]) / 2
-                                det_cy = (db[1] + db[3]) / 2
-                                best_id = None
-                                best_dist = float('inf')
-                                for tid, tb in tracked_bboxes.items():
-                                    tb_cx = (tb[0] + tb[2]) / 2
-                                    tb_cy = (tb[1] + tb[3]) / 2
-                                    d = abs(det_cx - tb_cx) + abs(det_cy - tb_cy)
-                                    if d < best_dist:
-                                        best_dist = d
-                                        best_id = tid
-                                if best_id is not None and best_dist < 50:
-                                    det["track_id"] = best_id
-                        _perf_track_ms = round((time.perf_counter() - t_track_start) * 1000, 1)
+                        # Resize from lores (fast) or main (fallback), then draw on small frame
+                        stream_w, stream_h = self.current_stream_resolution
+                        t_rsz = time.perf_counter()
+                        stream_frame, sx, sy = self._resize_for_stream(
+                            frame, frame_lores, stream_w, stream_h)
+                        _perf_resize_ms = round((time.perf_counter() - t_rsz) * 1000, 1)
                         
-                        # ── Annotation, JPEG pre-compute & frame storage ──
-                        annotated = frame  # Always defined (used by recording below)
-                        if self.stream_clients > 0:
-                            t_annot_start = time.perf_counter()
-                            
-                            # Resize from lores (fast) or main (fallback), then draw on small frame
-                            stream_w, stream_h = self.current_stream_resolution
-                            t_rsz = time.perf_counter()
-                            stream_frame, sx, sy = self._resize_for_stream(
-                                frame, frame_lores, stream_w, stream_h)
-                            _perf_resize_ms = round((time.perf_counter() - t_rsz) * 1000, 1)
-                            
-                            # Draw motion regions (scaled to stream res)
-                            if self.show_motion_regions and self.motion_first_enabled and motion_regions_in_perimeter:
-                                for mx, my, mw, mh in motion_regions_in_perimeter:
-                                    cv2.rectangle(stream_frame,
-                                                  (int(mx * sx), int(my * sy)),
-                                                  (int((mx + mw) * sx), int((my + mh) * sy)),
-                                                  (0, 255, 255), 2)
-                                cv2.putText(stream_frame, "MOTION",
-                                            (10, stream_h - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
-                            
-                            # Draw crop region (scaled)
-                            if crop_region and self.show_motion_regions:
-                                rcx, rcy, rcw, rch = crop_region
+                        # Draw motion regions (scaled to stream res)
+                        if self.show_motion_regions and self.motion_first_enabled and motion_regions_in_perimeter:
+                            for mx, my, mw, mh in motion_regions_in_perimeter:
                                 cv2.rectangle(stream_frame,
-                                              (int(rcx * sx), int(rcy * sy)),
-                                              (int((rcx + rcw) * sx), int((rcy + rch) * sy)),
-                                              (255, 0, 255), 2)
-                            
-                            # Draw perimeter (pre-computed scaled cache)
-                            perim_polygon, perim_pts = self._get_scaled_perimeter(stream_w, stream_h)
-                            if perim_polygon is not None and len(perim_polygon) >= 3:
-                                cv2.polylines(stream_frame, [perim_polygon], True,
-                                              config.PERIMETER_COLOR, config.PERIMETER_THICKNESS)
-                                for pt in perim_pts:
-                                    cv2.circle(stream_frame, pt, 3, config.PERIMETER_COLOR, -1)
-                            
-                            # Draw detections (scaled to stream res)
-                            if last_detections:
-                                box_color = config.BOX_COLOR_CAT if self.detector.detection_mode == "cat" else config.BOX_COLOR_BALL
-                                for det in last_detections:
-                                    x1, y1, x2, y2, conf, class_id = det
-                                    sx1, sy1 = int(x1 * sx), int(y1 * sy)
-                                    sx2, sy2 = int(x2 * sx), int(y2 * sy)
-                                    cv2.rectangle(stream_frame, (sx1, sy1), (sx2, sy2), box_color, config.BOX_THICKNESS)
-                                    class_name = config.CLASS_NAMES.get(class_id, f"Class {class_id}")
-                                    label = f"{class_name}: {conf:.2f}"
-                                    if tracked_objects:
-                                        cx_det, cy_det = (sx1 + sx2) // 2, (sy1 + sy2) // 2
-                                        for obj_id, centroid in tracked_objects.items():
-                                            if abs(int(centroid[0] * sx) - cx_det) < 20 and abs(int(centroid[1] * sy) - cy_det) < 20:
-                                                label = f"ID:{obj_id} {label}"
-                                                break
-                                    (tw, th), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX,
-                                                                   config.FONT_SCALE, config.FONT_THICKNESS)
-                                    cv2.rectangle(stream_frame, (sx1, sy1 - th - 10), (sx1 + tw + 5, sy1),
-                                                  config.TEXT_BG_COLOR, -1)
-                                    cv2.putText(stream_frame, label, (sx1 + 2, sy1 - 5),
-                                                cv2.FONT_HERSHEY_SIMPLEX, config.FONT_SCALE,
-                                                config.TEXT_COLOR, config.FONT_THICKNESS)
-                            
-                            self._draw_status(stream_frame)
-                            t_jpg = time.perf_counter()
-                            with self._cached_jpeg_lock:
-                                self._cached_jpeg = self._encode_jpeg(stream_frame, self.current_jpeg_quality)
-                            _perf_jpeg_ms = round((time.perf_counter() - t_jpg) * 1000, 1)
-                            _perf_annot_ms = round((time.perf_counter() - t_annot_start) * 1000, 1)
+                                              (int(mx * sx), int(my * sy)),
+                                              (int((mx + mw) * sx), int((my + mh) * sy)),
+                                              (0, 255, 255), 2)
+                            cv2.putText(stream_frame, "MOTION",
+                                        (10, stream_h - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
                         
-                        # Update overlay data for H.264 Canvas streaming (always, even without clients —
-                        # data is tiny and read by WebSocket route when clients connect)
-                        self._update_overlay_data(last_detections, motion_regions_in_perimeter,
-                                                  crop_region, tracked_objects)
+                        # Draw crop region (scaled)
+                        if crop_region and self.show_motion_regions:
+                            rcx, rcy, rcw, rch = crop_region
+                            cv2.rectangle(stream_frame,
+                                          (int(rcx * sx), int(rcy * sy)),
+                                          (int((rcx + rcw) * sx), int((rcy + rch) * sy)),
+                                          (255, 0, 255), 2)
                         
-                        # Store raw frame for snapshot and recording (no copy needed —
-                        # frame is replaced by a new camera buffer on the next iteration)
-                        with self.frame_lock:
-                            self.current_frame = frame
+                        # Draw perimeter (pre-computed scaled cache)
+                        perim_polygon, perim_pts = self._get_scaled_perimeter(stream_w, stream_h)
+                        if perim_polygon is not None and len(perim_polygon) >= 3:
+                            cv2.polylines(stream_frame, [perim_polygon], True,
+                                          config.PERIMETER_COLOR, config.PERIMETER_THICKNESS)
+                            for pt in perim_pts:
+                                cv2.circle(stream_frame, pt, 3, config.PERIMETER_COLOR, -1)
                         
-                        # ── Recording ──
-                        if self.video_source == "live" and self.recording_enabled:
-                            target_class = config.COCO_CLASSES.get(self.get_detection_mode(), 17)
-                            has_target = any(d[5] == target_class for d in last_detections)
-                            now = time.time()
-                            if has_target:
-                                if self._recording_writer is None:
-                                    self._start_recording()
-                                if self._recording_writer is not None:
-                                    self._recording_writer.write(annotated)
-                                    self._recording_last_detection_time = now
-                            else:
-                                if self._recording_writer is not None and (now - self._recording_last_detection_time) >= self.record_after_detection_sec:
-                                    self._stop_recording()
+                        # Draw detections (scaled to stream res)
+                        if last_detections:
+                            box_color = config.BOX_COLOR_CAT if self.detector.detection_mode == "cat" else config.BOX_COLOR_BALL
+                            for det in last_detections:
+                                x1, y1, x2, y2, conf, class_id = det
+                                sx1, sy1 = int(x1 * sx), int(y1 * sy)
+                                sx2, sy2 = int(x2 * sx), int(y2 * sy)
+                                cv2.rectangle(stream_frame, (sx1, sy1), (sx2, sy2), box_color, config.BOX_THICKNESS)
+                                class_name = config.CLASS_NAMES.get(class_id, f"Class {class_id}")
+                                label = f"{class_name}: {conf:.2f}"
+                                if tracked_objects:
+                                    cx_det, cy_det = (sx1 + sx2) // 2, (sy1 + sy2) // 2
+                                    for obj_id, centroid in tracked_objects.items():
+                                        if abs(int(centroid[0] * sx) - cx_det) < 20 and abs(int(centroid[1] * sy) - cy_det) < 20:
+                                            label = f"ID:{obj_id} {label}"
+                                            break
+                                (tw, th), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX,
+                                                               config.FONT_SCALE, config.FONT_THICKNESS)
+                                cv2.rectangle(stream_frame, (sx1, sy1 - th - 10), (sx1 + tw + 5, sy1),
+                                              config.TEXT_BG_COLOR, -1)
+                                cv2.putText(stream_frame, label, (sx1 + 2, sy1 - 5),
+                                            cv2.FONT_HERSHEY_SIMPLEX, config.FONT_SCALE,
+                                            config.TEXT_COLOR, config.FONT_THICKNESS)
                         
-                        # Per-step timings to log every phase-block iteration (bottleneck analysis)
-                        cap = self._last_capture_ms if self._last_capture_ms is not None else 0
-                        mot = self._last_motion_ms if self._last_motion_ms is not None else 0
-                        getcrop_s = _perf_getcrop_ms if _perf_getcrop_ms is not None else "-"
-                        crop_s = _perf_crop_ms if _perf_crop_ms is not None else "-"
-                        # TFLite with sub-breakdown
-                        if _perf_tflite_ms is not None and _perf_tflite_detail:
-                            d = _perf_tflite_detail
-                            tflite_s = "%.0f(ld=%s pre=%s inv=%s post=%s)" % (
-                                _perf_tflite_ms, d.get("load", "-"), d.get("pre", "-"),
-                                d.get("invoke", "-"), d.get("post", "-"))
-                        elif _perf_tflite_ms is not None:
-                            tflite_s = str(_perf_tflite_ms)
+                        self._draw_status(stream_frame)
+                        t_jpg = time.perf_counter()
+                        with self._cached_jpeg_lock:
+                            self._cached_jpeg = self._encode_jpeg(stream_frame, self.current_jpeg_quality)
+                        _perf_jpeg_ms = round((time.perf_counter() - t_jpg) * 1000, 1)
+                        _perf_annot_ms = round((time.perf_counter() - t_annot_start) * 1000, 1)
+                    
+                    # Update overlay data for H.264 Canvas streaming (always, even without clients —
+                    # data is tiny and read by WebSocket route when clients connect)
+                    self._update_overlay_data(last_detections, motion_regions_in_perimeter,
+                                              crop_region, tracked_objects)
+                    
+                    # Store raw frame for snapshot and recording (no copy needed —
+                    # frame is replaced by a new camera buffer on the next iteration)
+                    with self.frame_lock:
+                        self.current_frame = frame
+                    
+                    # ── Recording ──
+                    if self.video_source == "live" and self.recording_enabled:
+                        target_class = config.COCO_CLASSES.get(self.get_detection_mode(), 17)
+                        has_target = any(d[5] == target_class for d in last_detections)
+                        now = time.time()
+                        if has_target:
+                            if self._recording_writer is None:
+                                self._start_recording()
+                            if self._recording_writer is not None:
+                                self._recording_writer.write(annotated)
+                                self._recording_last_detection_time = now
                         else:
-                            tflite_s = "-"
-                        filt_s = _perf_filter_ms if _perf_filter_ms is not None else "-"
-                        world_s = _perf_world_ms if _perf_world_ms is not None else "-"
-                        track_s = _perf_track_ms if _perf_track_ms is not None else "-"
-                        if _perf_annot_ms is not None:
-                            rsz_s = _perf_resize_ms if _perf_resize_ms is not None else "-"
-                            jpg_s = _perf_jpeg_ms if _perf_jpeg_ms is not None else "-"
-                            annot_s = "%.0f(rsz=%s jpg=%s)" % (_perf_annot_ms, rsz_s, jpg_s)
-                        else:
-                            annot_s = "-"
-                        plog("[PERF] cap=%.0fms mot=%.0fms gcrop=%s crop=%s tf=%s filt=%s world=%s trk=%s ann=%s ph=%s",
-                             cap, mot, getcrop_s, crop_s, tflite_s, filt_s, world_s, track_s, annot_s, self._phase)
+                            if self._recording_writer is not None and (now - self._recording_last_detection_time) >= self.record_after_detection_sec:
+                                self._stop_recording()
+                    
+                    # Per-step timings to log every phase-block iteration (bottleneck analysis)
+                    cap = self._last_capture_ms if self._last_capture_ms is not None else 0
+                    mot = self._last_motion_ms if self._last_motion_ms is not None else 0
+                    getcrop_s = _perf_getcrop_ms if _perf_getcrop_ms is not None else "-"
+                    crop_s = _perf_crop_ms if _perf_crop_ms is not None else "-"
+                    # TFLite with sub-breakdown
+                    if _perf_tflite_ms is not None and _perf_tflite_detail:
+                        d = _perf_tflite_detail
+                        tflite_s = "%.0f(ld=%s pre=%s inv=%s post=%s)" % (
+                            _perf_tflite_ms, d.get("load", "-"), d.get("pre", "-"),
+                            d.get("invoke", "-"), d.get("post", "-"))
+                    elif _perf_tflite_ms is not None:
+                        tflite_s = str(_perf_tflite_ms)
+                    else:
+                        tflite_s = "-"
+                    filt_s = _perf_filter_ms if _perf_filter_ms is not None else "-"
+                    world_s = _perf_world_ms if _perf_world_ms is not None else "-"
+                    track_s = _perf_track_ms if _perf_track_ms is not None else "-"
+                    if _perf_annot_ms is not None:
+                        rsz_s = _perf_resize_ms if _perf_resize_ms is not None else "-"
+                        jpg_s = _perf_jpeg_ms if _perf_jpeg_ms is not None else "-"
+                        annot_s = "%.0f(rsz=%s jpg=%s)" % (_perf_annot_ms, rsz_s, jpg_s)
+                    else:
+                        annot_s = "-"
+                    plog("[PERF] cap=%.0fms mot=%.0fms gcrop=%s crop=%s tf=%s filt=%s world=%s trk=%s ann=%s ph=%s",
+                         cap, mot, getcrop_s, crop_s, tflite_s, filt_s, world_s, track_s, annot_s, self._phase)
                     
                     # Rate-limit inject mode
                 if self.inject_cat:
