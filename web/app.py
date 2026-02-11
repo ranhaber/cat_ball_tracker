@@ -45,6 +45,14 @@ except ImportError:
 log = logging.getLogger('werkzeug')
 log.setLevel(logging.WARNING)
 
+# Zero-copy DMA buffer access for Phase 2 pipelining
+try:
+    from picamera2.request import MappedArray
+    _HAS_MAPPED_ARRAY = True
+except ImportError:
+    _HAS_MAPPED_ARRAY = False
+    MappedArray = None
+
 from camera.camera_handler import CameraHandler, FileCameraHandler
 from detection.detector import TFLiteDetector
 from detection.tracker import CentroidTracker
@@ -491,15 +499,18 @@ class VideoProcessor:
         print("Video processor stopped")
         
     # =========================================================================
-    # Capture Thread (Phase 1: pipelined capture)
+    # Capture Thread (Phase 2: pipelined zero-copy)
     # =========================================================================
     
     def _capture_loop(self):
-        """Capture thread — blocks on camera, copies frames, feeds queue.
+        """Capture thread — blocks on camera, feeds queue.
+        
+        For real camera with MappedArray support: passes the CompletedRequest
+        itself (zero-copy). Processing thread opens DMA views and releases.
+        For file/mock camera: passes numpy arrays (no DMA buffer to map).
         
         Runs on a dedicated thread (CatDome-Cap). Owns the camera: all
-        captured_request() and reconfigure calls happen here. The processing
-        thread reads frames from self._frame_queue.
+        captured_request() and reconfigure calls happen here.
         """
         # Set OS thread name for htop/top visibility
         try:
@@ -519,7 +530,6 @@ class VideoProcessor:
         while self.running:
             try:
                 # ── Pending lores reconfigure (requested by Flask thread) ──
-                # Must happen here because the capture thread owns the camera.
                 if self._pending_lores_reconfigure is not None:
                     new_lores_w, new_lores_h = self._pending_lores_reconfigure
                     self._pending_lores_reconfigure = None
@@ -535,33 +545,44 @@ class VideoProcessor:
                 
                 # ── Capture a frame ──
                 t0 = time.perf_counter()
-                frame = None
-                frame_lores = None
-                frame_lores_y = None
-                _lores_from_isp = False
+                payload = None
                 
                 if self.video_source == "file" and self.file_camera and self.file_camera.running:
                     frame = self.file_camera.get_frame()
                     if frame is None:
                         time.sleep(0.05)
                         continue
+                    frame_lores = None
                     if self._using_lores:
                         frame_lores = cv2.resize(frame, self._lores_resolution,
                                                  interpolation=cv2.INTER_LINEAR)
+                    cap_ms = round((time.perf_counter() - t0) * 1000, 1)
+                    payload = ("numpy", frame, frame_lores, None, False, cap_ms)
                 else:
                     request = self.camera.get_request()
                     if request is None:
-                        # Mock camera fallback
+                        # Mock camera fallback (no DMA buffer)
                         frame = self.camera.get_frame()
                         if frame is None:
                             time.sleep(0.01)
                             continue
+                        frame_lores = None
                         if self._using_lores:
                             frame_lores = cv2.resize(frame, self._lores_resolution,
                                                      interpolation=cv2.INTER_LINEAR)
+                        cap_ms = round((time.perf_counter() - t0) * 1000, 1)
+                        payload = ("numpy", frame, frame_lores, None, False, cap_ms)
+                    elif _HAS_MAPPED_ARRAY:
+                        # Real camera + MappedArray available: pass request (zero-copy)
+                        cap_ms = round((time.perf_counter() - t0) * 1000, 1)
+                        payload = ("request", request, cap_ms)
                     else:
+                        # Real camera but no MappedArray: copy arrays (Phase 1 fallback)
                         with request as req:
                             frame = req.make_array("main")
+                            frame_lores = None
+                            frame_lores_y = None
+                            _lores_from_isp = False
                             if self._using_lores:
                                 lores_raw = req.make_array("lores")
                                 lores_h_px = self._lores_resolution[1]
@@ -570,19 +591,30 @@ class VideoProcessor:
                                     frame_lores = cv2.cvtColor(lores_raw, cv2.COLOR_YUV2BGR_I420)
                                 else:
                                     _lores_from_isp = True
+                        cap_ms = round((time.perf_counter() - t0) * 1000, 1)
+                        payload = ("numpy", frame, frame_lores, frame_lores_y,
+                                   _lores_from_isp, cap_ms)
                 
-                cap_ms = round((time.perf_counter() - t0) * 1000, 1)
-                
-                # ── Enqueue frame (drop old if processing is behind) ──
-                payload = (frame, frame_lores, frame_lores_y, _lores_from_isp, cap_ms)
+                # ── Enqueue (drop old if processing is behind) ──
+                # CRITICAL: if we drop a "request" payload, we MUST release it
                 try:
-                    self._frame_queue.get_nowait()  # discard stale frame
+                    old = self._frame_queue.get_nowait()
+                    if old[0] == "request":
+                        try:
+                            old[1].release()
+                        except Exception:
+                            pass
                 except queue.Empty:
                     pass
                 try:
                     self._frame_queue.put_nowait(payload)
                 except queue.Full:
-                    pass  # should not happen after get_nowait
+                    # Safety: release request if we can't enqueue
+                    if payload[0] == "request":
+                        try:
+                            payload[1].release()
+                        except Exception:
+                            pass
                 
             except Exception as e:
                 plog("[CAPTURE] Error: %s", e)
@@ -631,32 +663,83 @@ class VideoProcessor:
                     cv2.setNumThreads(1)
                     plog("[INJECT CLEANUP] motion reset, TFLite unload, OpenCV threads=1, phase=%s", self._phase)
                 
-                # ── Frame from capture thread (pipelined) ──
+                # ── Frame from capture thread (pipelined, zero-copy) ──
                 t_qw = time.perf_counter()
                 try:
                     payload = self._frame_queue.get(timeout=0.5)
                 except queue.Empty:
                     continue
                 self._last_queue_wait_ms = round((time.perf_counter() - t_qw) * 1000, 1)
-                frame, frame_lores, frame_lores_y, _lores_from_isp, cap_ms = payload
-                if frame is None:
-                    continue
-                self._last_capture_ms = cap_ms
+                
+                _held_request = None  # Track DMA request for release at end of iteration
+                _m_main = None        # MappedArray context for main
+                _m_lores = None       # MappedArray context for lores
+                frame = None
+                frame_lores = None
+                frame_lores_y = None
+                _lores_from_isp = False
+                
+                if payload[0] == "numpy":
+                    # File/mock camera or Phase 1 fallback: arrays already copied
+                    _, frame, frame_lores, frame_lores_y, _lores_from_isp, cap_ms = payload
+                    if frame is None:
+                        continue
+                    self._last_capture_ms = cap_ms
+                
+                elif payload[0] == "request":
+                    # Real camera: zero-copy from DMA buffer
+                    if not getattr(self, '_zerocopy_logged', False):
+                        plog("[ZEROCOPY] DMA zero-copy active (MappedArray)")
+                        self._zerocopy_logged = True
+                    _, request, cap_ms = payload
+                    _held_request = request
+                    self._last_capture_ms = cap_ms
+                    try:
+                        _m_main = MappedArray(request, "main", write=False)
+                        _m_main.__enter__()
+                        frame = _m_main.array  # zero-copy view, ~0ms
+                        
+                        if self._using_lores:
+                            _m_lores = MappedArray(request, "lores", write=False)
+                            _m_lores.__enter__()
+                            lores_raw = _m_lores.array
+                            lores_h_px = self._lores_resolution[1]
+                            frame_lores_y = lores_raw[:lores_h_px, :]  # view, no copy
+                            if self.stream_clients > 0:
+                                # cvtColor produces a NEW array, safe after release
+                                frame_lores = cv2.cvtColor(lores_raw, cv2.COLOR_YUV2BGR_I420)
+                            else:
+                                _lores_from_isp = True
+                    except Exception as e:
+                        plog("[ZEROCOPY] MappedArray failed: %s — falling back", e)
+                        # Release and skip this frame
+                        try:
+                            if _m_lores:
+                                _m_lores.__exit__(None, None, None)
+                            if _m_main:
+                                _m_main.__exit__(None, None, None)
+                            _held_request.release()
+                        except Exception:
+                            pass
+                        _held_request = None
+                        _m_main = None
+                        _m_lores = None
+                        continue
                 
                 frame_h, frame_w = frame.shape[:2]
-                tracked_objects = {}  # Used by phase block and by inject stream update below
+                tracked_objects = {}
                 
                 # ── Inject cat: simulate a camera frame that contains a moving cat ──
-                # The cat is pasted on BOTH the main frame and lores, so the entire
-                # pipeline (motion → AI → tracking → world → annotation) processes
-                # it exactly as if a real cat walked through the scene.
                 if self.inject_cat and self.inject_cat_handler:
+                    # DMA view is read-only — must copy before writing
+                    if _held_request is not None:
+                        frame = np.copy(frame)
                     frame = self.inject_cat_handler.paste_on_frame(frame)
                     # Re-derive lores from main so motion detection sees the cat
                     if self._using_lores:
                         frame_lores = cv2.resize(frame, self._lores_resolution,
                                                  interpolation=cv2.INTER_LINEAR)
-                        frame_lores_y = None   # ISP Y plane is stale; motion will use BGR lores
+                        frame_lores_y = None
                         _lores_from_isp = False
                 
                 # ══════════════════════════════════════════════════════════
@@ -1033,10 +1116,10 @@ class VideoProcessor:
                     self._update_overlay_data(last_detections, motion_regions_in_perimeter,
                                               crop_region, tracked_objects)
                     
-                    # Store raw frame for snapshot and recording (no copy needed —
-                    # frame is replaced by a new camera buffer on the next iteration)
+                    # Store raw frame for snapshot and recording
+                    # With zero-copy, frame is a DMA view that becomes invalid after release
                     with self.frame_lock:
-                        self.current_frame = frame
+                        self.current_frame = np.copy(frame) if _held_request is not None else frame
                     
                     # ── Recording ──
                     if self.video_source == "live" and self.recording_enabled:
@@ -1087,13 +1170,40 @@ class VideoProcessor:
                 if self.inject_cat:
                     time.sleep(config.INJECT_MODE_SLEEP_SEC)
                 else:
-                    # Prevent tight loop when not in inject (avoids 100% CPU after stopping Inject Cat)
                     time.sleep(0.001)
+                
+                # ── Release DMA buffer back to camera ──
+                # MUST happen after ALL processing that reads frame/lores views.
+                if _held_request is not None:
+                    try:
+                        if _m_lores is not None:
+                            _m_lores.__exit__(None, None, None)
+                        if _m_main is not None:
+                            _m_main.__exit__(None, None, None)
+                        _held_request.release()
+                    except Exception:
+                        pass
+                    _held_request = None
+                    _m_main = None
+                    _m_lores = None
                 
             except Exception as e:
                 plog("Processing error: %s", e)
                 import traceback
                 traceback.print_exc()
+                # Release DMA buffer on error to avoid leaks
+                if _held_request is not None:
+                    try:
+                        if _m_lores is not None:
+                            _m_lores.__exit__(None, None, None)
+                        if _m_main is not None:
+                            _m_main.__exit__(None, None, None)
+                        _held_request.release()
+                    except Exception:
+                        pass
+                    _held_request = None
+                    _m_main = None
+                    _m_lores = None
                 time.sleep(0.1)
                 
     # =========================================================================
