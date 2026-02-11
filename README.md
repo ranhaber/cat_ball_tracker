@@ -23,33 +23,54 @@ Detection and tracking work **independently of the web UI** — the system runs 
 │  RPi Zero 2W (416MB RAM, 4-core ARM Cortex-A53)                     │
 │                                                                     │
 │  Thread: CatDome-Proc (processing loop, always running)             │
-│  ┌───────────┐    ┌──────────────┐    ┌──────────────────┐         │
-│  │  Camera   │───▶│   Motion     │───▶│  TFLite AI       │         │
-│  │ Module 3  │    │  Detector    │    │  (load on motion, │         │
-│  │ 2304×1296 │    │ (every 2nd   │    │   active while   │         │
-│  │ 2 buffers │    │  frame)      │    │   cat in zone,   │         │
-│  │           │    │              │    │   unload 10s     │         │
-│  │           │    │              │    │   after leaves)  │         │
-│  └───────────┘    └──────────────┘    └──────────────────┘         │
-│       │                 │                    │                       │
-│       │                 │                    ▼                       │
-│       │                 │           ┌──────────────┐                │
-│       │                 │           │   Tracker    │                │
-│       │                 │           │  (only when  │                │
-│       │                 │           │  detections) │                │
-│       │                 │           └──────────────┘                │
-│       │                 │                    │                       │
-│       ▼                 ▼                    ▼                       │
+│                                                                     │
+│  ┌─────────────────────────────────────────────────────────────┐    │
+│  │  Camera Module 3 — ISP Dual-Stream (v3.9.0+)               │    │
+│  │                                                             │    │
+│  │  ┌──────────────────┐   ┌────────────────────────────┐     │    │
+│  │  │  main stream     │   │  lores stream (ISP h/w)    │     │    │
+│  │  │  2304×1296 RGB   │   │  960×540+ YUV420→BGR       │     │    │
+│  │  │  (AI crop,       │   │  (motion detect, MJPEG     │     │    │
+│  │  │   snapshots,     │   │   stream — zero CPU resize)│     │    │
+│  │  │   recording)     │   │                            │     │    │
+│  │  └────────┬─────────┘   └─────────┬──────────────────┘     │    │
+│  │           │                       │                         │    │
+│  │  Fallback: if lores unavailable (unsupported camera, ISP   │    │
+│  │  error), main-only mode resizes in software (~2 FPS).      │    │
+│  │  Lores auto-reconfigures when user picks stream res > 960. │    │
+│  └─────────────────────────────────────────────────────────────┘    │
+│           │                       │                                 │
+│           │              ┌────────┴──────────┐                      │
+│           │              │  Motion Detector   │                      │
+│           │              │  (lores frame,     │                      │
+│           │              │   every 2nd frame)  │                      │
+│           │              └────────┬──────────┘                      │
+│           │                       │ regions scaled to main coords   │
+│           │                       ▼                                  │
+│           │              ┌──────────────────┐                       │
+│           ├─────────────▶│  TFLite AI       │                       │
+│           │ (crop from   │  (load on motion, │                       │
+│           │  main frame) │   active while   │                       │
+│           │              │   cat in zone)   │                       │
+│           │              └────────┬─────────┘                       │
+│           │                       │                                  │
+│           │              ┌────────┴─────────┐                       │
+│           │              │  Tracker (only   │                       │
+│           │              │  when detections)│                       │
+│           │              └────────┬─────────┘                       │
+│           │                       │                                  │
+│           ▼                       ▼                                  │
 │  ┌─────────────────────────────────────────────────────┐            │
 │  │  Lens Calibration (rational k1-k6, 94% improvement) │            │
 │  │  → undistort detection pixel → homography → world xy │            │
 │  └─────────────────────────────────────────────────────┘            │
-│       │                                                             │
-│       ▼ (only if stream clients connected)                          │
+│           │                                                         │
+│           ▼ (only if stream clients connected)                      │
 │  ┌─────────────────────────────────────────────────────┐            │
-│  │  Frame Annotation (skip when nobody watches)         │            │
+│  │  Frame Annotation (on lores-derived stream frame)    │            │
 │  │  - Draw perimeter, boxes, FPS overlay                │            │
-│  │  - Store frame for MJPEG streaming                   │            │
+│  │  - JPEG encode (simplejpeg/libjpeg-turbo NEON SIMD)  │            │
+│  │  - Store for MJPEG streaming                         │            │
 │  └─────────────────────────────────────────────────────┘            │
 │                                                                     │
 │  Thread: CatDome-Main (Flask web server)                            │
@@ -57,14 +78,15 @@ Detection and tracking work **independently of the web UI** — the system runs 
 │  │  Flask Web Server                                    │            │
 │  │  - MJPEG streaming (rate-limited ~10fps)             │            │
 │  │  - REST API (status, calibration, settings)          │            │
+│  │  - Stream resolution change → lores reconfigure      │            │
 │  │  - Lens-corrected snapshots for calibration          │            │
 │  └─────────────────────────────────────────────────────┘            │
 │                                                                     │
 │  CPU optimization:                                                  │
+│  - ISP lores: motion + stream resize offloaded to hardware          │
 │  - OpenCV: 1 thread idle, 4 when tracking                           │
 │  - TFLite: 0 threads idle, 3 when detecting                        │
-│  - MJPEG: rate-limited, skipped when no clients                     │
-│  - Idle CPU: ~50% (was 92% before optimization)                     │
+│  - MJPEG: simplejpeg NEON SIMD, skipped when no clients             │
 └─────────────────────────────────────────────────────────────────────┘
                           │
                           ▼ (HTTP, optional)

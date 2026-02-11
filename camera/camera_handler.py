@@ -187,16 +187,33 @@ class CameraHandler:
             
             print(f"Found camera(s): {cameras}")
             
-            # Configure for video capture optimized for RPi Zero 2W
-            # Dual-stream: main (full-res for AI crop/snapshots) + lores (ISP-downscaled for motion/stream)
-            # NOTE: picamera2 ISP lores stream MUST be YUV format (RGB not supported).
-            # The processing loop converts YUV420→BGR after capture (~3ms on 960×540).
+            # ── ISP Dual-Stream Configuration ──
+            #
+            # The Pi Camera Module 3 ISP can output TWO simultaneous streams:
+            #   main  — full resolution (2304×1296 RGB888) for AI crop, snapshots, recording
+            #   lores — ISP-downscaled (960×540+ YUV420) for motion detection + MJPEG stream
+            #
+            # The ISP hardware downscale is free (zero CPU). This eliminates two expensive
+            # cv2.resize calls that previously consumed ~460ms/frame (92% of frame time).
+            #
+            # CONSTRAINTS:
+            #   - lores MUST use YUV format (ISP limitation). The processing loop converts
+            #     YUV420→BGR after capture (~3ms on 960×540, negligible vs 460ms saving).
+            #   - lores size must be ≤ main in both dimensions.
+            #   - lores can be reconfigured at runtime via reconfigure_lores() (brief ~0.5s pause).
+            #
+            # FALLBACK:
+            #   If dual-stream config fails (unsupported camera, ISP error, etc.), we fall back
+            #   to main-only mode. The processing loop detects has_lores=False and resizes from
+            #   the main frame using software cv2.resize (the pre-v3.9.0 behaviour). This ensures
+            #   the system always starts, even if degraded to ~2 FPS instead of 15-25 FPS.
+            #
             lores_w, lores_h = self.lores_size
             try:
                 camera_config = self.camera.create_video_configuration(
                     main={
                         "size": (self.width, self.height),
-                        "format": "RGB888"  # Despite the name, picamera2 "RGB888" stores BGR in memory (correct for OpenCV)
+                        "format": "RGB888"  # picamera2 "RGB888" stores BGR in memory (correct for OpenCV)
                     },
                     lores={
                         "size": (lores_w, lores_h),
@@ -211,7 +228,8 @@ class CameraHandler:
                 self.has_lores = True
                 print(f"📷 Dual-stream config: main={self.width}×{self.height}, lores={lores_w}×{lores_h} (YUV420→BGR)")
             except Exception as e:
-                print(f"⚠️  Lores stream failed ({e}), falling back to main-only")
+                # FALLBACK: main-only mode (pre-v3.9.0 behaviour, ~2 FPS due to software resize)
+                print(f"⚠️  Lores stream failed ({e}), falling back to main-only (software resize)")
                 camera_config = self.camera.create_video_configuration(
                     main={
                         "size": (self.width, self.height),
@@ -321,6 +339,75 @@ class CameraHandler:
         if self.has_lores:
             return self.lores_size
         return None
+    
+    def reconfigure_lores(self, width, height):
+        """Reconfigure the ISP lores stream to a new resolution.
+        
+        Called from the processing loop thread when the user selects a stream
+        resolution larger than the current lores. Requires a brief camera
+        stop/start (~0.5s pause in the video feed).
+        
+        MUST be called from the processing thread (same thread that captures frames)
+        to avoid race conditions with captured_request().
+        
+        Args:
+            width: New lores width (must be ≤ main width)
+            height: New lores height (must be ≤ main height)
+            
+        Returns:
+            True if reconfigured successfully, False on error
+        """
+        if self.use_mock or not PICAMERA_AVAILABLE:
+            return False
+        if (width, height) == self.lores_size and self.has_lores:
+            return True  # Already at requested size
+        
+        try:
+            self.camera.stop()
+            camera_config = self.camera.create_video_configuration(
+                main={
+                    "size": (self.width, self.height),
+                    "format": "RGB888"
+                },
+                lores={
+                    "size": (width, height),
+                    "format": "YUV420"
+                },
+                controls={
+                    "FrameRate": self.fps
+                },
+                buffer_count=2
+            )
+            self.camera.configure(camera_config)
+            self.camera.start()
+            self.lores_size = (width, height)
+            self.has_lores = True
+            print(f"[LORES] Reconfigured to {width}×{height} (YUV420→BGR)")
+            return True
+        except Exception as e:
+            print(f"[LORES] Reconfigure to {width}×{height} failed: {e}")
+            # Try to restart with previous config
+            try:
+                camera_config = self.camera.create_video_configuration(
+                    main={"size": (self.width, self.height), "format": "RGB888"},
+                    lores={"size": self.lores_size, "format": "YUV420"},
+                    controls={"FrameRate": self.fps},
+                    buffer_count=2
+                )
+                self.camera.configure(camera_config)
+                self.camera.start()
+                print(f"[LORES] Restored previous lores {self.lores_size[0]}×{self.lores_size[1]}")
+            except Exception as e2:
+                print(f"[LORES] Restore also failed ({e2}), restarting main-only")
+                camera_config = self.camera.create_video_configuration(
+                    main={"size": (self.width, self.height), "format": "RGB888"},
+                    controls={"FrameRate": self.fps},
+                    buffer_count=2
+                )
+                self.camera.configure(camera_config)
+                self.camera.start()
+                self.has_lores = False
+            return False
     
     def pause(self):
         """Pause the camera (stop streaming but keep device open).

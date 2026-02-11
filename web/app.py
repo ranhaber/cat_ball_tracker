@@ -129,6 +129,7 @@ class VideoProcessor:
         # ISP lores stream state (set in start() after camera init)
         self._using_lores = False
         self._lores_resolution = getattr(config, 'LORES_RESOLUTION', (960, 540))
+        self._pending_lores_reconfigure = None  # (w, h) tuple set by set_stream_resolution, executed by process loop
         
         # Motion-first detection mode
         self.motion_first_enabled = saved.get("motion_first_enabled", True)
@@ -419,6 +420,22 @@ class VideoProcessor:
                         self.detector.unload_model()
                     cv2.setNumThreads(1)
                     plog("[INJECT CLEANUP] motion reset, TFLite unload, OpenCV threads=1, phase=%s", self._phase)
+                
+                # ── Pending lores reconfigure (requested by set_stream_resolution from Flask thread) ──
+                # Must execute here (processing thread) because camera capture is on this thread.
+                if self._pending_lores_reconfigure is not None:
+                    new_lores_w, new_lores_h = self._pending_lores_reconfigure
+                    self._pending_lores_reconfigure = None
+                    if self.camera.reconfigure_lores(new_lores_w, new_lores_h):
+                        old_lores = self._lores_resolution
+                        self._lores_resolution = (new_lores_w, new_lores_h)
+                        self._using_lores = True
+                        # Re-adjust motion detection scale for new lores size
+                        profile = config.PERFORMANCE_PROFILES.get(self.current_profile, {})
+                        adjusted_scale = self._lores_motion_scale(profile.get("motion_scale", 0.25))
+                        self.motion_detector.update_parameters(detection_scale=adjusted_scale)
+                        plog("[LORES] Reconfigured %s×%s → %s×%s, motion_scale=%.2f",
+                             old_lores[0], old_lores[1], new_lores_w, new_lores_h, adjusted_scale)
                 
                 # ── Frame capture (main + ISP lores) ──
                 t_capture_start = time.perf_counter()
@@ -1279,15 +1296,24 @@ class VideoProcessor:
         self.current_stream_resolution = new_res
         self._scaled_perimeter_cache = None  # invalidate
         settings.update_setting("stream_resolution", list(new_res))
+        
         if self._using_lores:
+            # Compute the lores size needed: at least stream_res, at least config minimum
+            min_lores_w = max(width, config.LORES_RESOLUTION[0])
+            min_lores_h = max(height, config.LORES_RESOLUTION[1])
             lores_w, lores_h = self._lores_resolution
-            if width <= lores_w and height <= lores_h:
-                src = f"lores {lores_w}×{lores_h}"
+            
+            if min_lores_w != lores_w or min_lores_h != lores_h:
+                # Lores needs reconfiguration — schedule for processing thread
+                # (camera operations must happen on the thread that captures frames)
+                self._pending_lores_reconfigure = (min_lores_w, min_lores_h)
+                print(f"[SETTING] Stream resolution → {width}x{height} "
+                      f"(lores reconfigure {lores_w}×{lores_h} → {min_lores_w}×{min_lores_h} pending)")
             else:
-                src = f"main (>{lores_w}×{lores_h}, slower)"
-            print(f"[SETTING] Stream resolution changed to: {width}x{height} (resize from {src})")
+                src = "no resize" if (width == lores_w and height == lores_h) else f"lores {lores_w}×{lores_h}"
+                print(f"[SETTING] Stream resolution → {width}x{height} ({src})")
         else:
-            print(f"[SETTING] Stream resolution changed to: {width}x{height}")
+            print(f"[SETTING] Stream resolution → {width}x{height} (resize from main)")
         return True
     
     def set_framerate(self, fps):
