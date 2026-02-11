@@ -249,6 +249,7 @@ MOTION_HISTORY_FRAMES = 3        # Frames to average for background
 # Crop size for AI detection when motion detected.
 # Default before any performance profile is applied; profiles override at runtime
 # via VideoProcessor.current_motion_crop_size (380/400/450 per profile).
+# Using the model's input size (e.g. 300×300 for COCO SSD quant) avoids resize in detector.
 MOTION_CROP_SIZE = (300, 300)
 MOTION_CROP_MIN_SIZE = (640, 480)  # Legacy - not used with fixed crop
 

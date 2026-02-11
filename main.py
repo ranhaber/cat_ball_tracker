@@ -14,6 +14,7 @@ import argparse
 import signal
 
 import config
+from processing.async_log import setup_async_logging
 from web.app import run_server, video_processor
 
 
@@ -89,7 +90,8 @@ def main():
     
     # Parse arguments
     args = parse_args()
-    
+    setup_async_logging()
+
     # Update config with CLI args
     config.HOST = args.host
     config.PORT = args.port

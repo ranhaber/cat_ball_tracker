@@ -2,7 +2,9 @@
 
 A real-time cat and ball detection system for Raspberry Pi Zero 2W with Camera Module 3. Features motion-first detection for efficiency, a web interface for live streaming, and zone-based tracking.
 
-**Version:** 3.7.0
+**Version:** 3.7.1
+
+**For agents and developers:** See **[AGENTS.md](AGENTS.md)** for project guidelines, concurrency rules, and where to find things. Use it as the single entry point before diving into code or other docs.
 
 ---
 
@@ -136,6 +138,173 @@ PHASE 1: IDLE                          PHASE 2: ACQUISITION
 - Cat gone for 30 seconds -> TFLite unloads, memory reclaimed, back to IDLE
 - Inject Cat test mode forces ACQUISITION phase on enable
 
+### RAM usage by phase (code-derived estimate)
+
+These numbers are **estimated from the code without running on the RPi**. They approximate **process RSS** (resident set size) in MB. System-wide percentages in the diagram above (~75% IDLE, ~87% ACQ/TRACK/WATCH) include kernel, GPU, and other processes.
+
+| Phase | TFLite | Estimated process RAM (MB) | Notes |
+|-------|--------|----------------------------|--------|
+| **IDLE** | Not loaded | **~120–145** | Motion only; 1 OpenCV thread; no AI buffers |
+| **ACQUISITION** | Loaded | **~145–175** | +TFLite model + interpreter + pre-alloc input (300×300×3); 4 OpenCV threads |
+| **TRACKING** | Loaded | **~145–175** | Same as ACQUISITION (TFLite every 3rd frame) |
+| **WATCH** | Loaded | **~145–175** | Same; TFLite every 2nd frame, full-frame scan |
+
+**Component breakdown (approximate):**
+
+| Component | Size (MB) | Source |
+|-----------|-----------|--------|
+| Python + Flask + OpenCV + app | ~50–70 | Baseline imports and app code |
+| picamera2 (2 buffers @ 2304×1296×3) | ~18 | `config.DEFAULT_RESOLUTION`, 2 buffers |
+| Current frame reference / snapshot | ~9 | One full frame at capture resolution |
+| Motion detector | ~2–3 | 3× scaled frames (576×324 float32), _bg_sum, _bg_buffer, gray/delta/thresh |
+| TFLite (when loaded) | ~18–28 | Model file ~6–7 MB; interpreter + allocated tensors typically 2–3× on load; pre-alloc input 0.27 MB |
+| Stream (when clients > 0) | ~0.8–1 | stream_frame 640×360×3 + JPEG cache |
+| Recording (when active) | ~1–3 | VideoWriter internal buffer |
+| Misc (stacks, allocator, libs) | ~10–15 | Threads, OpenCV temporaries |
+
+**Accuracy of this estimate:** **Medium (±15–25%)**. Exact buffer sizes (frame, motion, TFLite input) are known from code; TFLite and picamera2 in-process footprint depend on the runtime and driver and are not measured here. To get real numbers on the RPi: use the Developer tab (system info / process RSS) or `ps -o rss= -p $(pgrep -f "python.*main")` and divide by 1024 for MB.
+
+### Logging (non-blocking)
+
+Hot-path logging uses **async log** (`processing/async_log.py`) so the process loop never blocks on stdout/pipe/journal I/O. Messages are enqueued and written by a dedicated **CatDome-Log** thread. Use `plog(msg, *args)` in the process loop and detector/motion code; startup calls `setup_async_logging()` from `main.py`. This improves debugging: you can add more log lines without affecting loop timing or risking pipe back-pressure.
+
+### Inject Cat stop — CPU spike and debug plan
+
+**2. Why CPU can hit 100% when stopping Inject Cat**
+
+- While Inject Cat is **on**, the loop runs `time.sleep(INJECT_MODE_SLEEP_SEC)` every iteration (rate-limited).
+- When you turn Inject Cat **off**, that sleep is no longer run. The loop then runs as fast as the camera and motion path allow. If the camera returns frames very quickly (or with a mock camera returns immediately), the loop can **spin with no sleep** and use 100% of one core.
+- Cleanup (motion reset, TFLite unload, `cv2.setNumThreads(1)`) runs at the **start of the next** process-loop iteration. If the loop is already spinning, you still get one iteration where cleanup runs; after that, if there is no other rate limit, the loop keeps spinning in IDLE (motion only) and CPU stays high.
+- On a real RPi with picamera2, `get_request()` is blocking, so the loop is often rate-limited by the camera. On a dev machine with mock camera, `get_frame()` can return a frame every iteration and the only sleep is when no frame is ready (`time.sleep(0.01)`), so the loop can run at very high rate.
+
+**3. Will prints to the log help?**
+
+Yes. Logging **when** cleanup runs (e.g. `[INJECT CLEANUP] motion reset, TFLite unload, OpenCV threads=1`) and the current phase confirms that the process loop saw the flags and performed unload/setNumThreads. If you see that line and CPU is still high, the cause is the **tight loop** (no sleep). If you never see that line, cleanup is delayed or not run (e.g. loop stuck elsewhere).
+
+**4. Will the change to async logging improve debugging?**
+
+Yes. With async logging (`plog`), you can add more log lines in the hot path (e.g. every N iterations, or on phase/cleanup) without blocking the loop or causing journal/pipe back-pressure. So you can safely add diagnostics (cleanup, phase, loop rate) and see them in the journal without affecting the CPU or timing you are trying to observe.
+
+**5. Plan to check the cause of the CPU problem**
+
+| Step | Action | What to check |
+|------|--------|----------------|
+| 1 | Add a one-line diagnostic when inject cleanup runs | In `_process_loop`, right after `detector.unload_model()` and `cv2.setNumThreads(1)`, call `plog("[INJECT CLEANUP] motion reset, TFLite unload, OpenCV threads=1")`. Restart, turn Inject Cat on then off, watch journal. | If the line appears: cleanup ran. If CPU is still high, the loop is spinning (no sleep). If the line never appears: cleanup not run this iteration (loop stuck or flags not set). |
+| 2 | Confirm phase after stop | Log phase once when entering the phase block after cleanup, e.g. `plog("[INJECT CLEANUP] phase after=%s", self._phase)`. | Phase should be IDLE. |
+| 3 | (Optional) Measure loop rate | Every 100 iterations, log `plog("[LOOP] iter=%s rate=%.1f/s", self.frame_count, rate)`. | If rate is very high (e.g. hundreds per second) when not in inject mode, the loop is not rate-limited. |
+| 4 | Add a small rate-limit when not in inject mode | After the main loop body (e.g. after the inject sleep block), when `inject_cat` is False, add `time.sleep(0.001)` or target 2× FPS. | Re-test: CPU should drop. Confirms cause was tight loop. |
+| 5 | On RPi: check thread count | After repro, run `ps -eLf \| grep python` or use Developer tab (thread count). | If many threads and high CPU, TFLite or OpenCV might not have been reduced (unload/setNumThreads not run or delayed). |
+
+---
+
+## ⏱️ Frame-to-TFLite timeline
+
+End-to-end sequence from retrieving a new frame until TFLite inference finishes (one iteration of the process loop when `skip_counter >= frame_skip` and phase runs AI).
+
+```mermaid
+sequenceDiagram
+    participant Loop as Process loop
+    participant Cam as Camera
+    participant Motion as Motion detector
+    participant Phase as Phase state
+    participant Det as TFLite detector
+
+    Note over Loop: skip_counter >= frame_skip
+    Loop->>Loop: _update_fps(), frame_count++, now
+
+    alt Phase == IDLE
+        Loop->>Motion: detect(frame)
+        Motion->>Motion: copy params (lock), resize, gray, background, contours
+        Motion-->>Loop: motion_result
+        Loop->>Loop: _filter_motion_to_perimeter()
+        Note over Loop: if motion_detected → ACQUISITION
+    end
+
+    alt Phase == ACQUISITION or TRACKING or WATCH
+        Loop->>Motion: detect(frame)
+        Motion-->>Loop: motion_result
+        Loop->>Loop: get crop_region (motion or inject)
+    end
+
+    alt run_ai_detection (ACQ: every frame; TRACK: every 3rd; WATCH: every 2nd)
+        alt crop_region set
+            Loop->>Loop: cropped_frame = frame[cy:cy+ch, cx:cx+cw]
+            Loop->>Det: detect(cropped_frame)
+        else no crop (e.g. WATCH)
+            Loop->>Det: detect(frame)
+        end
+        Det->>Det: load model if None
+        Det->>Det: resize, BGR→RGB (pre-alloc buf), set_tensor, invoke
+        Det->>Det: get_tensor (boxes, classes, scores), filter by threshold/class
+        Det-->>Loop: detections (pixel coords)
+        Loop->>Loop: inject fallback (if inject_cat), perimeter filter, confirm, world coords
+    end
+
+    Loop->>Loop: tracker.update(), merge IDs, annotate, JPEG, current_frame, recording
+```
+
+**Step-by-step (same order as code):**
+
+| Step | What happens |
+|------|----------------|
+| 1 | **Frame capture** — Real camera: `get_request()` then `req.make_array("main")` (blocking until frame ready), or `get_frame()` (last frame from capture thread). File: `file_camera.get_frame()`. |
+| 2 | **Optional inject** — If `inject_cat`: `paste_on_frame(frame)` (move cat, paste, set bbox). If stream clients > 0: annotate copy, encode JPEG, set `_cached_jpeg` and `current_frame`. |
+| 3 | **Frame-skip gate** — `skip_counter += 1`. Only when `skip_counter >= frame_skip`: reset counter, update FPS, enter phase block. Otherwise loop goes to next frame (no motion, no TFLite). |
+| 4 | **Phase + motion** — According to `_phase`: **IDLE** → `motion_detector.detect(frame)` (resize, gray, running-sum background, diff, contours), filter to perimeter; transition to ACQUISITION if motion in zone. **ACQUISITION/TRACKING/WATCH** → same motion.detect(); then set `run_ai_detection` and `crop_region` (motion bbox or inject bbox; WATCH often has no crop). |
+| 5 | **Crop (if any)** — If `crop_region`: `cropped_frame = frame[cy:cy+ch, cx:cx+cw]`. Else use full `frame`. |
+| 6 | **TFLite** — `detector.detect(cropped_frame or frame)`: load model if not loaded; resize to input size; BGR→RGB into pre-alloc buffer; `set_tensor` → `invoke` → `get_tensor` (boxes, classes, scores); filter by threshold and target class; return list of `(x1, y1, x2, y2, conf, class_id)` in crop/frame pixel coords. |
+| 7 | **Post-AI** — If crop: add (cx, cy) to detection coords. Inject fallback: if no TFLite detection near inject bbox, append inject bbox. Filter by perimeter; temporal confirmation; build `last_detections_with_world` (world xy from calibration). |
+| 8 | **After TFLite** — Tracker merge IDs; annotate frame, pre-compute JPEG, set `current_frame`; recording if enabled; rate-limit sleep if inject mode. Loop continues to next frame. |
+
+### Crop vs resize — where and why
+
+We use **crop** (extract a rectangle, same resolution) and **resize** (change dimensions) in different places. Summary:
+
+| Step | Operation | Input | Output | Purpose |
+|------|------------|--------|--------|---------|
+| **Motion detection** | **Resize** | Full frame (e.g. 2304×1296) | Small gray image (e.g. 576×324 @ scale 0.25) | Downscale so motion (diff, contours) is cheap; scale is `MOTION_DETECTION_SCALE` (0.25). No crop — whole frame is scaled. |
+| **AI region (ACQ/TRACK)** | **Crop** | Full frame (2304×1296) | Rectangle at **same resolution** (e.g. 380×380 or 400×400 or 450×450 px) | Take only the region of interest (motion bbox or inject cat bbox) so TFLite sees a smaller area; size from profile `motion_crop_size`. No resize here — we slice `frame[cy:cy+ch, cx:cx+cw]`. |
+| **TFLite detector** | **Resize** (or skip if crop already model size) | Cropped region **or** full frame | Model input size (e.g. 300×300 from model) | Model has fixed input shape; we resize whatever we pass to that size. If the crop is already 300×300, resize is skipped. So: 380×380 crop → 300×300, or 300×300 crop → no resize. |
+| **Stream / JPEG** | **Resize** | Annotated frame at capture res (2304×1296) | Stream resolution (e.g. 1920×1080, 640×360) | Reduce size for MJPEG streaming and bandwidth. |
+| **Inject cat asset** | **Resize** | Cat image (e.g. 400×218) | Paste size (perspective-based, e.g. 150 px wide) | Scale the pasted cat to the right size on the frame; not a frame crop/resize. |
+
+**Flow in short:**
+
+1. **Motion:** full frame → **resize** to ¼ resolution → motion result (regions in full-frame coords).
+2. **Crop (if any):** full frame → **crop** to e.g. 380×380 window (same pixel density).
+3. **TFLite:** crop or full frame → **resize** to model input (e.g. 300×300) if size differs → inference → detections in crop/frame coords.
+4. **Stream:** full annotated frame → **resize** to stream resolution → encode JPEG.
+
+So we **crop** once (to define the AI window) and **resize** in three separate places: motion (downscale), TFLite (to model input), and stream (to viewer resolution).
+
+**Why not crop to the size TFLite needs?**
+
+It would be more efficient. The TFLite model has a fixed input size (e.g. **300×300** for the COCO SSD MobileNet quant model). Today we crop a *larger* window (380×380, 400×400, or 450×450 from the performance profile), then resize that down to 300×300. So we do extra work: a bigger crop and a resize.
+
+- **Current:** crop 380/400/450 px → resize to model input (300×300) → inference. More context per crop, but one extra resize and more pixels through the pipeline.
+- **More efficient:** crop **300×300** (model input size) directly → feed to TFLite (no resize, or a no-op). Less memory, less CPU, same detection quality if the cat fits in the 300×300 window (centered on motion/inject).
+
+The current 380/400/450 sizes are a profile choice to give the model slightly more “context” (larger field of view) at the cost of that resize. For maximum efficiency you could set the crop size to the model’s actual input dimensions (e.g. 300×300) so the detector receives an already-sized crop and can skip the resize step.
+
+**1. Effect on detection and tracking to 13 m**
+
+| Crop size | Effect |
+|-----------|--------|
+| **400×400 (Performance 13 m)** | Largest margin around the cat. At 13 m the cat is small (~60–120 px); a 400 px window gives room for centering error and keeps the whole cat inside the crop. Best robustness for long range. |
+| **380×380 (Balanced)** | Slightly less margin; still good for 0–12 m. |
+| **300×300 (model input)** | Tightest window. At 13 m the cat still fits if the crop is well centered on motion/inject, but there is **less margin**: if the motion bbox or centroid is off by ~50–80 px, the cat can be clipped at the edge and detection may fail. Tracking can then drop until the next good crop. So 300×300 is **riskier at 13 m**; fine for closer range or when motion centering is accurate. |
+
+**Recommendation:** Keep **400×400 for the "Performance (13 m)" profile** so detection and tracking stay reliable to 13 m. Use 300×300 only for a "max efficiency" profile (e.g. indoor / shorter range) if you want to save CPU and a bit of RAM.
+
+**2. RAM and CPU impact of switching to 300×300**
+
+| Resource | Change when going 380/400/450 → 300×300 |
+|----------|----------------------------------------|
+| **RAM** | **Small:** The crop is a view into the frame (no extra full crop buffer). Skipping resize avoids OpenCV's internal temp buffers for the scale step (roughly **~100–400 KB** less per inference). The TFLite input buffer is already 300×300; no change there. |
+| **CPU** | **Modest:** One fewer `cv2.resize()` per frame when AI runs. On RPi Zero 2W, resizing 400×400 → 300×300 is on the order of **~1–3 ms**. If TFLite inference is ~50–80 ms, that's about **2–5%** of the AI path. So a few percent less CPU when the phase is ACQUISITION/TRACKING and crop is used. |
+
+So: **RAM saving is small (hundreds of KB), CPU saving is a few percent.** The main benefit of 300×300 is simpler pipeline and slightly lower latency; for 13 m, keeping 400×400 is the safer choice for detection and tracking.
+
 ---
 
 ## 📁 Project Structure
@@ -152,6 +321,11 @@ cat_ball_tracker/
 │   ├── __init__.py
 │   └── camera_handler.py        # RPi Camera Module 3 interface (pause/resume)
 │
+├── processing/
+│   ├── async_log.py             # Non-blocking logging (queue + writer thread; hot path uses plog)
+│   ├── inject_cat.py            # Inject Cat test mode (paste, vertex movement)
+│   └── memory.py                # RAM stats, reclaim_memory (gc + malloc_trim)
+│
 ├── detection/                   # Detection & calibration modules
 │   ├── __init__.py
 │   ├── detector.py              # TFLite MobileNet SSD (lazy load/unload)
@@ -160,11 +334,6 @@ cat_ball_tracker/
 │   ├── motion_detector.py       # Lightweight motion detection
 │   ├── calibration.py           # Multi-rectangle perspective calibration
 │   └── lens_calibration.py      # Rational model (k1-k6) lens distortion
-│
-├── processing/                  # Core processing pipeline
-│   ├── __init__.py
-│   ├── memory.py                # RAM stats, reclaim_memory (gc + malloc_trim)
-│   └── inject_cat.py            # Inject Cat test feature (vertex-to-vertex)
 │
 ├── web/                         # Flask web server & API routes
 │   ├── __init__.py
@@ -196,7 +365,10 @@ cat_ball_tracker/
 │   └── test_cat.png             # Cat image for inject test
 │
 ├── docs/
+│   ├── CODE_REVIEW.md            # Code review notes (clarity, config, guards)
+│   ├── CODE_REVIEW_DEADLOCKS.md  # Locks, deadlock analysis, data races
 │   └── cloudflared-low-ram-config.md
+├── AGENTS.md                     # Project guidelines for agents/developers (read first)
 │
 ├── cat_dome.service             # Systemd service file
 ├── start_Cat_Dome.sh            # Startup wrapper with logging
@@ -519,6 +691,26 @@ sudo journalctl -u cat_ball_tracker -n 50
 ### Perimeter in wrong position
 - Delete `perimeter.json` and recreate
 - Ensure snapshot resolution matches camera resolution
+
+### Low FPS (how to find the cause)
+
+The **displayed FPS** is processed frames per second (how often the phase block runs). Expected range is **3–7 FPS** depending on profile (see § Expected FPS from the code).
+
+1. **Check FPS diagnostics in the API**  
+   Open `GET /api/status` (or the status payload used by the web UI). It includes:
+   - **`capture_ms`** — time in ms to get one frame from the camera (blocking).
+   - **`motion_ms`** — time in ms for the last motion detection run (resize, background, contours).
+
+   **How to interpret:**
+   - **High `capture_ms`** (e.g. 500–1000 ms) → **camera is the bottleneck.** Check Settings → Framerate (try 15); ensure the camera pipeline isn’t throttled; on RPi check `rpicam-hello` and exposure.
+   - **High `motion_ms`** (e.g. 200–500 ms) → **motion detection is the bottleneck.** Try a lower motion scale in the profile or a lower resolution if available.
+   - **Both low** but FPS still low → check **frame_skip** (Settings): if it’s 4 or 5, displayed FPS = (loop rate) / frame_skip. Try frame_skip 1 or 2.
+   - **RAM / swap** — if the system is swapping (`free -h`), both capture and motion can slow down; reduce load or add RAM.
+
+2. **Quick checks**
+   - Settings → **Framerate**: 15 (or 10) is typical; 5 or 1 will cap FPS.
+   - Settings → **Frame skip**: 1 or 2; higher values reduce displayed FPS.
+   - In IDLE, the loop does: capture → (every `frame_skip` iterations) motion → sleep(0.001). So per “processed” frame, cost ≈ capture + motion; if capture is ~800 ms you get ~1.2 FPS.
 
 ### TFLite not available
 - System works in mock mode (random detections)

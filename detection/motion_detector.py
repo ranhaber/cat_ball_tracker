@@ -11,6 +11,11 @@ import threading
 
 import config
 
+try:
+    from processing.async_log import log as plog
+except ImportError:
+    plog = lambda msg, *a, **k: (print(msg % a) if a else print(msg))
+
 
 class MotionDetector:
     """
@@ -108,7 +113,7 @@ class MotionDetector:
             
             # Clear history if scale changed (frame sizes will be different)
             if scale_changed:
-                print(f"Motion detector: Scale changed to {self.detection_scale}, clearing history")
+                plog("Motion detector: Scale changed to %s, clearing history", self.detection_scale)
                 self.frame_history.clear()
                 self._bg_sum = None
                 self._bg_buffer = None
@@ -145,7 +150,8 @@ class MotionDetector:
         
         # Reset history if scaled resolution changed (e.g., detection_scale changed)
         if self.last_frame_size is not None and self.last_frame_size != current_scaled_size:
-            print(f"Motion detector: Scaled size changed from {self.last_frame_size} to {current_scaled_size}, resetting history")
+            plog("Motion detector: Scaled size changed from %s to %s, resetting history",
+                 self.last_frame_size, current_scaled_size)
             self.frame_history.clear()
             self._bg_sum = None
             self._bg_buffer = None

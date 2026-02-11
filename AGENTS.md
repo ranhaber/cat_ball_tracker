@@ -1,0 +1,143 @@
+# Project guidelines for agents and developers
+
+This document consolidates knowledge from README, code reviews, and optimization logs so any new agent or developer can continue effectively. **Read this first**, then use the linked docs for detail.
+
+**When making architectural changes, always update AGENTS.md and README** (logging, threads, new modules, concurrency, or behavior that affects debugging or performance).
+
+---
+
+## 1. What this project is
+
+- **Cat Dome** — Real-time cat (and ball) detection and tracking on **Raspberry Pi Zero 2W** with Camera Module 3.
+- **Goal:** Detect and track a cat in a Detection Zone, up to **13 m** range. TFLite stays loaded while a cat is present; unloads after idle timeouts.
+- **Stack:** Python 3, Flask, OpenCV, TFLite (MobileNet SSD), picamera2. Runs headless via systemd; web UI is for monitoring/settings only.
+
+**Version** is in `main.py` (`__version__`). Bump it when releasing; update README "Version" line to match.
+
+---
+
+## 2. Architecture (threads and flow)
+
+- **CatDome-Proc (process thread):** `web/app.py` — `VideoProcessor._process_loop()`. Runs forever: capture frame → optional inject cat → phase state machine (motion, crop, TFLite, tracker) → annotate/JPEG/recording. **Do not block this loop** with long work or cross-thread calls that can deadlock.
+- **CatDome-Main (Flask):** Serves API and MJPEG. Calls into `VideoProcessor` (get frame JPEG, settings, inject toggle, etc.). **Never call `motion_detector.reset()` or `detector.unload_model()` from Flask** — the process loop might be inside `detect()`. Use flags and let the process loop perform cleanup (see Concurrency).
+- **CatDome-Log (writer thread):** `processing/async_log.py` — drains log queue to stdout so the process loop never blocks on journal/pipe I/O. Hot-path logging uses `plog()` (async).
+- **Capture (optional mock thread):** `camera/camera_handler.py` — only when using mock camera; holds `camera.frame_lock`.
+
+**Frame pipeline (short):** Camera → [inject cat if on] → motion detect (resize to ¼) → phase logic → crop (if ACQ/TRACK) → TFLite (resize to model input if needed) → tracker → annotate → JPEG/current_frame → recording.
+
+Detailed timeline: **README § Frame-to-TFLite timeline**. Crop vs resize: **README § Crop vs resize**.
+
+---
+
+## 3. Key concepts
+
+### Phase state machine (IDLE → ACQUISITION → TRACKING → WATCH → IDLE)
+
+- **IDLE:** Motion only, TFLite not loaded. Motion in zone → ACQUISITION.
+- **ACQUISITION:** TFLite runs every processed frame; crop from motion or inject. Cat found → TRACKING. No motion 10 s → IDLE.
+- **TRACKING:** TFLite every 3rd frame; motion crop. Motion stops → WATCH. No detection 30 s → IDLE.
+- **WATCH:** TFLite every 2nd frame; often full frame (no crop). Motion again → TRACKING. No detection 30 s → IDLE.
+
+When **inject_cat** is True, the phase block (motion + AI + annotation inside the `skip_counter >= frame_skip` block) is **skipped** so the loop stays fast and the synthetic cat keeps moving. Stream updates every iteration in the inject block.
+
+### Crop vs resize
+
+- **Crop:** One place — AI region. We take a rectangle from the full frame at **same resolution** (e.g. 380×380 or 400×400 from profile). Slice only: `frame[cy:cy+ch, cx:cx+cw]`.
+- **Resize:** Three places — (1) motion: full frame → ¼ size for motion; (2) TFLite: crop or full frame → model input (e.g. 300×300); (3) stream: annotated frame → stream resolution. Detector skips resize when input already matches model size (e.g. crop 300×300).
+
+Crop size 400×400 is used for the "Performance (13 m)" profile for robustness at long range; 300×300 is more efficient but less margin. See README § "Why not crop to TFLite size?" and § "Effect on detection and tracking to 13 m".
+
+### Inject Cat (test mode)
+
+- **Purpose:** Validate pipeline without a real cat. Pastes a moving cat image on the live frame; pipeline runs as normal.
+- **Enable/disable:** `POST /api/dev/inject_cat` (routes_dev). On disable we clear state, set phase to IDLE, and **request** motion reset and TFLite unload via flags; the **process loop** performs reset/unload at the start of the next iteration (never from Flask).
+- **Movement:** `processing/inject_cat.py` — vertex-to-vertex; `paste_on_frame()` updates position each call. Stream is updated every iteration when inject_cat so the cat moves visibly.
+- **Inject stop → 100% CPU:** While inject is ON the loop runs `time.sleep(INJECT_MODE_SLEEP_SEC)` each iteration; when inject is turned OFF that sleep is no longer used. If the camera returns frames very quickly (or mock returns immediately), the loop can spin at full speed. Cleanup (TFLite unload, `cv2.setNumThreads(1)`) runs at the **start** of the next iteration; if it is delayed or the loop is still tight afterward, CPU stays high. See **README § Inject Cat stop — CPU spike and debug plan**.
+
+### Settings and config
+
+- **Runtime state** (resolution, profile, phase, stream_clients, etc.) lives on **VideoProcessor** (`web/app.py`). Do not mutate `config.*` at runtime for per-profile values; use e.g. `current_motion_crop_size` (already done).
+- **Persisted settings:** `settings.py` (JSON). Loaded in VideoProcessor `__init__`; routes call `settings.update_setting()` when user changes values.
+- **Constants and profiles:** `config.py` (PERFORMANCE_PROFILES, MOTION_DETECTION_SCALE, etc.).
+
+---
+
+## 4. Concurrency and locks (critical)
+
+**Lock inventory:** See **docs/CODE_REVIEW_DEADLOCKS.md**.
+
+- **VideoProcessor:** `frame_lock` (current_frame), `_cached_jpeg_lock` (_cached_jpeg), `_stream_clients_lock` (_stream_clients).
+- **CameraHandler:** `frame_lock` (capture thread vs get_frame).
+- **MotionDetector:** `_lock` (params + history; hold briefly, do heavy work unlocked).
+
+**Rules:**
+
+1. **Lock order when holding two:** Always **`_cached_jpeg_lock` then `frame_lock`** in the process loop. Flask never holds both (only one of get_frame_jpeg / get_frame_jpeg_capture_resolution).
+2. **Never from Flask:** Do not call `motion_detector.reset()` or `detector.unload_model()` from a route. Set flags (`_request_motion_reset_after_inject`, `_request_unload_after_inject`); process loop checks at **start of loop** and performs reset/unload there.
+3. **stream_clients:** Use the **getter** (reads under lock) and **increment_stream_clients() / decrement_stream_clients()** for connect/disconnect. Do not do `stream_clients += 1` or read-modify-write in routes.
+4. **Process loop:** Do not hold any VideoProcessor lock while calling `camera.*` or `motion_detector.detect()`.
+
+---
+
+## 5. Where things live
+
+| Concern | Location |
+|--------|----------|
+| Version | `main.py` __version__ |
+| Config & profiles | `config.py` |
+| Persisted settings | `settings.py`; loaded in `VideoProcessor.__init__` |
+| Process loop, phase machine, JPEG cache | `web/app.py` — VideoProcessor, _process_loop |
+| Frame capture (real/mock) | `camera/camera_handler.py` |
+| Motion detection | `detection/motion_detector.py` |
+| TFLite (load on demand, unload on idle) | `detection/detector.py` |
+| Tracker (centroid IDs) | `detection/tracker.py` |
+| Detection Zone, filter_detections | `detection/perimeter.py` |
+| Inject cat (paste, movement) | `processing/inject_cat.py` |
+| Async logging (queue + writer thread) | `processing/async_log.py` — `setup_async_logging()`, `plog()` |
+| Stream client count, get_frame_jpeg | `web/app.py` |
+| Routes (streaming, dev, calibration, etc.) | `web/routes_*.py` |
+| Tests | `tests/` — `run_tests.py`; conftest mocks camera/Flask/TFLite |
+
+**Project structure (full):** README § Project Structure.
+
+---
+
+## 6. Testing and changes
+
+- **Run tests:** `python tests/run_tests.py` (optionally `python tests/run_tests.py inject_cat` for one module). Tests use mocks (no real camera/TFLite). **All tests must pass** before committing.
+- **Adding features:** Prefer extending existing modules (e.g. new route in appropriate `routes_*.py`, new phase logic in _process_loop with same lock/thread rules). If adding locks, document in CODE_REVIEW_DEADLOCKS and preserve lock order.
+- **Performance:** See **OPTIMIZATION_LOG.md** for what’s been done (frame reuse, pre-alloc buffers, narrow locks, JPEG pre-compute, etc.). Avoid new per-frame allocations in the hot path; use pre-alloc or reuse.
+
+---
+
+## 7. Common pitfalls
+
+- **Init vs start:** VideoProcessor loads settings and sets phase/profile in **`__init__`**, not in a setter. Keep one place for “load settings and apply to state.”
+- **Inject off:** Cleanup (motion reset, unload) must run in the **process loop** via flags, not from Flask. After inject stop the loop has no per-iteration sleep; a small rate-limit sleep when not in inject mode keeps CPU bounded (see app.py loop).
+- **stream_clients:** Use increment/decrement methods and locked getter; no raw += from routes.
+- **Config mutation:** Don’t change `config.MOTION_CROP_SIZE` at runtime; use `VideoProcessor.current_motion_crop_size` (and similar for other profile-driven values).
+- **Null checks:** Guard `inject_cat_handler` (and similar) in routes — return 503 if processor not started.
+- **13 m range:** Keep crop size 400×400 for the Performance (13 m) profile; 300×300 is riskier at long range (less margin for centering).
+
+---
+
+## 8. Reference documents
+
+| Document | Use for |
+|----------|--------|
+| **README.md** | User-facing overview, setup, API, phase diagram, frame timeline, crop vs resize, 13 m and efficiency notes. |
+| **docs/CODE_REVIEW_DEADLOCKS.md** | Lock inventory, deadlock analysis, data races, hold-time. |
+| **docs/CODE_REVIEW.md** | Past high/medium/low review items; many already fixed (frame storage, config mutation, inject_cat_handler guard). |
+| **OPTIMIZATION_LOG.md** | Implemented optimizations (frame reuse, color conversion, pre-alloc, GPU motion, etc.). |
+| **AGENTS.md** (this file) | Single entry point for agents: architecture, rules, where to look, pitfalls. |
+
+---
+
+## 9. Quick checklist for a new agent
+
+- [ ] Read this file and CODE_REVIEW_DEADLOCKS for concurrency.
+- [ ] For process-loop changes: preserve lock order (jpeg then frame); no reset/unload from Flask.
+- [ ] For new routes: use VideoProcessor getters/setters or dedicated methods (e.g. increment_stream_clients); guard optional handlers (inject_cat_handler, etc.).
+- [ ] For crop/size changes: see README § Crop vs resize and § 13 m / efficiency; keep 400 for 13 m profile.
+- [ ] Run `python tests/run_tests.py` after changes; fix any failures.
+- [ ] Bump version in main.py (and README) when releasing; commit message can reference version and main change.

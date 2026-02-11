@@ -1496,6 +1496,13 @@ async function updateStatus() {
         const fpsDisplay = document.getElementById('fps-display');
         if (fpsDisplay) fpsDisplay.textContent = `FPS: ${status.fps}`;
         
+        const fpsDiagDisplay = document.getElementById('fps-diag-display');
+        if (fpsDiagDisplay) {
+            const cap = status.capture_ms != null ? status.capture_ms : '--';
+            const mot = status.motion_ms != null ? status.motion_ms : '--';
+            fpsDiagDisplay.textContent = `Cap: ${cap}ms | Mot: ${mot}ms`;
+        }
+        
         // Update overlay RAM display
         const ramDisplay = document.getElementById('ram-display');
         if (ramDisplay && status.ram_percent !== null) {

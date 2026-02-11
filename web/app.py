@@ -27,6 +27,7 @@ from flask import Flask
 
 import config
 import settings
+from processing.async_log import log as plog
 from processing.memory import get_system_info, get_ram_stats, reclaim_memory
 from processing.inject_cat import InjectCat
 
@@ -86,6 +87,9 @@ class VideoProcessor:
         self.fps = 0.0
         self._fps_start = time.time()
         self._fps_count = 0
+        # FPS diagnostics: last capture and motion duration (ms) to find bottleneck
+        self._last_capture_ms = None
+        self._last_motion_ms = None
         
         # Frame storage for streaming
         self.current_frame = None
@@ -299,8 +303,10 @@ class VideoProcessor:
                     if self.detector:
                         self.detector.unload_model()
                     cv2.setNumThreads(1)
+                    plog("[INJECT CLEANUP] motion reset, TFLite unload, OpenCV threads=1, phase=%s", self._phase)
                 
                 # ── Frame capture ──
+                t_capture_start = time.perf_counter()
                 frame = None
                 if self.video_source == "file" and self.file_camera and self.file_camera.running:
                     frame = self.file_camera.get_frame()
@@ -317,6 +323,7 @@ class VideoProcessor:
                     else:
                         with request as req:
                             frame = req.make_array("main")
+                self._last_capture_ms = round((time.perf_counter() - t_capture_start) * 1000, 1)
                 
                 frame_h, frame_w = frame.shape[:2]
                 tracked_objects = {}  # Used by phase block and by inject stream update below
@@ -330,8 +337,8 @@ class VideoProcessor:
                     self._inject_debug_count += 1
                     if self._inject_debug_count <= 5 or self._inject_debug_count % 50 == 0:
                         ram_info = get_ram_stats()
-                        print(f"[INJECT DEBUG] {self.inject_cat_handler.get_debug_info()}, "
-                              f"clients={self.stream_clients}, RAM: {ram_info}")
+                        plog("[INJECT DEBUG] %s, clients=%s, RAM: %s",
+                             self.inject_cat_handler.get_debug_info(), self.stream_clients, ram_info)
                     # Update stream every frame so the cat moves visibly (phase block only runs every frame_skip)
                     if self.stream_clients > 0:
                         ann = frame.copy()
@@ -367,7 +374,9 @@ class VideoProcessor:
                         # ── PHASE: IDLE ──
                         # Motion detection only. TFLite not loaded. Low power.
                         if self._phase == "IDLE":
+                            t_motion_start = time.perf_counter()
                             motion_result = self.motion_detector.detect(frame)
+                            self._last_motion_ms = round((time.perf_counter() - t_motion_start) * 1000, 1)
                             motion_regions_in_perimeter = self._filter_motion_to_perimeter(
                                 motion_result, frame_w, frame_h)
                             self.motion_detected = len(motion_regions_in_perimeter) > 0
@@ -378,12 +387,14 @@ class VideoProcessor:
                                 self._phase_frame_counter = 0
                                 self._last_motion_time = now
                                 cv2.setNumThreads(4)
-                                print(f"[PHASE] IDLE → ACQUISITION (motion in Detection Zone)")
+                                plog("[PHASE] IDLE → ACQUISITION (motion in Detection Zone)")
                         
                         # ── PHASE: ACQUISITION ──
                         # TFLite runs every frame, searching for cat.
                         elif self._phase == "ACQUISITION":
+                            t_motion_start = time.perf_counter()
                             motion_result = self.motion_detector.detect(frame)
+                            self._last_motion_ms = round((time.perf_counter() - t_motion_start) * 1000, 1)
                             motion_regions_in_perimeter = self._filter_motion_to_perimeter(
                                 motion_result, frame_w, frame_h)
                             self.motion_detected = len(motion_regions_in_perimeter) > 0
@@ -407,12 +418,14 @@ class VideoProcessor:
                                 self.detector.unload_model()
                                 cv2.setNumThreads(1)
                                 reclaim_memory()
-                                print(f"[PHASE] ACQUISITION → IDLE (no motion for {self._acquisition_timeout}s)")
+                                plog("[PHASE] ACQUISITION → IDLE (no motion for %ss)", self._acquisition_timeout)
                         
                         # ── PHASE: TRACKING ──
                         # Cat confirmed. TFLite every 3rd processed frame with motion crop.
                         elif self._phase == "TRACKING":
+                            t_motion_start = time.perf_counter()
                             motion_result = self.motion_detector.detect(frame)
+                            self._last_motion_ms = round((time.perf_counter() - t_motion_start) * 1000, 1)
                             motion_regions_in_perimeter = self._filter_motion_to_perimeter(
                                 motion_result, frame_w, frame_h)
                             self.motion_detected = len(motion_regions_in_perimeter) > 0
@@ -433,7 +446,7 @@ class VideoProcessor:
                             if not self.motion_detected and not self.inject_cat:
                                 self._phase = "WATCH"
                                 self._phase_frame_counter = 0
-                                print(f"[PHASE] TRACKING → WATCH (motion stopped, watching for cat)")
+                                plog("[PHASE] TRACKING → WATCH (motion stopped, watching for cat)")
                             
                             # No detection for 30s → IDLE
                             if now - self._last_detection_time > self._detection_timeout:
@@ -444,12 +457,14 @@ class VideoProcessor:
                                 reclaim_memory()
                                 last_detections = []
                                 self.last_detections_with_world = []
-                                print(f"[PHASE] TRACKING → IDLE (no detection for {self._detection_timeout}s)")
+                                plog("[PHASE] TRACKING → IDLE (no detection for %ss)", self._detection_timeout)
                         
                         # ── PHASE: WATCH ──
                         # No motion but cat was recently detected. TFLite every 2nd frame.
                         elif self._phase == "WATCH":
+                            t_motion_start = time.perf_counter()
                             motion_result = self.motion_detector.detect(frame)
+                            self._last_motion_ms = round((time.perf_counter() - t_motion_start) * 1000, 1)
                             motion_regions_in_perimeter = self._filter_motion_to_perimeter(
                                 motion_result, frame_w, frame_h)
                             self.motion_detected = len(motion_regions_in_perimeter) > 0
@@ -459,7 +474,7 @@ class VideoProcessor:
                                 self._last_motion_time = now
                                 self._phase = "TRACKING"
                                 self._phase_frame_counter = 0
-                                print(f"[PHASE] WATCH → TRACKING (motion resumed)")
+                                plog("[PHASE] WATCH → TRACKING (motion resumed)")
                             
                             if self._phase_frame_counter % config.PHASE_WATCH_AI_INTERVAL == 0:
                                 run_ai_detection = True
@@ -474,7 +489,7 @@ class VideoProcessor:
                                 reclaim_memory()
                                 last_detections = []
                                 self.last_detections_with_world = []
-                                print(f"[PHASE] WATCH → IDLE (no detection for {self._detection_timeout}s)")
+                                plog("[PHASE] WATCH → IDLE (no detection for %ss)", self._detection_timeout)
                         
                         # ── AI DETECTION (shared by ACQUISITION, TRACKING, WATCH) ──
                         if run_ai_detection:
@@ -530,12 +545,12 @@ class VideoProcessor:
                                 if self._phase == "ACQUISITION":
                                     self._phase = "TRACKING"
                                     self._phase_frame_counter = 0
-                                    print(f"[PHASE] ACQUISITION → TRACKING (cat detected!)")
+                                    plog("[PHASE] ACQUISITION → TRACKING (cat detected!)")
                             
                             if config.DEBUG or raw_count > 0:
                                 confirmed_str = f", Confirmed: {len(detections) > 0}" if self.confirm_frames > 1 else ""
-                                print(f"[PERF] Phase={self._phase} AI: {ai_time_ms:.1f}ms | "
-                                      f"Raw: {raw_count}, Perimeter: {len(detections)}{confirmed_str}")
+                                plog("[PERF] Phase=%s AI: %.1fms | Raw: %s, Perimeter: %s%s",
+                                     self._phase, ai_time_ms, raw_count, len(detections), confirmed_str)
                             
                             # Compute world coordinates
                             self.last_detections_with_world = []
@@ -630,9 +645,12 @@ class VideoProcessor:
                     # Rate-limit inject mode
                 if self.inject_cat:
                     time.sleep(config.INJECT_MODE_SLEEP_SEC)
+                else:
+                    # Prevent tight loop when not in inject (avoids 100% CPU after stopping Inject Cat)
+                    time.sleep(0.001)
                 
             except Exception as e:
-                print(f"Processing error: {e}")
+                plog("Processing error: %s", e)
                 import traceback
                 traceback.print_exc()
                 time.sleep(0.1)
@@ -736,9 +754,9 @@ class VideoProcessor:
                 return
             self._recording_start_time = time.time()
             self._recording_last_detection_time = time.time()
-            print(f"[REC] Started: {self._recording_filename}")
+            plog("[REC] Started: %s", self._recording_filename)
         except Exception as e:
-            print(f"[REC] Start failed: {e}")
+            plog("[REC] Start failed: %s", e)
             self._recording_writer = None
     
     def _stop_recording(self):
@@ -747,7 +765,7 @@ class VideoProcessor:
             return
         try:
             self._recording_writer.release()
-            print(f"[REC] Stopped: {self._recording_filename}")
+            plog("[REC] Stopped: %s", self._recording_filename)
         except Exception:
             pass
         self._recording_writer = None
@@ -860,7 +878,9 @@ class VideoProcessor:
             "show_motion_regions": self.show_motion_regions,
             "ai_detections_count": self.ai_detections_count,
             "performance_profile": self.current_profile,
-            "phase": self._phase
+            "phase": self._phase,
+            "capture_ms": self._last_capture_ms,
+            "motion_ms": self._last_motion_ms
         }
     
     # =========================================================================

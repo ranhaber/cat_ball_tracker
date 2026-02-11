@@ -18,6 +18,11 @@ except ImportError:
 
 import config
 
+try:
+    from processing.async_log import log as plog
+except ImportError:
+    plog = lambda msg, *a, **k: print(msg % a if a else msg)
+
 
 class TFLiteDetector:
     """
@@ -52,7 +57,7 @@ class TFLiteDetector:
         # Don't load model at startup — TFLite worker threads busy-wait (spin)
         # even when idle, wasting ~100% of one CPU core.
         # Model is loaded on motion detection and unloaded when idle.
-        print("TFLite model ready (will load on first motion detection)")
+        plog("TFLite model ready (will load on first motion detection)")
         
     def _ensure_model_exists(self):
         """Download model if not present"""
@@ -60,7 +65,7 @@ class TFLiteDetector:
         model_path = os.path.join(config.MODELS_DIR, config.MODEL_FILENAME)
         
         if not os.path.exists(model_path):
-            print("Downloading TFLite model...")
+            plog("Downloading TFLite model...")
             self._download_model()
             
     def _download_model(self):
@@ -77,22 +82,22 @@ class TFLiteDetector:
                 
             # Cleanup
             os.remove(zip_path)
-            print("Model downloaded successfully")
+            plog("Model downloaded successfully")
             
         except Exception as e:
-            print(f"Error downloading model: {e}")
-            print("Please download manually from:", config.MODEL_URL)
+            plog("Error downloading model: %s", e)
+            plog("Please download manually from: %s", config.MODEL_URL)
             
     def _load_model(self):
         """Load the TFLite model"""
         if not TFLITE_AVAILABLE:
-            print("TFLite not available - using mock detections")
+            plog("TFLite not available - using mock detections")
             return
             
         model_path = os.path.join(config.MODELS_DIR, config.MODEL_FILENAME)
         
         if not os.path.exists(model_path):
-            print(f"Model file not found: {model_path}")
+            plog("Model file not found: %s", model_path)
             return
             
         try:
@@ -117,10 +122,10 @@ class TFLiteDetector:
             # Pre-allocate input buffer (avoids ~540KB alloc per inference)
             self._input_buf = np.empty((1, self.input_h, self.input_w, 3), dtype=np.uint8)
             
-            print(f"Model loaded. Input shape: {self.input_shape}")
+            plog("Model loaded. Input shape: %s", self.input_shape)
             
         except Exception as e:
-            print(f"Error loading model: {e}")
+            plog("Error loading model: %s", e)
             self.interpreter = None
             
     def unload_model(self):
@@ -130,7 +135,7 @@ class TFLiteDetector:
             self.interpreter = None
             self.input_details = None
             self.output_details = None
-            print("[DETECTOR] Model unloaded (TFLite threads stopped)")
+            plog("[DETECTOR] Model unloaded (TFLite threads stopped)")
     
     def is_loaded(self):
         """Check if the TFLite model is currently loaded."""
@@ -146,9 +151,9 @@ class TFLiteDetector:
         if mode in config.COCO_CLASSES:
             self.detection_mode = mode
             self.target_class_id = config.COCO_CLASSES[mode]
-            print(f"Detection mode set to: {mode} (class ID: {self.target_class_id})")
+            plog("Detection mode set to: %s (class ID: %s)", mode, self.target_class_id)
         else:
-            print(f"Invalid mode: {mode}. Valid modes: {list(config.COCO_CLASSES.keys())}")
+            plog("Invalid mode: %s. Valid modes: %s", mode, list(config.COCO_CLASSES.keys()))
             
     def get_detection_mode(self):
         """Get current detection mode"""
@@ -163,7 +168,7 @@ class TFLiteDetector:
         """
         threshold = max(0.1, min(0.9, float(threshold)))
         self.threshold = threshold
-        print(f"Detection threshold set to: {threshold}")
+        plog("Detection threshold set to: %s", threshold)
     
     def get_threshold(self):
         """Get current detection threshold"""
@@ -189,9 +194,12 @@ class TFLiteDetector:
         # Get frame dimensions
         frame_h, frame_w = frame.shape[:2]
         
-        # Resize and convert BGR→RGB directly into pre-allocated buffer
-        resized = cv2.resize(frame, (self.input_w, self.input_h))
-        cv2.cvtColor(resized, cv2.COLOR_BGR2RGB, dst=self._input_buf[0])
+        # Resize only if needed (if crop size matches model input, skip resize for efficiency)
+        if frame_w == self.input_w and frame_h == self.input_h:
+            cv2.cvtColor(frame, cv2.COLOR_BGR2RGB, dst=self._input_buf[0])
+        else:
+            resized = cv2.resize(frame, (self.input_w, self.input_h))
+            cv2.cvtColor(resized, cv2.COLOR_BGR2RGB, dst=self._input_buf[0])
         
         # Run inference (input buffer already has batch dimension)
         self.interpreter.set_tensor(self.input_details[0]['index'], self._input_buf)
