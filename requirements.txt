@@ -18,6 +18,10 @@
 # WSGI server for production
 gunicorn==21.2.0
 
+# Fast JPEG encoding via libjpeg-turbo (NEON SIMD on ARM) — ~50-70% faster than cv2.imencode
+# Falls back to cv2.imencode gracefully if not installed
+simplejpeg
+
 # ============================================
 # Below packages are usually pre-installed via apt on RPi
 # Only needed if running on non-RPi systems:

@@ -208,13 +208,19 @@ DEFAULT_PERFORMANCE_PROFILE = "performance"
 # Fixed to 2304×1296 (2x binned mode) - optimal for 13m cat detection
 CAPTURE_RESOLUTION = (2304, 1296)  # Native 2x mode, best balance
 
+# ISP lores (low-resolution) stream — hardware-downscaled by the camera ISP at zero CPU cost.
+# Used for motion detection and stream frame generation instead of resizing the full 9MB main frame.
+# Must be <= main resolution in both dimensions. 960×540 covers the 3 most common stream options.
+# Stream resolutions larger than this fall back to resizing from main.
+LORES_RESOLUTION = (960, 540)
+
 # Available streaming resolution options (width, height) - for web viewing
 # Users can select this to balance bandwidth vs quality
 STREAM_RESOLUTION_OPTIONS = [
     (480, 270),     # Ultra Low - for slow connections
     (640, 360),     # Low - mobile-friendly (RECOMMENDED for RPi Zero 2W)
-    (960, 540),     # Medium - good balance
-    (1280, 720),    # High - HD quality (may cause lag on RPi Zero 2W)
+    (960, 540),     # Medium - good balance (matches lores — zero resize)
+    (1280, 720),    # High - HD quality (resizes from main — slower)
     (1920, 1080),   # Ultra High - maximum quality (not recommended)
 ]
 

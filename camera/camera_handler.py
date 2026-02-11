@@ -136,6 +136,8 @@ class CameraHandler:
         self.running = False
         self.capture_thread = None  # Only used for mock camera
         self.use_mock = False  # Will be set in start()
+        self.has_lores = False  # Set to True when ISP lores stream is active
+        self.lores_size = getattr(config, 'LORES_RESOLUTION', (960, 540))
         
         self._frame_count = 0
         self._start_time = None
@@ -186,23 +188,46 @@ class CameraHandler:
             print(f"Found camera(s): {cameras}")
             
             # Configure for video capture optimized for RPi Zero 2W
-            camera_config = self.camera.create_video_configuration(
-                main={
-                    "size": (self.width, self.height),
-                    "format": "RGB888"  # Despite the name, picamera2 "RGB888" stores BGR in memory (correct for OpenCV)
-                },
-                controls={
-                    "FrameRate": self.fps
-                },
-                buffer_count=2  # 2 buffers saves ~18MB RAM (9MB/frame). Minimal impact on detection.
-            )
+            # Dual-stream: main (full-res for AI crop/snapshots) + lores (ISP-downscaled for motion/stream)
+            lores_w, lores_h = self.lores_size
+            try:
+                camera_config = self.camera.create_video_configuration(
+                    main={
+                        "size": (self.width, self.height),
+                        "format": "RGB888"  # Despite the name, picamera2 "RGB888" stores BGR in memory (correct for OpenCV)
+                    },
+                    lores={
+                        "size": (lores_w, lores_h),
+                        "format": "RGB888"
+                    },
+                    controls={
+                        "FrameRate": self.fps
+                    },
+                    buffer_count=2  # 2 buffer sets (main+lores each). Saves RAM vs 4.
+                )
+                self.has_lores = True
+                print(f"📷 Dual-stream config: main={self.width}×{self.height}, lores={lores_w}×{lores_h}")
+            except Exception as e:
+                print(f"⚠️  Lores stream failed ({e}), using main-only config")
+                camera_config = self.camera.create_video_configuration(
+                    main={
+                        "size": (self.width, self.height),
+                        "format": "RGB888"
+                    },
+                    controls={
+                        "FrameRate": self.fps
+                    },
+                    buffer_count=2
+                )
+                self.has_lores = False
             
             self.camera.configure(camera_config)
             
             print(f"📷 Starting camera at {self.width}×{self.height}...")
             try:
                 self.camera.start()
-                print(f"✅ Camera started successfully (2×2 binned, full 120° FOV)")
+                lores_str = f", lores={lores_w}×{lores_h}" if self.has_lores else ""
+                print(f"✅ Camera started successfully (2×2 binned, full 120° FOV{lores_str})")
             except Exception as e:
                 print(f"❌ Camera start failed: {e}")
                 raise
@@ -288,6 +313,12 @@ class CameraHandler:
     def get_resolution(self):
         """Get current camera resolution"""
         return (self.width, self.height)
+    
+    def get_lores_resolution(self):
+        """Get lores stream resolution, or None if not available."""
+        if self.has_lores:
+            return self.lores_size
+        return None
     
     def pause(self):
         """Pause the camera (stop streaming but keep device open).

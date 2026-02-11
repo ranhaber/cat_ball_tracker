@@ -159,13 +159,14 @@ class MotionDetector:
         self.last_frame_size = current_scaled_size
         
         # OPTIMIZATION J: Use GPU acceleration if available
+        # INTER_LINEAR is 3-5x faster than INTER_AREA for downscaling with negligible quality difference
         if self.use_gpu:
             frame_gpu = cv2.UMat(frame)
-            small_frame_gpu = cv2.resize(frame_gpu, (small_w, small_h), interpolation=cv2.INTER_AREA)
+            small_frame_gpu = cv2.resize(frame_gpu, (small_w, small_h), interpolation=cv2.INTER_LINEAR)
             gray_gpu = cv2.cvtColor(small_frame_gpu, cv2.COLOR_BGR2GRAY)
             gray = cv2.GaussianBlur(gray_gpu, (blur, blur), 0).get()
         else:
-            small_frame = cv2.resize(frame, (small_w, small_h), interpolation=cv2.INTER_AREA)
+            small_frame = cv2.resize(frame, (small_w, small_h), interpolation=cv2.INTER_LINEAR)
             gray = cv2.cvtColor(small_frame, cv2.COLOR_BGR2GRAY)
             gray = cv2.GaussianBlur(gray, (blur, blur), 0)
         

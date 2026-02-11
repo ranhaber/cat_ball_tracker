@@ -31,6 +31,15 @@ from processing.async_log import log as plog
 from processing.memory import get_system_info, get_ram_stats, reclaim_memory
 from processing.inject_cat import InjectCat
 
+# Fast JPEG encoding via libjpeg-turbo (NEON SIMD on ARM) — ~50-70% faster than cv2.imencode
+try:
+    import simplejpeg
+    _HAS_SIMPLEJPEG = True
+    print("[INIT] simplejpeg available — using libjpeg-turbo for JPEG encoding")
+except ImportError:
+    _HAS_SIMPLEJPEG = False
+    print("[INIT] simplejpeg not installed — using cv2.imencode (pip install simplejpeg for faster JPEG)")
+
 # Suppress Flask/Werkzeug access logs (the GET /api/status messages)
 log = logging.getLogger('werkzeug')
 log.setLevel(logging.WARNING)
@@ -117,6 +126,10 @@ class VideoProcessor:
         self.current_framerate = saved.get("framerate", config.DEFAULT_FRAMERATE)
         self.current_frame_skip = saved.get("frame_skip", config.DEFAULT_FRAME_SKIP)
         
+        # ISP lores stream state (set in start() after camera init)
+        self._using_lores = False
+        self._lores_resolution = getattr(config, 'LORES_RESOLUTION', (960, 540))
+        
         # Motion-first detection mode
         self.motion_first_enabled = saved.get("motion_first_enabled", True)
         self.show_motion_regions = saved.get("show_motion_regions", False)
@@ -198,6 +211,90 @@ class VideoProcessor:
         with self._stream_clients_lock:
             self._stream_clients = max(0, self._stream_clients - 1)
             return self._stream_clients
+    
+    # =========================================================================
+    # ISP Lores Stream Helpers
+    # =========================================================================
+    
+    def _lores_motion_scale(self, profile_scale):
+        """Adjust motion detection scale for lores input frame.
+        
+        Performance profiles define motion_scale for the full capture resolution
+        (e.g. 0.30 × 2304 = 691px wide). When passing the smaller lores frame,
+        we scale up so the final detection resolution matches the profile's intent.
+        """
+        if not self._using_lores:
+            return profile_scale
+        main_w = self.current_resolution[0]
+        lores_w = self._lores_resolution[0]
+        return min(1.0, profile_scale * main_w / lores_w)
+    
+    def _scale_motion_to_main(self, motion_result, frame_w, frame_h):
+        """Scale motion detection regions from lores coordinates to main frame coordinates.
+        
+        Motion regions must be in main-frame coords for perimeter filtering and AI crop.
+        """
+        if not self._using_lores:
+            return motion_result
+        lores_w, lores_h = self._lores_resolution
+        sx = frame_w / lores_w
+        sy = frame_h / lores_h
+        
+        if motion_result["regions"]:
+            scaled = []
+            for rx, ry, rw, rh in motion_result["regions"]:
+                scaled.append((int(rx * sx), int(ry * sy), int(rw * sx), int(rh * sy)))
+            motion_result["regions"] = scaled
+            # Update detector's internal state so get_fixed_crop_region() uses main coords
+            self.motion_detector.motion_regions = scaled
+        
+        if motion_result["combined_region"]:
+            cx, cy, cw, ch = motion_result["combined_region"]
+            motion_result["combined_region"] = (int(cx * sx), int(cy * sy), int(cw * sx), int(ch * sy))
+        
+        return motion_result
+    
+    def _encode_jpeg(self, frame, quality):
+        """Encode frame to JPEG bytes using simplejpeg (libjpeg-turbo) or cv2 fallback."""
+        if _HAS_SIMPLEJPEG:
+            try:
+                return simplejpeg.encode_jpeg(frame, quality=quality, colorspace='BGR')
+            except Exception:
+                pass
+        ret, buf = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, quality])
+        return buf.tobytes() if ret else None
+    
+    def _resize_for_stream(self, frame, frame_lores, stream_w, stream_h):
+        """Get a stream-sized frame, preferring lores to avoid expensive main resize.
+        
+        Returns (stream_frame, sx, sy) where sx/sy map main-frame coords to stream coords.
+        """
+        capture_h, capture_w = frame.shape[:2]
+        
+        # If lores available and stream fits within lores, resize from lores (very fast)
+        if frame_lores is not None:
+            lores_h, lores_w = frame_lores.shape[:2]
+            if stream_w <= lores_w and stream_h <= lores_h:
+                if stream_w == lores_w and stream_h == lores_h:
+                    stream_frame = frame_lores.copy()
+                else:
+                    stream_frame = cv2.resize(frame_lores, (stream_w, stream_h),
+                                              interpolation=cv2.INTER_LINEAR)
+                # Scale factors: main coords → stream coords (for annotation drawing)
+                sx = stream_w / capture_w
+                sy = stream_h / capture_h
+                return stream_frame, sx, sy
+        
+        # Fallback: resize from main (for stream resolutions larger than lores)
+        if stream_w != capture_w or stream_h != capture_h:
+            stream_frame = cv2.resize(frame, (stream_w, stream_h),
+                                      interpolation=cv2.INTER_LINEAR)
+            sx = stream_w / capture_w
+            sy = stream_h / capture_h
+        else:
+            stream_frame = frame.copy()
+            sx = sy = 1.0
+        return stream_frame, sx, sy
         
     def start(self):
         """Initialize and start all components"""
@@ -241,6 +338,22 @@ class VideoProcessor:
         
         # Start camera
         self.camera.start()
+        
+        # Configure ISP lores stream state
+        if self.camera.has_lores:
+            self._using_lores = True
+            self._lores_resolution = self.camera.lores_size
+            # Re-apply motion scale for lores input
+            if self.motion_detector:
+                profile = config.PERFORMANCE_PROFILES.get(self.current_profile, {})
+                adjusted_scale = self._lores_motion_scale(profile.get("motion_scale", 0.25))
+                self.motion_detector.update_parameters(detection_scale=adjusted_scale)
+            print(f"[LORES] ISP lores active: {self._lores_resolution[0]}×{self._lores_resolution[1]} "
+                  f"(motion+stream resize eliminated)")
+        else:
+            self._using_lores = False
+            print("[LORES] ISP lores not available — using main-frame resize (slower)")
+        
         if self.video_source == "file" and self.video_file_path and os.path.isfile(self.video_file_path):
             self.file_camera = FileCameraHandler()
             try:
@@ -307,24 +420,35 @@ class VideoProcessor:
                     cv2.setNumThreads(1)
                     plog("[INJECT CLEANUP] motion reset, TFLite unload, OpenCV threads=1, phase=%s", self._phase)
                 
-                # ── Frame capture ──
+                # ── Frame capture (main + ISP lores) ──
                 t_capture_start = time.perf_counter()
                 frame = None
+                frame_lores = None  # ISP-downscaled frame (free on real camera)
                 if self.video_source == "file" and self.file_camera and self.file_camera.running:
                     frame = self.file_camera.get_frame()
                     if frame is None:
                         time.sleep(0.05)
                         continue
+                    # File source: no ISP lores, derive from main if needed
+                    if self._using_lores:
+                        frame_lores = cv2.resize(frame, self._lores_resolution,
+                                                 interpolation=cv2.INTER_LINEAR)
                 else:
                     request = self.camera.get_request()
                     if request is None:
+                        # Mock camera fallback
                         frame = self.camera.get_frame()
                         if frame is None:
                             time.sleep(0.01)
                             continue
+                        if self._using_lores:
+                            frame_lores = cv2.resize(frame, self._lores_resolution,
+                                                     interpolation=cv2.INTER_LINEAR)
                     else:
                         with request as req:
                             frame = req.make_array("main")
+                            if self._using_lores:
+                                frame_lores = req.make_array("lores")
                 self._last_capture_ms = round((time.perf_counter() - t_capture_start) * 1000, 1)
                 
                 frame_h, frame_w = frame.shape[:2]
@@ -333,6 +457,10 @@ class VideoProcessor:
                 # ── Inject cat: paste cat on real camera frame ──
                 if self.inject_cat and self.inject_cat_handler:
                     frame = self.inject_cat_handler.paste_on_frame(frame)
+                    # Invalidate ISP lores — cat was pasted on main, derive new lores
+                    if self._using_lores:
+                        frame_lores = cv2.resize(frame, self._lores_resolution,
+                                                 interpolation=cv2.INTER_LINEAR)
                     # Debug logging
                     if not hasattr(self, '_inject_debug_count'):
                         self._inject_debug_count = 0
@@ -344,19 +472,15 @@ class VideoProcessor:
                     # Update stream every frame so the cat moves visibly (phase block only runs every frame_skip)
                     if self.stream_clients > 0:
                         stream_w, stream_h = self.current_stream_resolution
-                        if stream_w != frame_w or stream_h != frame_h:
-                            ann = cv2.resize(frame, (stream_w, stream_h), interpolation=cv2.INTER_AREA)
-                        else:
-                            ann = frame.copy()
+                        ann, _, _ = self._resize_for_stream(frame, frame_lores, stream_w, stream_h)
                         # Draw perimeter (cached scaled)
                         perim_polygon, perim_pts = self._get_scaled_perimeter(stream_w, stream_h)
                         if perim_polygon is not None and len(perim_polygon) >= 3:
                             cv2.polylines(ann, [perim_polygon], True,
                                           config.PERIMETER_COLOR, config.PERIMETER_THICKNESS)
                         self._draw_status(ann)
-                        ret, jpeg_buf = cv2.imencode('.jpg', ann, [cv2.IMWRITE_JPEG_QUALITY, self.current_jpeg_quality])
                         with self._cached_jpeg_lock:
-                            self._cached_jpeg = jpeg_buf.tobytes() if ret else None
+                            self._cached_jpeg = self._encode_jpeg(ann, self.current_jpeg_quality)
                         with self.frame_lock:
                             self.current_frame = frame
                 
@@ -399,7 +523,9 @@ class VideoProcessor:
                         # Motion detection only. TFLite not loaded. Low power.
                         if self._phase == "IDLE":
                             t_motion_start = time.perf_counter()
-                            motion_result = self.motion_detector.detect(frame)
+                            motion_input = frame_lores if frame_lores is not None else frame
+                            motion_result = self.motion_detector.detect(motion_input)
+                            self._scale_motion_to_main(motion_result, frame_w, frame_h)
                             self._last_motion_ms = round((time.perf_counter() - t_motion_start) * 1000, 1)
                             motion_regions_in_perimeter = self._filter_motion_to_perimeter(
                                 motion_result, frame_w, frame_h)
@@ -417,7 +543,9 @@ class VideoProcessor:
                         # TFLite runs every frame, searching for cat.
                         elif self._phase == "ACQUISITION":
                             t_motion_start = time.perf_counter()
-                            motion_result = self.motion_detector.detect(frame)
+                            motion_input = frame_lores if frame_lores is not None else frame
+                            motion_result = self.motion_detector.detect(motion_input)
+                            self._scale_motion_to_main(motion_result, frame_w, frame_h)
                             self._last_motion_ms = round((time.perf_counter() - t_motion_start) * 1000, 1)
                             t_filt_motion = time.perf_counter()
                             motion_regions_in_perimeter = self._filter_motion_to_perimeter(
@@ -451,7 +579,9 @@ class VideoProcessor:
                         # Cat confirmed. TFLite every 3rd processed frame with motion crop.
                         elif self._phase == "TRACKING":
                             t_motion_start = time.perf_counter()
-                            motion_result = self.motion_detector.detect(frame)
+                            motion_input = frame_lores if frame_lores is not None else frame
+                            motion_result = self.motion_detector.detect(motion_input)
+                            self._scale_motion_to_main(motion_result, frame_w, frame_h)
                             self._last_motion_ms = round((time.perf_counter() - t_motion_start) * 1000, 1)
                             motion_regions_in_perimeter = self._filter_motion_to_perimeter(
                                 motion_result, frame_w, frame_h)
@@ -490,7 +620,9 @@ class VideoProcessor:
                         # No motion but cat was recently detected. TFLite every 2nd frame.
                         elif self._phase == "WATCH":
                             t_motion_start = time.perf_counter()
-                            motion_result = self.motion_detector.detect(frame)
+                            motion_input = frame_lores if frame_lores is not None else frame
+                            motion_result = self.motion_detector.detect(motion_input)
+                            self._scale_motion_to_main(motion_result, frame_w, frame_h)
                             self._last_motion_ms = round((time.perf_counter() - t_motion_start) * 1000, 1)
                             motion_regions_in_perimeter = self._filter_motion_to_perimeter(
                                 motion_result, frame_w, frame_h)
@@ -637,17 +769,11 @@ class VideoProcessor:
                         if self.stream_clients > 0:
                             t_annot_start = time.perf_counter()
                             
-                            # Resize FIRST, then draw on small frame
+                            # Resize from lores (fast) or main (fallback), then draw on small frame
                             stream_w, stream_h = self.current_stream_resolution
-                            capture_h, capture_w = frame.shape[:2]
                             t_rsz = time.perf_counter()
-                            if stream_w != capture_w or stream_h != capture_h:
-                                stream_frame = cv2.resize(frame, (stream_w, stream_h), interpolation=cv2.INTER_AREA)
-                                sx = stream_w / capture_w
-                                sy = stream_h / capture_h
-                            else:
-                                stream_frame = frame.copy()
-                                sx = sy = 1.0
+                            stream_frame, sx, sy = self._resize_for_stream(
+                                frame, frame_lores, stream_w, stream_h)
                             _perf_resize_ms = round((time.perf_counter() - t_rsz) * 1000, 1)
                             
                             # Draw motion regions (scaled to stream res)
@@ -702,10 +828,8 @@ class VideoProcessor:
                             
                             self._draw_status(stream_frame)
                             t_jpg = time.perf_counter()
-                            ret, jpeg_buf = cv2.imencode('.jpg', stream_frame,
-                                                          [cv2.IMWRITE_JPEG_QUALITY, self.current_jpeg_quality])
                             with self._cached_jpeg_lock:
-                                self._cached_jpeg = jpeg_buf.tobytes() if ret else None
+                                self._cached_jpeg = self._encode_jpeg(stream_frame, self.current_jpeg_quality)
                             _perf_jpeg_ms = round((time.perf_counter() - t_jpg) * 1000, 1)
                             _perf_annot_ms = round((time.perf_counter() - t_annot_start) * 1000, 1)
                         
@@ -909,11 +1033,7 @@ class VideoProcessor:
             frame = self.current_frame.copy()
         if undistort and self.lens_calibration and self.lens_calibration.is_calibrated:
             frame = self.lens_calibration.undistort_frame(frame)
-        ret, jpeg = cv2.imencode('.jpg', frame,
-                                  [cv2.IMWRITE_JPEG_QUALITY, min(85, self.current_jpeg_quality + 15)])
-        if ret:
-            return jpeg.tobytes()
-        return None
+        return self._encode_jpeg(frame, min(85, self.current_jpeg_quality + 15))
         
     # =========================================================================
     # Detection & Tracking Settings
@@ -1157,7 +1277,15 @@ class VideoProcessor:
         self.current_stream_resolution = new_res
         self._scaled_perimeter_cache = None  # invalidate
         settings.update_setting("stream_resolution", list(new_res))
-        print(f"[SETTING] Stream resolution changed to: {width}x{height}")
+        if self._using_lores:
+            lores_w, lores_h = self._lores_resolution
+            if width <= lores_w and height <= lores_h:
+                src = f"lores {lores_w}×{lores_h}"
+            else:
+                src = f"main (>{lores_w}×{lores_h}, slower)"
+            print(f"[SETTING] Stream resolution changed to: {width}x{height} (resize from {src})")
+        else:
+            print(f"[SETTING] Stream resolution changed to: {width}x{height}")
         return True
     
     def set_framerate(self, fps):
@@ -1203,8 +1331,10 @@ class VideoProcessor:
         self.current_jpeg_quality = profile["jpeg_quality"]
         
         if self.motion_detector:
+            # Adjust motion scale for lores input (profile scale is for full capture resolution)
+            adjusted_scale = self._lores_motion_scale(profile["motion_scale"])
             self.motion_detector.update_parameters(
-                detection_scale=profile["motion_scale"],
+                detection_scale=adjusted_scale,
                 motion_threshold=profile["motion_threshold"],
                 min_area=profile["motion_min_area"])
         
@@ -1217,10 +1347,11 @@ class VideoProcessor:
         if save:
             settings.update_setting("performance_profile", profile_name)
         
+        lores_info = f" (adjusted for lores: {self._lores_motion_scale(profile['motion_scale']):.2f})" if self._using_lores else ""
         print(f"[PROFILE] Applied '{profile['name']}' profile")
         print(f"  - JPEG Quality: {profile['jpeg_quality']}%")
         print(f"  - AI Crop: {profile['motion_crop_size']}")
-        print(f"  - Motion Scale: {profile['motion_scale']}")
+        print(f"  - Motion Scale: {profile['motion_scale']}{lores_info}")
         print(f"  - TFLite Threads: {profile['tflite_threads']}")
         return True
 

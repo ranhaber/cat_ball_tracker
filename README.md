@@ -2,7 +2,7 @@
 
 A real-time cat and ball detection system for Raspberry Pi Zero 2W with Camera Module 3. Features motion-first detection for efficiency, a web interface for live streaming, and zone-based tracking.
 
-**Version:** 3.8.1
+**Version:** 3.9.0
 
 **For agents and developers:** See **[AGENTS.md](AGENTS.md)** for project guidelines, concurrency rules, and where to find things. Use it as the single entry point before diving into code or other docs.
 
@@ -771,6 +771,7 @@ The **displayed FPS** is processed frames per second (how often the phase block 
 
 ## 📝 Version History
 
+- **v3.9.0** - ISP lores dual-stream: picamera2 outputs a hardware-downscaled 960×540 lores stream alongside the 2304×1296 main stream, eliminating two expensive cv2.resize calls (~460ms/frame → ~3ms). Motion detection and MJPEG stream now resize from lores instead of main. simplejpeg (libjpeg-turbo NEON SIMD) added for ~50-70% faster JPEG encoding. All resize operations switched from INTER_AREA to INTER_LINEAR. Stream resolution selector continues to work on-the-fly; resolutions ≤960×540 use lores, larger fall back to main. Expected improvement: ~2 FPS → 15-25+ FPS.
 - **v3.8.1** - Annotation optimization: resize raw frame to stream resolution first, then draw all annotations (perimeter, detections, motion, crop) on the small frame. Pre-computed scaled perimeter cache (invalidated on perimeter/stream-res change). Saves ~30-80ms per frame on RPi Zero 2W. Stop Stream button already skips entire annotation path (250ms saving).
 - **v3.8.0** - Non-blocking async logging (queue + writer thread, plog); per-step performance log every processed frame ([PERF] cap/motion/crop/tflite/track/annot); FPS diagnostics in status API and UI (Cap/Mot ms); heartbeat log every 30s; Inject Cat stop CPU fix (rate-limit sleep); AGENTS.md and README updated for architectural changes.
 - **v3.7.1** - Minor fixes.
