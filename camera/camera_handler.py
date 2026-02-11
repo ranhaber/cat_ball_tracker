@@ -256,6 +256,14 @@ class CameraHandler:
             #   the main frame using software cv2.resize (the pre-v3.9.0 behaviour). This ensures
             #   the system always starts, even if degraded to ~2 FPS instead of 15-25 FPS.
             #
+            # BUFFER COUNT:
+            #   With H.264 hardware encoding active, the encoder and captured_request() compete
+            #   for DMA buffers. buffer_count=2 causes starvation (~45ms extra cap time).
+            #   buffer_count=4 adds ~21MB RAM but eliminates the contention.
+            #   Without H.264, buffer_count=2 saves ~21MB RAM.
+            #
+            h264_enabled = getattr(config, 'H264_ENABLED', False)
+            buf_count = 4 if h264_enabled else 2
             lores_w, lores_h = self.lores_size
             try:
                 camera_config = self.camera.create_video_configuration(
@@ -268,11 +276,11 @@ class CameraHandler:
                         "format": "YUV420"  # ISP lores requires YUV; converted to BGR in processing loop
                     },
                     controls=self._build_controls(),
-                    buffer_count=2  # 2 buffer sets (main+lores each). Saves RAM vs 4.
+                    buffer_count=buf_count
                 )
                 self.camera.configure(camera_config)
                 self.has_lores = True
-                print(f"📷 Dual-stream config: main={self.width}×{self.height}, lores={lores_w}×{lores_h} (YUV420→BGR)")
+                print(f"📷 Dual-stream config: main={self.width}×{self.height}, lores={lores_w}×{lores_h} (YUV420→BGR, buf={buf_count})")
             except Exception as e:
                 # FALLBACK: main-only mode (pre-v3.9.0 behaviour, ~2 FPS due to software resize)
                 print(f"⚠️  Lores stream failed ({e}), falling back to main-only (software resize)")
@@ -282,7 +290,7 @@ class CameraHandler:
                         "format": "RGB888"
                     },
                     controls=self._build_controls(),
-                    buffer_count=2
+                    buffer_count=buf_count
                 )
                 self.camera.configure(camera_config)
                 self.has_lores = False
@@ -408,6 +416,7 @@ class CameraHandler:
         if (width, height) == self.lores_size and self.has_lores:
             return True  # Already at requested size
         
+        buf_count = 4 if getattr(config, 'H264_ENABLED', False) else 2
         try:
             self.camera.stop()
             camera_config = self.camera.create_video_configuration(
@@ -420,7 +429,7 @@ class CameraHandler:
                     "format": "YUV420"
                 },
                 controls=self._build_controls(),
-                buffer_count=2
+                buffer_count=buf_count
             )
             self.camera.configure(camera_config)
             self.camera.start()
@@ -436,7 +445,7 @@ class CameraHandler:
                     main={"size": (self.width, self.height), "format": "RGB888"},
                     lores={"size": self.lores_size, "format": "YUV420"},
                     controls=self._build_controls(),
-                    buffer_count=2
+                    buffer_count=buf_count
                 )
                 self.camera.configure(camera_config)
                 self.camera.start()
@@ -446,7 +455,7 @@ class CameraHandler:
                 camera_config = self.camera.create_video_configuration(
                     main={"size": (self.width, self.height), "format": "RGB888"},
                     controls=self._build_controls(),
-                    buffer_count=2
+                    buffer_count=buf_count
                 )
                 self.camera.configure(camera_config)
                 self.camera.start()

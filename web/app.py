@@ -281,8 +281,8 @@ class VideoProcessor:
         
         # Get perimeter points in capture coords
         perim_points = []
-        if self.perimeter and hasattr(self.perimeter, 'get_perimeter'):
-            raw = self.perimeter.get_perimeter()
+        if self.perimeter and hasattr(self.perimeter, 'get_points'):
+            raw = self.perimeter.get_points()
             if raw:
                 perim_points = [[int(p[0]), int(p[1])] for p in raw]
         

@@ -174,6 +174,7 @@ function startH264Stream() {
     h264Ws.onopen = () => {
         console.log('[H264] WebSocket connected');
         showConnectionStatus('connected');
+        startOverlayLoop();
     };
     
     h264Ws.onmessage = (event) => {
@@ -234,16 +235,35 @@ function stopH264Stream() {
 // ============================================================================
 // Canvas Overlay Drawing (for H.264 mode — replaces server-side cv2 annotations)
 // ============================================================================
+let _overlayAnimFrame = null;
+
+function startOverlayLoop() {
+    // Continuous redraw at display refresh rate (overlays stay in sync with video)
+    if (_overlayAnimFrame) return;
+    function loop() {
+        drawH264Overlays();
+        if (streamActive && streamMode === 'h264') {
+            _overlayAnimFrame = requestAnimationFrame(loop);
+        } else {
+            _overlayAnimFrame = null;
+        }
+    }
+    _overlayAnimFrame = requestAnimationFrame(loop);
+}
+
 function drawH264Overlays() {
     const canvas = document.getElementById('overlay-canvas');
     const video = document.getElementById('h264-video');
     if (!canvas || !video || !h264Overlays) return;
     
-    // Match canvas size to video display size
+    // Match canvas size to video display size (must be integers)
     const rect = video.getBoundingClientRect();
-    if (canvas.width !== rect.width || canvas.height !== rect.height) {
-        canvas.width = rect.width;
-        canvas.height = rect.height;
+    const w = Math.round(rect.width);
+    const h = Math.round(rect.height);
+    if (w < 10 || h < 10) return;  // Video not rendered yet
+    if (canvas.width !== w || canvas.height !== h) {
+        canvas.width = w;
+        canvas.height = h;
     }
     
     const ctx = canvas.getContext('2d');
@@ -253,8 +273,8 @@ function drawH264Overlays() {
     const capW = data.capture_res ? data.capture_res[0] : 2304;
     const capH = data.capture_res ? data.capture_res[1] : 1296;
     
-    // Scale factors: capture coords → canvas pixels
-    // The H.264 stream encodes the lores frame, but overlay coords are in capture resolution
+    // Scale factors: capture coords to canvas pixels
+    // Overlay coords are in capture resolution; the H.264 stream encodes the lores frame
     const sx = canvas.width / capW;
     const sy = canvas.height / capH;
     
