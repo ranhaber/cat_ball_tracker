@@ -52,6 +52,7 @@ class TFLiteDetector:
         
         self.detection_mode = config.DEFAULT_DETECTION_MODE
         self.target_class_id = config.COCO_CLASSES[self.detection_mode]
+        self._last_perf = None  # Timing breakdown from last detect() call
         
         self._ensure_model_exists()
         # Don't load model at startup — TFLite worker threads busy-wait (spin)
@@ -184,9 +185,12 @@ class TFLiteDetector:
         Returns:
             List of detections: [(x1, y1, x2, y2, confidence, class_id), ...]
         """
+        import time as _time
         # Load model on demand (avoids TFLite spin-wait threads when idle)
+        t_load = _time.perf_counter()
         if self.interpreter is None:
             self._load_model()
+        load_ms = round((_time.perf_counter() - t_load) * 1000, 1)
         
         if self.interpreter is None:
             return self._mock_detect(frame)
@@ -194,24 +198,27 @@ class TFLiteDetector:
         # Get frame dimensions
         frame_h, frame_w = frame.shape[:2]
         
-        # Resize only if needed (if crop size matches model input, skip resize for efficiency)
+        # Resize + color convert to model input
+        t_pre = _time.perf_counter()
         if frame_w == self.input_w and frame_h == self.input_h:
             cv2.cvtColor(frame, cv2.COLOR_BGR2RGB, dst=self._input_buf[0])
         else:
             resized = cv2.resize(frame, (self.input_w, self.input_h))
             cv2.cvtColor(resized, cv2.COLOR_BGR2RGB, dst=self._input_buf[0])
+        pre_ms = round((_time.perf_counter() - t_pre) * 1000, 1)
         
-        # Run inference (input buffer already has batch dimension)
+        # Run inference
+        t_invoke = _time.perf_counter()
         self.interpreter.set_tensor(self.input_details[0]['index'], self._input_buf)
         self.interpreter.invoke()
+        invoke_ms = round((_time.perf_counter() - t_invoke) * 1000, 1)
         
-        # Get outputs
-        # Output format: boxes, classes, scores, num_detections
+        # Get outputs + filter
+        t_post = _time.perf_counter()
         boxes = self.interpreter.get_tensor(self.output_details[0]['index'])[0]
         classes = self.interpreter.get_tensor(self.output_details[1]['index'])[0]
         scores = self.interpreter.get_tensor(self.output_details[2]['index'])[0]
         
-        # Filter detections (no debug allocs in hot path)
         detections = []
         
         for i in range(len(scores)):
@@ -223,7 +230,6 @@ class TFLiteDetector:
             if class_id != self.target_class_id:
                 continue
                 
-            # Convert normalized coordinates to pixel coordinates
             y1, x1, y2, x2 = boxes[i]
             x1 = max(0, min(int(x1 * frame_w), frame_w))
             y1 = max(0, min(int(y1 * frame_h), frame_h))
@@ -231,6 +237,15 @@ class TFLiteDetector:
             y2 = max(0, min(int(y2 * frame_h), frame_h))
             
             detections.append((x1, y1, x2, y2, score, class_id))
+        post_ms = round((_time.perf_counter() - t_post) * 1000, 1)
+        
+        # Store last timing breakdown for caller to read
+        self._last_perf = {
+            "load": load_ms,
+            "pre": pre_ms,      # resize + BGR→RGB
+            "invoke": invoke_ms, # TFLite invoke
+            "post": post_ms      # get_tensor + filter
+        }
             
         return detections
         

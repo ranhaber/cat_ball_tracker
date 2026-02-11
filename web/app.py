@@ -384,10 +384,14 @@ class VideoProcessor:
                     # Per-step timings for bottleneck analysis (logged every phase-block iteration)
                     _perf_crop_ms = None
                     _perf_tflite_ms = None
+                    _perf_tflite_detail = None  # sub-breakdown from detector
                     _perf_track_ms = None
                     _perf_annot_ms = None
                     _perf_resize_ms = None
                     _perf_jpeg_ms = None
+                    _perf_getcrop_ms = None  # time to compute crop region
+                    _perf_filter_ms = None   # perimeter filter + temporal confirm
+                    _perf_world_ms = None    # world coord computation
                     
                     # When inject_cat, skip motion/AI/annotation so loop stays fast and cat keeps moving
                     if not self.inject_cat:
@@ -415,6 +419,7 @@ class VideoProcessor:
                             t_motion_start = time.perf_counter()
                             motion_result = self.motion_detector.detect(frame)
                             self._last_motion_ms = round((time.perf_counter() - t_motion_start) * 1000, 1)
+                            t_filt_motion = time.perf_counter()
                             motion_regions_in_perimeter = self._filter_motion_to_perimeter(
                                 motion_result, frame_w, frame_h)
                             self.motion_detected = len(motion_regions_in_perimeter) > 0
@@ -423,6 +428,7 @@ class VideoProcessor:
                             
                             # AI runs every frame during acquisition
                             run_ai_detection = True
+                            t_getcrop = time.perf_counter()
                             crop_size = self.current_motion_crop_size
                             if self.inject_cat and self.inject_cat_handler:
                                 crop_region = self.inject_cat_handler.get_crop_region(
@@ -430,6 +436,7 @@ class VideoProcessor:
                             elif motion_regions_in_perimeter:
                                 crop_region = self.motion_detector.get_fixed_crop_region(
                                     frame.shape, crop_size=crop_size)
+                            _perf_getcrop_ms = round((time.perf_counter() - t_getcrop) * 1000, 1)
                             
                             # Timeout: no motion for 10s → back to IDLE
                             if not self.inject_cat and (now - self._last_motion_time > self._acquisition_timeout):
@@ -530,6 +537,9 @@ class VideoProcessor:
                                 detections = self.detector.detect(frame)
                                 _perf_tflite_ms = round((time.perf_counter() - t1) * 1000, 1)
                             
+                            # Grab TFLite sub-breakdown
+                            _perf_tflite_detail = getattr(self.detector, '_last_perf', None)
+                            
                             ai_time_ms = (_perf_crop_ms or 0) + (_perf_tflite_ms or 0)
                             
                             # Inject Cat fallback: if TFLite didn't detect the pasted cat
@@ -546,7 +556,8 @@ class VideoProcessor:
                                     detections.append((bbox[0], bbox[1], bbox[2], bbox[3],
                                                        config.INJECT_FALLBACK_CONFIDENCE, cat_class_id))
                             
-                            # Filter by perimeter
+                            # Filter by perimeter + temporal confirmation
+                            t_filter = time.perf_counter()
                             frame_res = (frame_w, frame_h)
                             raw_count = len(detections)
                             detections = self.perimeter.filter_detections(detections, frame_resolution=frame_res)
@@ -560,6 +571,7 @@ class VideoProcessor:
                                 confirmed = len(self.detection_history) >= self.confirm_frames and all(self.detection_history)
                                 if not confirmed:
                                     detections = []
+                            _perf_filter_ms = round((time.perf_counter() - t_filter) * 1000, 1)
                             
                             last_detections = detections
                             
@@ -573,6 +585,7 @@ class VideoProcessor:
                                     plog("[PHASE] ACQUISITION → TRACKING (cat detected!)")
                             
                             # Compute world coordinates
+                            t_world = time.perf_counter()
                             self.last_detections_with_world = []
                             for det in detections:
                                 x1, y1, x2, y2, conf, class_id = det
@@ -594,6 +607,7 @@ class VideoProcessor:
                                     "world_position": world_pos,
                                     "injected": is_injected
                                 })
+                            _perf_world_ms = round((time.perf_counter() - t_world) * 1000, 1)
                         
                         # ── Tracking ──
                         t_track_start = time.perf_counter()
@@ -718,8 +732,20 @@ class VideoProcessor:
                         # Per-step timings to log every phase-block iteration (bottleneck analysis)
                         cap = self._last_capture_ms if self._last_capture_ms is not None else 0
                         mot = self._last_motion_ms if self._last_motion_ms is not None else 0
+                        getcrop_s = _perf_getcrop_ms if _perf_getcrop_ms is not None else "-"
                         crop_s = _perf_crop_ms if _perf_crop_ms is not None else "-"
-                        tflite_s = _perf_tflite_ms if _perf_tflite_ms is not None else "-"
+                        # TFLite with sub-breakdown
+                        if _perf_tflite_ms is not None and _perf_tflite_detail:
+                            d = _perf_tflite_detail
+                            tflite_s = "%.0f(ld=%s pre=%s inv=%s post=%s)" % (
+                                _perf_tflite_ms, d.get("load", "-"), d.get("pre", "-"),
+                                d.get("invoke", "-"), d.get("post", "-"))
+                        elif _perf_tflite_ms is not None:
+                            tflite_s = str(_perf_tflite_ms)
+                        else:
+                            tflite_s = "-"
+                        filt_s = _perf_filter_ms if _perf_filter_ms is not None else "-"
+                        world_s = _perf_world_ms if _perf_world_ms is not None else "-"
                         track_s = _perf_track_ms if _perf_track_ms is not None else "-"
                         if _perf_annot_ms is not None:
                             rsz_s = _perf_resize_ms if _perf_resize_ms is not None else "-"
@@ -727,8 +753,8 @@ class VideoProcessor:
                             annot_s = "%.0f(rsz=%s jpg=%s)" % (_perf_annot_ms, rsz_s, jpg_s)
                         else:
                             annot_s = "-"
-                        plog("[PERF] cap=%.0fms motion=%.0fms crop=%s tflite=%s track=%s annot=%s phase=%s",
-                             cap, mot, crop_s, tflite_s, track_s, annot_s, self._phase)
+                        plog("[PERF] cap=%.0fms mot=%.0fms gcrop=%s crop=%s tf=%s filt=%s world=%s trk=%s ann=%s ph=%s",
+                             cap, mot, getcrop_s, crop_s, tflite_s, filt_s, world_s, track_s, annot_s, self._phase)
                     
                     # Rate-limit inject mode
                 if self.inject_cat:
