@@ -822,17 +822,17 @@ class VideoProcessor:
         
         while self.running:
             try:
-                # ── Pending cleanup after inject stop (done here to avoid calling from Flask during detect()) ──
+                # ── Pending cleanup after inject stop ──
                 if getattr(self, '_request_motion_reset_after_inject', False):
                     self._request_motion_reset_after_inject = False
                     if self.motion_detector:
                         self.motion_detector.reset()
                 if getattr(self, '_request_unload_after_inject', False):
                     self._request_unload_after_inject = False
-                    if self.detector:
-                        self.detector.unload_model()
+                    # Do NOT call detector.unload_model() here — AI thread owns the detector.
+                    # AI thread auto-unloads after 10s idle.
                     cv2.setNumThreads(1)
-                    plog("[INJECT CLEANUP] motion reset, TFLite unload, OpenCV threads=1, phase=%s", self._phase)
+                    plog("[INJECT CLEANUP] motion reset, OpenCV threads=1, phase=%s (AI thread will auto-unload)", self._phase)
                 
                 # ── Frame from capture thread (pipelined, zero-copy) ──
                 t_qw = time.perf_counter()
