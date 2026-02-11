@@ -573,14 +573,35 @@ class VideoProcessor:
                         cap_ms = round((time.perf_counter() - t0) * 1000, 1)
                         payload = ("numpy", frame, frame_lores, None, False, cap_ms)
                     elif _HAS_MAPPED_ARRAY:
-                        # Real camera + MappedArray: enter the context manager to get
-                        # the actual CompletedRequest (not the generator wrapper).
-                        # The processing thread will call req.release() when done.
-                        req = request.__enter__()
+                        if not getattr(self, '_zerocopy_cap_logged', False):
+                            plog("[ZEROCOPY] MappedArray active in capture thread")
+                            self._zerocopy_cap_logged = True
+                        # Phase 2: zero-copy via MappedArray inside the request context.
+                        # Main frame: still copied (needed for writing by inject_cat + annotation).
+                        # Lores Y-plane: zero-copy view → copied only the Y slice (saves ~2ms).
+                        # Lores BGR: cvtColor produces a new array (no extra copy needed).
+                        with request as req:
+                            # Main: use MappedArray to get the view, then copy once
+                            with MappedArray(req, "main", write=False) as m:
+                                frame = np.copy(m.array)
+                            frame_lores = None
+                            frame_lores_y = None
+                            _lores_from_isp = False
+                            if self._using_lores:
+                                with MappedArray(req, "lores", write=False) as m:
+                                    lores_raw = m.array
+                                    lores_h_px = self._lores_resolution[1]
+                                    # Y-plane: view into DMA, copy just the Y slice (~0.5MB vs 1.2MB full)
+                                    frame_lores_y = lores_raw[:lores_h_px, :].copy()
+                                    if self.stream_clients > 0:
+                                        frame_lores = cv2.cvtColor(lores_raw, cv2.COLOR_YUV2BGR_I420)
+                                    else:
+                                        _lores_from_isp = True
                         cap_ms = round((time.perf_counter() - t0) * 1000, 1)
-                        payload = ("request", req, cap_ms)
+                        payload = ("numpy", frame, frame_lores, frame_lores_y,
+                                   _lores_from_isp, cap_ms)
                     else:
-                        # Real camera but no MappedArray: copy arrays (Phase 1 fallback)
+                        # Phase 1 fallback: make_array copies everything
                         with request as req:
                             frame = req.make_array("main")
                             frame_lores = None
