@@ -386,6 +386,8 @@ class VideoProcessor:
                     _perf_tflite_ms = None
                     _perf_track_ms = None
                     _perf_annot_ms = None
+                    _perf_resize_ms = None
+                    _perf_jpeg_ms = None
                     
                     # When inject_cat, skip motion/AI/annotation so loop stays fast and cat keeps moving
                     if not self.inject_cat:
@@ -621,9 +623,10 @@ class VideoProcessor:
                         if self.stream_clients > 0:
                             t_annot_start = time.perf_counter()
                             
-                            # Resize FIRST, then draw on small frame (saves ~30-80ms on RPi)
+                            # Resize FIRST, then draw on small frame
                             stream_w, stream_h = self.current_stream_resolution
                             capture_h, capture_w = frame.shape[:2]
+                            t_rsz = time.perf_counter()
                             if stream_w != capture_w or stream_h != capture_h:
                                 stream_frame = cv2.resize(frame, (stream_w, stream_h), interpolation=cv2.INTER_AREA)
                                 sx = stream_w / capture_w
@@ -631,6 +634,7 @@ class VideoProcessor:
                             else:
                                 stream_frame = frame.copy()
                                 sx = sy = 1.0
+                            _perf_resize_ms = round((time.perf_counter() - t_rsz) * 1000, 1)
                             
                             # Draw motion regions (scaled to stream res)
                             if self.show_motion_regions and self.motion_first_enabled and motion_regions_in_perimeter:
@@ -683,10 +687,12 @@ class VideoProcessor:
                                                 config.TEXT_COLOR, config.FONT_THICKNESS)
                             
                             self._draw_status(stream_frame)
+                            t_jpg = time.perf_counter()
                             ret, jpeg_buf = cv2.imencode('.jpg', stream_frame,
                                                           [cv2.IMWRITE_JPEG_QUALITY, self.current_jpeg_quality])
                             with self._cached_jpeg_lock:
                                 self._cached_jpeg = jpeg_buf.tobytes() if ret else None
+                            _perf_jpeg_ms = round((time.perf_counter() - t_jpg) * 1000, 1)
                             _perf_annot_ms = round((time.perf_counter() - t_annot_start) * 1000, 1)
                         
                         # Store raw frame for snapshot and recording (no copy needed —
@@ -715,7 +721,12 @@ class VideoProcessor:
                         crop_s = _perf_crop_ms if _perf_crop_ms is not None else "-"
                         tflite_s = _perf_tflite_ms if _perf_tflite_ms is not None else "-"
                         track_s = _perf_track_ms if _perf_track_ms is not None else "-"
-                        annot_s = _perf_annot_ms if _perf_annot_ms is not None else "-"
+                        if _perf_annot_ms is not None:
+                            rsz_s = _perf_resize_ms if _perf_resize_ms is not None else "-"
+                            jpg_s = _perf_jpeg_ms if _perf_jpeg_ms is not None else "-"
+                            annot_s = "%.0f(rsz=%s jpg=%s)" % (_perf_annot_ms, rsz_s, jpg_s)
+                        else:
+                            annot_s = "-"
                         plog("[PERF] cap=%.0fms motion=%.0fms crop=%s tflite=%s track=%s annot=%s phase=%s",
                              cap, mot, crop_s, tflite_s, track_s, annot_s, self._phase)
                     
