@@ -484,6 +484,9 @@ class VideoProcessor:
         self._ai_result_queue = queue.Queue(maxsize=1)
         self.running = True
         
+        # Reduce thread stack size from default 8MB to 256KB (saves ~23MB for 3 threads)
+        threading.stack_size(256 * 1024)
+        
         self._capture_thread = threading.Thread(target=self._capture_loop, daemon=True, name="CatDome-Cap")
         self._capture_thread.start()
         
@@ -492,6 +495,9 @@ class VideoProcessor:
         
         self.process_thread = threading.Thread(target=self._process_loop, daemon=True, name="CatDome-Process")
         self.process_thread.start()
+        
+        # Restore default stack size for any future threads (Flask, etc.)
+        threading.stack_size(0)
         
         mode_str = "MOTION-FIRST" if self.motion_first_enabled else "ALWAYS-ON"
         print(f"Video processor started (Detection mode: {mode_str})")
@@ -585,13 +591,13 @@ class VideoProcessor:
                 try:
                     request = self._ai_request_queue.get(timeout=1.0)
                 except queue.Empty:
-                    # No work — check if we should unload the model
+                    # No work — unload model quickly to free ~20MB RAM on Pi Zero
                     if self.detector and self.detector.is_loaded():
-                        if time.time() - idle_since > 10.0:
+                        if time.time() - idle_since > 3.0:
                             self.detector.unload_model()
                             cv2.setNumThreads(1)
                             reclaim_memory()
-                            plog("[AI] Model unloaded after 10s idle")
+                            plog("[AI] Model unloaded after 3s idle")
                     continue
                 
                 if request is None:
@@ -1078,7 +1084,9 @@ class VideoProcessor:
                             plog("[PHASE] WATCH → TRACKING (motion resumed)")
                         
                         if self._phase_frame_counter % config.PHASE_WATCH_AI_INTERVAL == 0:
-                            self._submit_ai(frame, None)  # No crop in WATCH — scan wider area
+                            # Use center crop instead of full frame to avoid 9MB copy
+                            watch_crop = (frame_w // 2 - 190, frame_h // 2 - 190, 380, 380)
+                            self._submit_ai(frame, watch_crop)
                         
                         # No detection for 30s → IDLE
                         if now - self._last_detection_time > self._detection_timeout:
