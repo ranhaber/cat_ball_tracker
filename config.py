@@ -311,6 +311,15 @@ RECORD_AFTER_DETECTION_SEC = 5
 RECORDING_FOURCC = "avc1"  # H.264 for MP4
 
 # ============================================================================
+# Thread Affinity (Pi Zero 2W, 4x Cortex-A53)
+# ============================================================================
+# Pin capture and processing threads to specific cores for cache locality.
+# Disable on dev machines (Linux-only, requires os.sched_setaffinity).
+THREAD_AFFINITY_ENABLED = True
+CAPTURE_THREAD_CORE = 1   # Core 1: camera wait + memcpy
+PROCESS_THREAD_CORE = 0   # Core 0: motion + AI + annotation
+
+# ============================================================================
 # Sync FRAME_WIDTH/HEIGHT with DEFAULT_RESOLUTION
 # ============================================================================
 FRAME_WIDTH = DEFAULT_RESOLUTION[0]

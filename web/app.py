@@ -18,6 +18,7 @@ Routes are organized in separate Blueprint files:
 
 import time
 import threading
+import queue
 import os
 import logging
 from datetime import datetime
@@ -460,8 +461,13 @@ class VideoProcessor:
                 self.file_camera = None
                 self.video_source = "live"
         
-        # Start processing thread
+        # Start capture + processing threads (pipelined)
+        self._frame_queue = queue.Queue(maxsize=1)
         self.running = True
+        
+        self._capture_thread = threading.Thread(target=self._capture_loop, daemon=True, name="CatDome-Cap")
+        self._capture_thread.start()
+        
         self.process_thread = threading.Thread(target=self._process_loop, daemon=True, name="CatDome-Process")
         self.process_thread.start()
         
@@ -472,6 +478,10 @@ class VideoProcessor:
         """Stop all components"""
         self.running = False
         self._stop_recording()
+        # Wait for capture thread to exit (it will unblock from camera.get_request
+        # once camera.stop() is called, or from the running flag on next iteration)
+        if hasattr(self, '_capture_thread') and self._capture_thread.is_alive():
+            self._capture_thread.join(timeout=3.0)
         if self.file_camera:
             self.file_camera.stop()
             self.file_camera = None
@@ -480,24 +490,127 @@ class VideoProcessor:
         print("Video processor stopped")
         
     # =========================================================================
+    # Capture Thread (Phase 1: pipelined capture)
+    # =========================================================================
+    
+    def _capture_loop(self):
+        """Capture thread — blocks on camera, copies frames, feeds queue.
+        
+        Runs on a dedicated thread (CatDome-Cap). Owns the camera: all
+        captured_request() and reconfigure calls happen here. The processing
+        thread reads frames from self._frame_queue.
+        """
+        # Set OS thread name for htop/top visibility
+        try:
+            import ctypes
+            libc = ctypes.CDLL('libc.so.6')
+            libc.prctl(15, b'CatDome-Cap', 0, 0, 0)
+        except Exception:
+            pass
+        
+        # Optional: pin to Core 1 for cache locality
+        if getattr(config, 'THREAD_AFFINITY_ENABLED', False):
+            try:
+                os.sched_setaffinity(0, {getattr(config, 'CAPTURE_THREAD_CORE', 1)})
+            except Exception:
+                pass
+        
+        while self.running:
+            try:
+                # ── Pending lores reconfigure (requested by Flask thread) ──
+                # Must happen here because the capture thread owns the camera.
+                if self._pending_lores_reconfigure is not None:
+                    new_lores_w, new_lores_h = self._pending_lores_reconfigure
+                    self._pending_lores_reconfigure = None
+                    if self.camera.reconfigure_lores(new_lores_w, new_lores_h):
+                        old_lores = self._lores_resolution
+                        self._lores_resolution = (new_lores_w, new_lores_h)
+                        self._using_lores = True
+                        profile = config.PERFORMANCE_PROFILES.get(self.current_profile, {})
+                        adjusted_scale = self._lores_motion_scale(profile.get("motion_scale", 0.25))
+                        self.motion_detector.update_parameters(detection_scale=adjusted_scale)
+                        plog("[LORES] Reconfigured %s×%s → %s×%s, motion_scale=%.2f",
+                             old_lores[0], old_lores[1], new_lores_w, new_lores_h, adjusted_scale)
+                
+                # ── Capture a frame ──
+                t0 = time.perf_counter()
+                frame = None
+                frame_lores = None
+                frame_lores_y = None
+                _lores_from_isp = False
+                
+                if self.video_source == "file" and self.file_camera and self.file_camera.running:
+                    frame = self.file_camera.get_frame()
+                    if frame is None:
+                        time.sleep(0.05)
+                        continue
+                    if self._using_lores:
+                        frame_lores = cv2.resize(frame, self._lores_resolution,
+                                                 interpolation=cv2.INTER_LINEAR)
+                else:
+                    request = self.camera.get_request()
+                    if request is None:
+                        # Mock camera fallback
+                        frame = self.camera.get_frame()
+                        if frame is None:
+                            time.sleep(0.01)
+                            continue
+                        if self._using_lores:
+                            frame_lores = cv2.resize(frame, self._lores_resolution,
+                                                     interpolation=cv2.INTER_LINEAR)
+                    else:
+                        with request as req:
+                            frame = req.make_array("main")
+                            if self._using_lores:
+                                lores_raw = req.make_array("lores")
+                                lores_h_px = self._lores_resolution[1]
+                                frame_lores_y = lores_raw[:lores_h_px, :].copy()
+                                if self.stream_clients > 0:
+                                    frame_lores = cv2.cvtColor(lores_raw, cv2.COLOR_YUV2BGR_I420)
+                                else:
+                                    _lores_from_isp = True
+                
+                cap_ms = round((time.perf_counter() - t0) * 1000, 1)
+                
+                # ── Enqueue frame (drop old if processing is behind) ──
+                payload = (frame, frame_lores, frame_lores_y, _lores_from_isp, cap_ms)
+                try:
+                    self._frame_queue.get_nowait()  # discard stale frame
+                except queue.Empty:
+                    pass
+                try:
+                    self._frame_queue.put_nowait(payload)
+                except queue.Full:
+                    pass  # should not happen after get_nowait
+                
+            except Exception as e:
+                plog("[CAPTURE] Error: %s", e)
+                time.sleep(0.1)
+    
+    # =========================================================================
     # Main Processing Loop
     # =========================================================================
     
     def _process_loop(self):
-        """Main processing loop — camera → motion → AI → tracking → annotation.
+        """Main processing loop — motion → AI → tracking → annotation.
         
+        Frames arrive from the capture thread via self._frame_queue.
         Handles both normal operation and inject cat test mode.
-        In inject mode, the cat image is pasted on the real camera frame,
-        then the same pipeline processes it.
         """
         # Set OS thread name
         try:
             import ctypes
             libc = ctypes.CDLL('libc.so.6')
-            PR_SET_NAME = 15  # Linux prctl constant for setting thread name
-            libc.prctl(PR_SET_NAME, b'CatDome-Proc', 0, 0, 0)
+            libc.prctl(15, b'CatDome-Proc', 0, 0, 0)
         except Exception:
             pass
+        
+        # Optional: pin to Core 0 for cache locality
+        if getattr(config, 'THREAD_AFFINITY_ENABLED', False):
+            try:
+                os.sched_setaffinity(0, {getattr(config, 'PROCESS_THREAD_CORE', 0)})
+            except Exception:
+                pass
         
         cv2.setNumThreads(1)  # Single-threaded OpenCV when idle
         skip_counter = 0
@@ -517,68 +630,15 @@ class VideoProcessor:
                     cv2.setNumThreads(1)
                     plog("[INJECT CLEANUP] motion reset, TFLite unload, OpenCV threads=1, phase=%s", self._phase)
                 
-                # ── Pending lores reconfigure (requested by set_stream_resolution from Flask thread) ──
-                # Must execute here (processing thread) because camera capture is on this thread.
-                if self._pending_lores_reconfigure is not None:
-                    new_lores_w, new_lores_h = self._pending_lores_reconfigure
-                    self._pending_lores_reconfigure = None
-                    if self.camera.reconfigure_lores(new_lores_w, new_lores_h):
-                        old_lores = self._lores_resolution
-                        self._lores_resolution = (new_lores_w, new_lores_h)
-                        self._using_lores = True
-                        # Re-adjust motion detection scale for new lores size
-                        profile = config.PERFORMANCE_PROFILES.get(self.current_profile, {})
-                        adjusted_scale = self._lores_motion_scale(profile.get("motion_scale", 0.25))
-                        self.motion_detector.update_parameters(detection_scale=adjusted_scale)
-                        plog("[LORES] Reconfigured %s×%s → %s×%s, motion_scale=%.2f",
-                             old_lores[0], old_lores[1], new_lores_w, new_lores_h, adjusted_scale)
-                
-                # ── Frame capture (main + ISP lores) ──
-                # Lores pipeline: extract Y plane (grayscale) for motion detection (zero-copy),
-                # defer YUV→BGR conversion until stream annotation needs it (only when clients watch).
-                t_capture_start = time.perf_counter()
-                frame = None
-                frame_lores = None       # BGR lores (computed lazily or from inject/mock resize)
-                frame_lores_y = None     # Grayscale Y plane from I420 (for motion — skips 2 cvtColors)
-                _lores_from_isp = False  # True when lores comes from ISP (has raw YUV for deferred BGR)
-                if self.video_source == "file" and self.file_camera and self.file_camera.running:
-                    frame = self.file_camera.get_frame()
-                    if frame is None:
-                        time.sleep(0.05)
-                        continue
-                    # File source: no ISP lores, derive BGR from main
-                    if self._using_lores:
-                        frame_lores = cv2.resize(frame, self._lores_resolution,
-                                                 interpolation=cv2.INTER_LINEAR)
-                else:
-                    request = self.camera.get_request()
-                    if request is None:
-                        # Mock camera fallback
-                        frame = self.camera.get_frame()
-                        if frame is None:
-                            time.sleep(0.01)
-                            continue
-                        if self._using_lores:
-                            frame_lores = cv2.resize(frame, self._lores_resolution,
-                                                     interpolation=cv2.INTER_LINEAR)
-                    else:
-                        with request as req:
-                            frame = req.make_array("main")
-                            if self._using_lores:
-                                # ISP lores is I420 (planar Y, U, V). The Y plane (first h rows)
-                                # IS grayscale — we pass it directly to motion detection, skipping
-                                # both YUV→BGR (~15-25ms) and BGR→Gray (~2-3ms).
-                                # BGR conversion is deferred to the stream annotation section
-                                # and skipped entirely when no stream clients are watching.
-                                lores_raw = req.make_array("lores")
-                                lores_h_px = self._lores_resolution[1]
-                                frame_lores_y = lores_raw[:lores_h_px, :].copy()  # Y plane (grayscale)
-                                # Convert to BGR only if stream clients need it right now
-                                if self.stream_clients > 0:
-                                    frame_lores = cv2.cvtColor(lores_raw, cv2.COLOR_YUV2BGR_I420)
-                                else:
-                                    _lores_from_isp = True  # flag: frame_lores=None but Y is available
-                self._last_capture_ms = round((time.perf_counter() - t_capture_start) * 1000, 1)
+                # ── Frame from capture thread (pipelined) ──
+                try:
+                    payload = self._frame_queue.get(timeout=0.5)
+                except queue.Empty:
+                    continue
+                frame, frame_lores, frame_lores_y, _lores_from_isp, cap_ms = payload
+                if frame is None:
+                    continue
+                self._last_capture_ms = cap_ms
                 
                 frame_h, frame_w = frame.shape[:2]
                 tracked_objects = {}  # Used by phase block and by inject stream update below

@@ -2,7 +2,7 @@
 
 A real-time cat and ball detection system for Raspberry Pi Zero 2W with Camera Module 3. Features motion-first detection for efficiency, a web interface for live streaming, and zone-based tracking.
 
-**Version:** 3.10.3
+**Version:** 3.11.0
 
 **For agents and developers:** See **[AGENTS.md](AGENTS.md)** for project guidelines, concurrency rules, and where to find things. Use it as the single entry point before diving into code or other docs.
 
@@ -811,6 +811,7 @@ The **displayed FPS** is processed frames per second (how often the phase block 
 
 ## 📝 Version History
 
+- **v3.11.0** - Pipelined capture: dedicated capture thread (CatDome-Cap) with queue overlaps camera wait (43ms) with processing (37ms). IDLE FPS 10→16 (camera-limited). Thread affinity pins capture/process to separate cores. Lores reconfigure moved to capture thread.
 - **v3.10.3** - Remove MJPEG fallback from frontend (H.264 only); drop stream mode selector, MJPEG reconnect logic, and video-stream element. Backend /video_feed route kept for snapshots.
 - **v3.10.2** - Inject Cat test runs full pipeline (motion → AI → tracking → world → top-down); TFLite file-cache warmup at boot (first detection 3.5s → ~0.5s); cat drawn on H.264 overlay via inject_cat_bbox; new GET /api/dev/inject_cat_image route; pipelined architecture plan (Phase 0-3) documented.
 - **v3.10.1** - Fix H.264 encoder startup (wrap output in FileOutput), prevent WebSocket CPU burn when encoder has no frames, add 26 unit tests for v3.9-3.10 features (motion gray_input, H264StreamOutput, overlay data, lores helpers, camera controls), fix Unicode in log messages for Windows compatibility.
