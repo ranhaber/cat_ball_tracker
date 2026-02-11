@@ -573,9 +573,12 @@ class VideoProcessor:
                         cap_ms = round((time.perf_counter() - t0) * 1000, 1)
                         payload = ("numpy", frame, frame_lores, None, False, cap_ms)
                     elif _HAS_MAPPED_ARRAY:
-                        # Real camera + MappedArray available: pass request (zero-copy)
+                        # Real camera + MappedArray: enter the context manager to get
+                        # the actual CompletedRequest (not the generator wrapper).
+                        # The processing thread will call req.release() when done.
+                        req = request.__enter__()
                         cap_ms = round((time.perf_counter() - t0) * 1000, 1)
-                        payload = ("request", request, cap_ms)
+                        payload = ("request", req, cap_ms)
                     else:
                         # Real camera but no MappedArray: copy arrays (Phase 1 fallback)
                         with request as req:
@@ -711,7 +714,9 @@ class VideoProcessor:
                             else:
                                 _lores_from_isp = True
                     except Exception as e:
-                        plog("[ZEROCOPY] MappedArray failed: %s — falling back", e)
+                        if not getattr(self, '_zerocopy_error_logged', False):
+                            plog("[ZEROCOPY] MappedArray failed: %s — falling back", e)
+                            self._zerocopy_error_logged = True
                         # Release and skip this frame
                         try:
                             if _m_lores:
