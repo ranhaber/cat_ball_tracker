@@ -250,7 +250,7 @@ DEFAULT_RESOLUTION = (2304, 1296)   # 2x binned mode for 13m detection
 # Changed to 640x360 to reduce memory pressure on RPi Zero 2W
 DEFAULT_STREAM_RESOLUTION = (640, 360)  # Low stream quality - saves RAM
 DEFAULT_FRAMERATE = 10  # Async AI allows higher FPS without blocking process loop
-DEFAULT_FRAME_SKIP = 2
+DEFAULT_FRAME_SKIP = 1  # Process every camera frame (async AI has headroom at 10 FPS)
 
 # ============================================================================
 # MOTION-FIRST DETECTION (saves memory, better for distance detection)
