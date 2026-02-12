@@ -2,7 +2,7 @@
 
 A real-time cat and ball detection system for Raspberry Pi Zero 2W with Camera Module 3. Features motion-first detection for efficiency, a web interface for live streaming, and zone-based tracking.
 
-**Version:** 3.14.0
+**Version:** 3.15.0
 
 **For agents and developers:** See **[AGENTS.md](AGENTS.md)** for project guidelines, concurrency rules, and where to find things. Use it as the single entry point before diving into code or other docs.
 
@@ -830,6 +830,7 @@ The **displayed FPS** is processed frames per second (how often the phase block 
 
 ## 📝 Version History
 
+- **v3.15.0** - Callback-driven capture: replace capture thread with picamera2 post_callback (one less thread, Core 1 freed). PERF log `cap` renamed to `cpy` (memcpy time only, camera wait no longer measured).
 - **v3.14.0** - Revert Phase 3 async AI (RAM cost too high for Pi Zero 416MB). Keep Phases 0-2, raw stream disabled, 5 FPS camera, recording default off. Stable at ~265MB used / ~128MB available.
 - **v3.13.0** - Phase 3: Async TFLite inference thread (CatDome-AI on cores 2-3). TFLite invoke no longer blocks processing thread. Tracking FPS ~5→~16. Detection results arrive 2-3 frames late, tracker compensates. AI thread auto-unloads model after 10s idle. TFLITE_NUM_THREADS reduced to 2.
 - **v3.12.0** - Phase 2: Zero-copy DMA buffers via MappedArray. Capture thread passes CompletedRequest through queue; processing thread reads DMA views directly (~18ms memcpy eliminated per frame). DMA buffer released after all processing. Fallback to Phase 1 copy mode when MappedArray unavailable.

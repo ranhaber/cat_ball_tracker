@@ -723,9 +723,9 @@ class VideoProcessor:
                     # Periodic heartbeat so journal shows activity when idle (no phase changes)
                     if now - self._last_heartbeat_time >= 30.0:
                         self._last_heartbeat_time = now
-                        cap = self._last_capture_ms if self._last_capture_ms is not None else "--"
+                        cpy = self._last_capture_ms if self._last_capture_ms is not None else "--"
                         mot = self._last_motion_ms if self._last_motion_ms is not None else "--"
-                        plog("[HEARTBEAT] FPS=%.1f phase=%s cap=%sms mot=%sms", self.fps, self._phase, cap, mot)
+                        plog("[HEARTBEAT] FPS=%.1f phase=%s cpy=%sms mot=%sms", self.fps, self._phase, cpy, mot)
                     
                     # Per-step timings for bottleneck analysis (logged every phase-block iteration)
                     _perf_crop_ms = None
@@ -1101,9 +1101,9 @@ class VideoProcessor:
                                 self._stop_recording()
                     
                     # Per-step timings to log every phase-block iteration (bottleneck analysis)
-                    # cap = capture thread time (camera wait + memcpy)
-                    # qw = queue wait (how long processing thread blocked for next frame — low = good overlap)
-                    cap = self._last_capture_ms if self._last_capture_ms is not None else 0
+                    # cpy = callback copy time (DMA→numpy memcpy, ~17ms)
+                    # qw = event wait (how long process thread waited for next frame)
+                    cpy = self._last_capture_ms if self._last_capture_ms is not None else 0
                     qw = self._last_queue_wait_ms if self._last_queue_wait_ms is not None else 0
                     mot = self._last_motion_ms if self._last_motion_ms is not None else 0
                     getcrop_s = _perf_getcrop_ms if _perf_getcrop_ms is not None else "-"
@@ -1127,8 +1127,8 @@ class VideoProcessor:
                         annot_s = "%.0f(rsz=%s jpg=%s)" % (_perf_annot_ms, rsz_s, jpg_s)
                     else:
                         annot_s = "-"
-                    plog("[PERF] cap=%.0fms qw=%.0fms mot=%.0fms gcrop=%s crop=%s tf=%s filt=%s world=%s trk=%s ann=%s ph=%s",
-                         cap, qw, mot, getcrop_s, crop_s, tflite_s, filt_s, world_s, track_s, annot_s, self._phase)
+                    plog("[PERF] cpy=%.0fms qw=%.0fms mot=%.0fms gcrop=%s crop=%s tf=%s filt=%s world=%s trk=%s ann=%s ph=%s",
+                         cpy, qw, mot, getcrop_s, crop_s, tflite_s, filt_s, world_s, track_s, annot_s, self._phase)
                     
                     # Rate-limit inject mode
                 if self.inject_cat:
