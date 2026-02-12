@@ -24,21 +24,26 @@ This document consolidates knowledge from README, code reviews, and optimization
 
 ## 2. Architecture (threads and flow)
 
-**3 threads, pinned to separate cores (v3.11.0+):**
+**3 threads + picamera2 callback (v3.16.0):**
 
 | Thread | Core | Role | Key constraint |
 |--------|------|------|----------------|
-| **CatDome-Cap** | 1 | Capture: blocks on camera, queues frames | Owns camera; lores reconfigure happens here |
-| **CatDome-Proc** | 0 | Processing: motion → AI → track → annotate | Runs TFLite synchronously (detect blocks ~175ms) |
+| **picamera2 internal** | any | Camera ISP: delivers frames via `post_callback` | Copies DMA→ring buffer (~17ms), signals event |
+| **CatDome-Proc** | 0 | Processing: motion → AI submit → track → annotate | Reads ring buffer; submits AI non-blocking |
+| **CatDome-AI** | 1-3 | Async TFLite inference | Owns detector lifecycle (load/unload after 3s idle) |
 | **CatDome-Log** | any | Async logging (queue → stdout) | Non-blocking plog() |
 
 Plus Flask (CatDome-Main) for the web server.
 
-**Frame pipeline:** CatDome-Cap queues frame → CatDome-Proc: inject cat → motion → phase logic → crop → TFLite detect (blocking) → tracker → annotate → JPEG/overlay → recording.
+**Frame pipeline:** picamera2 callback copies DMA→ring buffer → CatDome-Proc reads ring: inject cat → motion → phase logic → submit crop to AI queue (non-blocking) → fetch AI result (1-frame latency) → tracker → annotate → JPEG/overlay → recording.
+
+**Ring buffer:** 3-slot pre-allocated numpy arrays (main + lores_y + lores_bgr). `np.copyto()` in callback, no per-frame allocation.
 
 **Critical rules:**
-- **CatDome-Cap** is the ONLY thread that calls `camera.get_request()` or `camera.reconfigure_lores()`.
+- **CatDome-AI** is the ONLY thread that calls `detector.detect()`, `detector.unload_model()`, or loads the model.
+- **CatDome-Proc** submits AI requests via `_submit_ai()` (non-blocking `put_nowait`); fetches results via `_ai_result_queue.get_nowait()`.
 - **Never from Flask:** Do not call `motion_detector.reset()` or `detector.unload_model()` from a route. Set flags; process loop checks at start of iteration.
+- **Lores reconfigure** happens in CatDome-Proc (before frame wait).
 
 Detailed architecture diagram: **README § System Architecture**. Crop vs resize: **README § Crop vs resize**.
 
@@ -103,7 +108,8 @@ Crop size 400×400 is used for the "Performance (13 m)" profile for robustness a
 | Config & profiles | `config.py` |
 | Persisted settings | `settings.py`; loaded in `VideoProcessor.__init__` |
 | Process loop, phase machine, JPEG cache | `web/app.py` — VideoProcessor, `_process_loop` |
-| Capture thread (pipelined) | `web/app.py` — `_capture_loop` (Core 1) |
+| Camera callback + ring buffer | `web/app.py` — `_frame_callback`, `_ring_*` |
+| Async AI thread | `web/app.py` — `_ai_loop`, `_submit_ai` (Cores 1-3) |
 | Frame capture (real/mock) | `camera/camera_handler.py` |
 | Motion detection | `detection/motion_detector.py` |
 | TFLite (load on demand, unload on idle) | `detection/detector.py` |

@@ -2,7 +2,7 @@
 
 A real-time cat and ball detection system for Raspberry Pi Zero 2W with Camera Module 3. Features motion-first detection for efficiency, a web interface for live streaming, and zone-based tracking.
 
-**Version:** 3.15.0
+**Version:** 3.16.0
 
 **For agents and developers:** See **[AGENTS.md](AGENTS.md)** for project guidelines, concurrency rules, and where to find things. Use it as the single entry point before diving into code or other docs.
 
@@ -20,7 +20,7 @@ Detection and tracking work **independently of the web UI** — the system runs 
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
-│  RPi Zero 2W (416MB RAM, 4-core ARM Cortex-A53) @ 5 FPS            │
+│  RPi Zero 2W (416MB RAM, 4-core ARM Cortex-A53) @ 10 FPS           │
 │                                                                     │
 │  ┌─────────────────────────────────────────────────────────────┐    │
 │  │  Camera Module 3 — ISP Dual-Stream (v3.9.0+)               │    │
@@ -35,25 +35,33 @@ Detection and tracking work **independently of the web UI** — the system runs 
 │  └───────────┼───────────────────────┼─────────────────────────┘    │
 │              │                       │                              │
 │  ════════════╪═══════════════════════╪════════════════════════════  │
-│  PIPELINED CAPTURE ARCHITECTURE (v3.14.0)                          │
+│  RING BUFFER + ASYNC AI ARCHITECTURE (v3.16.0)                     │
 │  ════════════╪═══════════════════════╪════════════════════════════  │
 │              │                       │                              │
 │  ┌───────────┴───────────────────────┴─────────────────────────┐   │
-│  │  Thread: CatDome-Cap (Core 1) — Capture                     │   │
-│  │  - Blocks on camera.captured_request() every 200ms (5 FPS)  │   │
-│  │  - MappedArray zero-copy for lores (Phase 2)                │   │
-│  │  - Queues (frame, lores, Y-plane) to processing thread      │   │
-│  │  - Handles lores reconfigure                                │   │
+│  │  picamera2 post_callback (internal thread)                   │   │
+│  │  - DMA→ring buffer via np.copyto() (~17ms, zero alloc)      │   │
+│  │  - 3-slot pre-allocated ring (main + lores_y + lores_bgr)   │   │
+│  │  - Signals _frame_ready event                                │   │
 │  └──────────────────────┬──────────────────────────────────────┘   │
-│                         │ queue.Queue(maxsize=1)                    │
+│                         │ ring buffer (lock-free SPSC)              │
 │                         ▼                                           │
 │  ┌──────────────────────────────────────────────────────────────┐  │
 │  │  Thread: CatDome-Proc (Core 0) — Processing                  │  │
-│  │  - queue.get() → inject cat (if active) → motion detect      │  │
+│  │  - Reads ring → inject cat → motion detect                    │  │
 │  │  - Phase state machine (IDLE/ACQUISITION/TRACKING/WATCH)      │  │
-│  │  - TFLite AI detection (synchronous, ~610ms per invoke)       │  │
+│  │  - Submits crop to AI queue (non-blocking put_nowait)         │  │
+│  │  - Fetches AI result (non-blocking get_nowait, 1-frame lag)   │  │
 │  │  - Centroid tracker + world coordinate computation            │  │
 │  │  - Annotation → JPEG/overlay → recording (if enabled)         │  │
+│  └────────────┬────────────────────────────────┬─────────────────┘  │
+│               │ _ai_request_queue(1)           │ _ai_result_queue(1)│
+│               ▼                                ▲                    │
+│  ┌──────────────────────────────────────────────────────────────┐  │
+│  │  Thread: CatDome-AI (Cores 1-3) — Async TFLite              │  │
+│  │  - Blocks on request queue, runs detector.detect()            │  │
+│  │  - Owns model lifecycle (load on demand, unload after 3s)     │  │
+│  │  - XNNPACK 3 threads for inference                            │  │
 │  └──────────────────────────────────────────────────────────────┘  │
 │                                                                     │
 │  ┌──────────────────────────────────────────────────────────────┐  │
@@ -759,27 +767,27 @@ All application output goes to **stdout** (or via the async log writer to stdout
 
 Every phase-block iteration (every processed frame) a single line is written to the log:
 
-`[PERF] cap=200ms qw=160ms mot=38ms gcrop=- crop=- tf=- filt=- world=- trk=0.0 ann=- ph=IDLE`
+`[PERF] cpy=17ms qw=80ms mot=38ms gcrop=- sub=- tf=- filt=- world=- trk=0.0 ann=- ph=IDLE`
 
-| Field | Meaning | Typical (5 FPS) |
+| Field | Meaning | Typical (10 FPS) |
 |-------|--------|-----------------|
-| **cap** | Capture thread: camera wait + memcpy (ms). | 200ms (camera interval) |
-| **qw** | Queue wait: how long process thread waited for next frame (ms). Low = good pipelining overlap. | 160ms (IDLE), 0ms (TRACKING) |
+| **cpy** | Callback memcpy time: DMA→ring buffer via np.copyto (ms). | 17ms |
+| **qw** | Event wait: how long process thread waited for next frame (ms). Low = good pipelining. | 80ms (IDLE), ~60ms (TRACKING) |
 | **mot** | Motion detection: resize, background model, contours (ms). | 38ms |
 | **gcrop** | Time to compute crop region (ms); `-` when not in AI phase. | 0ms |
-| **crop** | Time to slice crop from frame (ms); `-` when no AI. | 0ms |
-| **tf** | TFLite inference total (ms) with sub-breakdown `(ld=load pre=preprocess inv=invoke post=postprocess)`; `-` when AI did not run. | 615ms (inv=610ms) |
-| **filt** | Perimeter filter + temporal confirmation (ms). | 0.1ms |
-| **world** | World coordinate computation (ms). | 0.3ms |
+| **sub** | AI submit time: crop copy + queue put_nowait (ms); `-` when no AI. Non-blocking. | 1-2ms |
+| **tf** | TFLite invoke time from async AI thread (ms) with sub-breakdown `(ld=load pre=preprocess inv=invoke post=postprocess)`; `-` when no AI result fetched this frame. 1-frame latency. | 450ms (inv=440ms) |
+| **filt** | Perimeter filter + temporal confirmation (ms); only when AI result fetched. | 0.1ms |
+| **world** | World coordinate computation (ms); only when AI result fetched. | 0.3ms |
 | **trk** | Tracker update + merge IDs (ms). | 0.5ms |
 | **ann** | Annotation + JPEG encode (ms); `-` when no stream clients. | 28ms (with stream) |
 | **ph** | Phase: IDLE / ACQUISITION / TRACKING / WATCH. | |
 
-Use this to find the bottleneck: e.g. high **cap** → camera; high **motion** → motion scale/resolution; high **tflite** → model/threads; high **annot** → stream resolution or JPEG quality.
+Use this to find the bottleneck: e.g. high **cpy** → DMA copy slow; high **qw** → process loop faster than camera; high **mot** → motion scale/resolution; high **tf** → model/threads; high **ann** → stream resolution or JPEG quality. Note: **tf** shows the AI thread's time, reported with 1-frame latency (async).
 
 ### Low FPS (how to find the cause)
 
-The **displayed FPS** is processed frames per second (how often the phase block runs). At 5 FPS camera rate: **5 FPS** in IDLE, **~2.5 FPS** in TRACKING (TFLite invoke blocks ~610ms every 3rd frame).
+The **displayed FPS** is processed frames per second (how often the phase block runs). At 10 FPS camera rate: **~8 FPS** in IDLE (limited by 17ms memcpy + 38ms motion + overhead), **~8 FPS** in TRACKING (TFLite runs async on AI thread, no longer blocks process loop).
 
 1. **Check FPS diagnostics in the API**  
    Open `GET /api/status` (or the status payload used by the web UI). It includes:
@@ -793,7 +801,7 @@ The **displayed FPS** is processed frames per second (how often the phase block 
    - **RAM / swap** — if the system is swapping (`free -h`), both capture and motion can slow down; reduce load or add RAM.
 
 2. **Quick checks**
-   - Settings → **Framerate**: 5 FPS is recommended for Pi Zero (saves RAM/CPU). 10+ possible but may cause swap pressure.
+   - Settings → **Framerate**: 10 FPS is the default for Pi Zero with async AI. Higher values may cause swap pressure.
    - Settings → **Frame skip**: 1 or 2; higher values reduce displayed FPS.
    - In IDLE, the loop does: capture → (every `frame_skip` iterations) motion → sleep(0.001). So per “processed” frame, cost ≈ capture + motion; if capture is ~800 ms you get ~1.2 FPS.
 
@@ -830,6 +838,7 @@ The **displayed FPS** is processed frames per second (how often the phase block 
 
 ## 📝 Version History
 
+- **v3.16.0** - Ring buffer + async AI: 3-slot pre-allocated ring buffer (zero per-frame alloc), async TFLite thread (CatDome-AI on cores 1-3). Process thread submits crop non-blocking, AI results arrive with 1-frame latency. Camera FPS restored to 10. Model lifecycle owned by AI thread (load/unload after 3s idle).
 - **v3.15.0** - Callback-driven capture: replace capture thread with picamera2 post_callback (one less thread, Core 1 freed). PERF log `cap` renamed to `cpy` (memcpy time only, camera wait no longer measured).
 - **v3.14.0** - Revert Phase 3 async AI (RAM cost too high for Pi Zero 416MB). Keep Phases 0-2, raw stream disabled, 5 FPS camera, recording default off. Stable at ~265MB used / ~128MB available.
 - **v3.13.0** - Phase 3: Async TFLite inference thread (CatDome-AI on cores 2-3). TFLite invoke no longer blocks processing thread. Tracking FPS ~5→~16. Detection results arrive 2-3 frames late, tracker compensates. AI thread auto-unloads model after 10s idle. TFLITE_NUM_THREADS reduced to 2.

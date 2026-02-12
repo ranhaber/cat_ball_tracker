@@ -111,14 +111,20 @@ class VideoProcessor:
         self._last_motion_ms = None
         self._last_heartbeat_time = 0.0  # for periodic log so journal shows activity when idle
         
-        # Callback-driven capture (Stage 2): camera delivers frames via post_callback
+        # Callback-driven capture with ring buffer (Stage 3)
         self._frame_ready = threading.Event()
-        self._cb_frame = None         # Latest frame from callback (numpy array)
-        self._cb_frame_lores = None   # Latest lores BGR (or None)
-        self._cb_frame_lores_y = None # Latest lores Y plane (or None)
-        self._cb_lores_from_isp = False
-        self._cb_cap_ms = 0.0
-        self._cb_lock = threading.Lock()  # Protects _cb_* fields
+        self._ring_main = [None, None, None]      # Pre-allocated in start()
+        self._ring_lores_y = [None, None, None]
+        self._ring_lores_bgr = [None, None, None]
+        self._ring_has_bgr = [False, False, False]  # Whether BGR was computed for this slot
+        self._ring_write_idx = 0
+        self._ring_read_idx = 0
+        self._ring_cap_ms = 0.0
+        
+        # Async AI thread (Stage 4)
+        self._ai_request_queue = None
+        self._ai_result_queue = None
+        self._ai_thread = None
         
         # Frame storage for streaming
         self.current_frame = None
@@ -479,23 +485,43 @@ class VideoProcessor:
                 self.file_camera = None
                 self.video_source = "live"
         
-        # Start processing (callback-driven capture for real camera, thread for file/mock)
+        # Pre-allocate ring buffer (3 slots, zero alloc per frame)
+        h, w = self.current_resolution[1], self.current_resolution[0]
+        for i in range(3):
+            self._ring_main[i] = np.empty((h, w, 3), dtype=np.uint8)
+        lores_bytes = 0
+        if self._using_lores:
+            lh, lw = self._lores_resolution[1], self._lores_resolution[0]
+            for i in range(3):
+                self._ring_lores_y[i] = np.empty((lh, lw), dtype=np.uint8)
+                self._ring_lores_bgr[i] = np.empty((lh, lw, 3), dtype=np.uint8)
+            lores_bytes = lh * lw + lh * lw * 3
+        ring_mb = 3 * (h * w * 3 + lores_bytes) / 1024 / 1024
+        plog("[RING] Pre-allocated 3-slot ring buffer (%.1fMB)", ring_mb)
+        
+        # Start processing
         self.running = True
         
         use_callback = (self.video_source != "file" and not self.camera.use_mock
                         and _HAS_MAPPED_ARRAY)
         
         if use_callback:
-            # Real camera: use post_callback (no capture thread needed)
             self.camera.camera.post_callback = self._frame_callback
             self._capture_thread = None
             plog("[CAPTURE] Callback-driven (no capture thread)")
         else:
-            # File/mock camera: use fallback capture thread
             self._capture_thread = threading.Thread(
                 target=self._file_capture_loop, daemon=True, name="CatDome-Cap")
             self._capture_thread.start()
             plog("[CAPTURE] File/mock fallback thread")
+        
+        # AI thread (async TFLite on cores 1-3)
+        self._ai_request_queue = queue.Queue(maxsize=1)
+        self._ai_result_queue = queue.Queue(maxsize=1)
+        threading.stack_size(256 * 1024)
+        self._ai_thread = threading.Thread(target=self._ai_loop, daemon=True, name="CatDome-AI")
+        self._ai_thread.start()
+        threading.stack_size(0)
         
         self.process_thread = threading.Thread(target=self._process_loop, daemon=True, name="CatDome-Process")
         self.process_thread.start()
@@ -508,6 +534,10 @@ class VideoProcessor:
         self.running = False
         self._frame_ready.set()  # Unblock process thread if waiting
         self._stop_recording()
+        # Wait for AI thread
+        if self._ai_thread and self._ai_thread.is_alive():
+            self._ai_thread.join(timeout=3.0)
+            plog("[AI] Thread joined")
         # Wait for capture thread (only exists for file/mock camera)
         if hasattr(self, '_capture_thread') and self._capture_thread and self._capture_thread.is_alive():
             self._capture_thread.join(timeout=3.0)
@@ -528,9 +558,9 @@ class VideoProcessor:
     def _frame_callback(self, request):
         """Called by picamera2's camera thread when a frame is ready.
         
-        Copies frame data from DMA buffer and signals the processing thread.
-        Runs in picamera2's internal thread — must be fast (<20ms).
-        No capture thread needed.
+        Copies frame data into pre-allocated ring buffer slot and signals
+        the processing thread.  Runs in picamera2's internal thread —
+        must be fast (<20ms).  Zero per-frame allocation.
         """
         if not self.running:
             return
@@ -538,33 +568,26 @@ class VideoProcessor:
         t0 = time.perf_counter()
         
         try:
-            # Read main frame from DMA via MappedArray (zero-copy view)
-            with MappedArray(request, "main", write=False) as m:
-                frame = np.copy(m.array)  # Copy out of DMA (~17ms)
+            wi = self._ring_write_idx % 3
             
-            # Read lores
-            frame_lores = None
-            frame_lores_y = None
-            _lores_from_isp = False
+            # Copy main frame into pre-allocated ring slot (no alloc)
+            with MappedArray(request, "main", write=False) as m:
+                np.copyto(self._ring_main[wi], m.array)
+            
+            # Copy lores into pre-allocated ring slot
+            self._ring_has_bgr[wi] = False
             if self._using_lores:
                 with MappedArray(request, "lores", write=False) as m:
                     lores_raw = m.array
                     lores_h_px = self._lores_resolution[1]
-                    frame_lores_y = lores_raw[:lores_h_px, :].copy()
+                    np.copyto(self._ring_lores_y[wi], lores_raw[:lores_h_px, :])
                     if self.stream_clients > 0:
-                        frame_lores = cv2.cvtColor(lores_raw, cv2.COLOR_YUV2BGR_I420)
-                    else:
-                        _lores_from_isp = True
+                        cv2.cvtColor(lores_raw, cv2.COLOR_YUV2BGR_I420,
+                                     dst=self._ring_lores_bgr[wi])
+                        self._ring_has_bgr[wi] = True
             
-            cap_ms = round((time.perf_counter() - t0) * 1000, 1)
-            
-            # Store frame data and signal processing thread
-            with self._cb_lock:
-                self._cb_frame = frame
-                self._cb_frame_lores = frame_lores
-                self._cb_frame_lores_y = frame_lores_y
-                self._cb_lores_from_isp = _lores_from_isp
-                self._cb_cap_ms = cap_ms
+            self._ring_cap_ms = round((time.perf_counter() - t0) * 1000, 1)
+            self._ring_write_idx = wi + 1  # Advance write pointer
             self._frame_ready.set()
             
         except Exception as e:
@@ -598,19 +621,24 @@ class VideoProcessor:
                         time.sleep(0.01)
                         continue
                 
-                frame_lores = None
+                wi = self._ring_write_idx % 3
+                
+                # Copy into ring buffer (resize if shape mismatch)
+                ring_shape = self._ring_main[wi].shape
+                if frame.shape != ring_shape:
+                    frame = cv2.resize(frame, (ring_shape[1], ring_shape[0]))
+                np.copyto(self._ring_main[wi], frame)
+                self._ring_has_bgr[wi] = False
                 if self._using_lores:
-                    frame_lores = cv2.resize(frame, self._lores_resolution,
-                                             interpolation=cv2.INTER_LINEAR)
+                    cv2.resize(frame, self._lores_resolution,
+                               interpolation=cv2.INTER_LINEAR,
+                               dst=self._ring_lores_bgr[wi])
+                    cv2.cvtColor(self._ring_lores_bgr[wi], cv2.COLOR_BGR2GRAY,
+                                 dst=self._ring_lores_y[wi])
+                    self._ring_has_bgr[wi] = True
                 
-                cap_ms = round((time.perf_counter() - t0) * 1000, 1)
-                
-                with self._cb_lock:
-                    self._cb_frame = frame
-                    self._cb_frame_lores = frame_lores
-                    self._cb_frame_lores_y = None
-                    self._cb_lores_from_isp = False
-                    self._cb_cap_ms = cap_ms
+                self._ring_cap_ms = round((time.perf_counter() - t0) * 1000, 1)
+                self._ring_write_idx = wi + 1
                 self._frame_ready.set()
                 
             except Exception as e:
@@ -618,14 +646,111 @@ class VideoProcessor:
                 time.sleep(0.1)
     
     # =========================================================================
+    # Async AI Thread (Stage 4)
+    # =========================================================================
+    
+    def _submit_ai(self, frame, crop_region):
+        """Submit an AI request to the async AI thread (non-blocking).
+        
+        Copies the crop (or center crop for WATCH) into a pre-allocated buffer
+        and puts the request on the queue.  Drops if AI is busy (queue full).
+        """
+        try:
+            if crop_region:
+                cx, cy, cw, ch = crop_region
+                crop = frame[cy:cy+ch, cx:cx+cw].copy()
+            else:
+                # WATCH phase: center crop (saves RAM vs full frame copy)
+                fh, fw = frame.shape[:2]
+                cs = min(fw, fh, self.current_motion_crop_size)
+                cx = (fw - cs) // 2
+                cy = (fh - cs) // 2
+                crop = frame[cy:cy+cs, cx:cx+cs].copy()
+                crop_region = (cx, cy, cs, cs)
+            self._ai_request_queue.put_nowait((crop, crop_region))
+        except queue.Full:
+            pass  # AI busy — skip this frame
+    
+    def _ai_loop(self):
+        """Async AI inference thread — runs TFLite on cores 1-3.
+        
+        Blocks on _ai_request_queue, runs detect(), puts result on
+        _ai_result_queue.  Handles model load/unload lifecycle.
+        """
+        # Set OS thread name
+        try:
+            import ctypes
+            libc = ctypes.CDLL('libc.so.6')
+            libc.prctl(15, b'CatDome-AI', 0, 0, 0)
+        except Exception:
+            pass
+        
+        # Pin to cores 1-3 (leave core 0 for camera + process)
+        if getattr(config, 'THREAD_AFFINITY_ENABLED', False):
+            try:
+                os.sched_setaffinity(0, {1, 2, 3})
+            except Exception:
+                pass
+        
+        _idle_since = time.perf_counter()
+        _AI_IDLE_UNLOAD_SEC = 3.0
+        
+        while self.running:
+            try:
+                try:
+                    crop, crop_region = self._ai_request_queue.get(timeout=0.5)
+                except queue.Empty:
+                    # Unload model if idle long enough and phase is IDLE
+                    if (self._phase == "IDLE" and self.detector and
+                            time.perf_counter() - _idle_since > _AI_IDLE_UNLOAD_SEC):
+                        if self.detector.interpreter is not None:
+                            self.detector.unload_model()
+                            reclaim_memory()
+                            plog("[AI] Model unloaded (idle %.0fs)", _AI_IDLE_UNLOAD_SEC)
+                    continue
+                
+                _idle_since = time.perf_counter()
+                
+                t1 = time.perf_counter()
+                crop_detections = self.detector.detect(crop)
+                tflite_ms = round((time.perf_counter() - t1) * 1000, 1)
+                tflite_detail = getattr(self.detector, '_last_perf', None)
+                
+                # Remap crop coordinates to full frame
+                cx, cy, cw, ch = crop_region
+                detections = []
+                for det in crop_detections:
+                    x1, y1, x2, y2, conf, class_id = det
+                    detections.append((x1 + cx, y1 + cy, x2 + cx, y2 + cy, conf, class_id))
+                
+                # Put result (drop old if unconsumed)
+                try:
+                    self._ai_result_queue.get_nowait()
+                except queue.Empty:
+                    pass
+                self._ai_result_queue.put((detections, crop_region, tflite_ms, tflite_detail))
+                
+            except Exception as e:
+                plog("[AI] Error: %s", e)
+                import traceback
+                traceback.print_exc()
+                time.sleep(0.1)
+        
+        # Cleanup on exit
+        if self.detector and self.detector.interpreter is not None:
+            self.detector.unload_model()
+            plog("[AI] Thread exiting, model unloaded")
+    
+    # =========================================================================
     # Main Processing Loop
     # =========================================================================
     
     def _process_loop(self):
-        """Main processing loop — motion → AI → tracking → annotation.
+        """Main processing loop — motion → AI submit → tracking → annotation.
         
-        Frames arrive from the capture thread via self._frame_queue.
-        Handles both normal operation and inject cat test mode.
+        Frames arrive from the ring buffer via _frame_ready event.
+        AI detection is async — submitted to _ai_loop, results fetched
+        non-blocking.  Handles both normal operation and inject cat test mode.
         """
         # Set OS thread name
         try:
@@ -655,10 +780,9 @@ class VideoProcessor:
                         self.motion_detector.reset()
                 if getattr(self, '_request_unload_after_inject', False):
                     self._request_unload_after_inject = False
-                    if self.detector:
-                        self.detector.unload_model()
+                    # AI thread owns model lifecycle — just reset OpenCV threads
                     cv2.setNumThreads(1)
-                    plog("[INJECT CLEANUP] motion reset, TFLite unload, OpenCV threads=1, phase=%s", self._phase)
+                    plog("[INJECT CLEANUP] motion reset, OpenCV threads=1, phase=%s", self._phase)
                 
                 # ── Pending lores reconfigure ──
                 if self._pending_lores_reconfigure is not None:
@@ -674,19 +798,20 @@ class VideoProcessor:
                         plog("[LORES] Reconfigured %s×%s → %s×%s, motion_scale=%.2f",
                              old_lores[0], old_lores[1], new_lores_w, new_lores_h, adjusted_scale)
                 
-                # ── Frame from camera callback (or file capture thread) ──
+                # ── Frame from ring buffer (filled by camera callback) ──
                 t_qw = time.perf_counter()
                 self._frame_ready.wait(timeout=0.5)
                 self._frame_ready.clear()
                 if not self.running:
                     break
                 
-                with self._cb_lock:
-                    frame = self._cb_frame
-                    frame_lores = self._cb_frame_lores
-                    frame_lores_y = self._cb_frame_lores_y
-                    _lores_from_isp = self._cb_lores_from_isp
-                    cap_ms = self._cb_cap_ms
+                # Read from ring buffer (no lock needed — single writer, single reader)
+                ri = (self._ring_write_idx - 1) % 3
+                frame = self._ring_main[ri]
+                frame_lores = self._ring_lores_bgr[ri] if self._ring_has_bgr[ri] else None
+                frame_lores_y = self._ring_lores_y[ri] if self._using_lores else None
+                _lores_from_isp = (self._using_lores and not self._ring_has_bgr[ri])
+                cap_ms = self._ring_cap_ms
                 
                 if frame is None:
                     continue
@@ -806,9 +931,7 @@ class VideoProcessor:
                         if not self.inject_cat and (now - self._last_motion_time > self._acquisition_timeout):
                             self._phase = "IDLE"
                             self._phase_frame_counter = 0
-                            self.detector.unload_model()
                             cv2.setNumThreads(1)
-                            reclaim_memory()
                             plog("[PHASE] ACQUISITION → IDLE (no motion for %ss)", self._acquisition_timeout)
                     
                     # ── PHASE: TRACKING ──
@@ -848,9 +971,7 @@ class VideoProcessor:
                         if now - self._last_detection_time > self._detection_timeout:
                             self._phase = "IDLE"
                             self._phase_frame_counter = 0
-                            self.detector.unload_model()
                             cv2.setNumThreads(1)
-                            reclaim_memory()
                             last_detections = []
                             self.last_detections_with_world = []
                             plog("[PHASE] TRACKING → IDLE (no detection for %ss)", self._detection_timeout)
@@ -885,36 +1006,21 @@ class VideoProcessor:
                         if now - self._last_detection_time > self._detection_timeout:
                             self._phase = "IDLE"
                             self._phase_frame_counter = 0
-                            self.detector.unload_model()
                             cv2.setNumThreads(1)
-                            reclaim_memory()
                             last_detections = []
                             self.last_detections_with_world = []
                             plog("[PHASE] WATCH → IDLE (no detection for %ss)", self._detection_timeout)
                     
-                    # ── AI DETECTION (shared by ACQUISITION, TRACKING, WATCH) ──
+                    # ── ASYNC AI: submit request (non-blocking) ──
                     if run_ai_detection:
-                        if crop_region:
-                            cx, cy, cw, ch = crop_region
-                            t0 = time.perf_counter()
-                            cropped_frame = frame[cy:cy+ch, cx:cx+cw]
-                            _perf_crop_ms = round((time.perf_counter() - t0) * 1000, 1)
-                            t1 = time.perf_counter()
-                            crop_detections = self.detector.detect(cropped_frame)
-                            _perf_tflite_ms = round((time.perf_counter() - t1) * 1000, 1)
-                            detections = []
-                            for det in crop_detections:
-                                x1, y1, x2, y2, conf, class_id = det
-                                detections.append((x1 + cx, y1 + cy, x2 + cx, y2 + cy, conf, class_id))
-                        else:
-                            t1 = time.perf_counter()
-                            detections = self.detector.detect(frame)
-                            _perf_tflite_ms = round((time.perf_counter() - t1) * 1000, 1)
-                        
-                        # Grab TFLite sub-breakdown
-                        _perf_tflite_detail = getattr(self.detector, '_last_perf', None)
-                        
-                        ai_time_ms = (_perf_crop_ms or 0) + (_perf_tflite_ms or 0)
+                        t0 = time.perf_counter()
+                        self._submit_ai(frame, crop_region)
+                        _perf_crop_ms = round((time.perf_counter() - t0) * 1000, 1)
+                    
+                    # ── ASYNC AI: fetch result (non-blocking, 1-frame latency) ──
+                    try:
+                        ai_result = self._ai_result_queue.get_nowait()
+                        detections, _ai_crop_region, _perf_tflite_ms, _perf_tflite_detail = ai_result
                         
                         # Inject Cat fallback: if TFLite didn't detect the pasted cat
                         if self.inject_cat and self.inject_cat_handler and self.inject_cat_handler.bbox:
@@ -982,6 +1088,8 @@ class VideoProcessor:
                                 "injected": is_injected
                             })
                         _perf_world_ms = round((time.perf_counter() - t_world) * 1000, 1)
+                    except queue.Empty:
+                        pass  # No AI result yet — use last_detections from previous frame
                     
                     # ── Tracking ──
                     t_track_start = time.perf_counter()
@@ -1101,14 +1209,17 @@ class VideoProcessor:
                                 self._stop_recording()
                     
                     # Per-step timings to log every phase-block iteration (bottleneck analysis)
-                    # cpy = callback copy time (DMA→numpy memcpy, ~17ms)
+                    # cpy = callback copy time (DMA→ring buffer memcpy, ~17ms)
                     # qw = event wait (how long process thread waited for next frame)
+                    # sub = AI submit time (crop copy + queue put, non-blocking)
+                    # tf = TFLite invoke time (from async AI result, 1-frame latency)
+                    # filt/world = only present when AI result was fetched this frame
                     cpy = self._last_capture_ms if self._last_capture_ms is not None else 0
                     qw = self._last_queue_wait_ms if self._last_queue_wait_ms is not None else 0
                     mot = self._last_motion_ms if self._last_motion_ms is not None else 0
                     getcrop_s = _perf_getcrop_ms if _perf_getcrop_ms is not None else "-"
-                    crop_s = _perf_crop_ms if _perf_crop_ms is not None else "-"
-                    # TFLite with sub-breakdown
+                    sub_s = _perf_crop_ms if _perf_crop_ms is not None else "-"
+                    # TFLite with sub-breakdown (async — from AI thread result)
                     if _perf_tflite_ms is not None and _perf_tflite_detail:
                         d = _perf_tflite_detail
                         tflite_s = "%.0f(ld=%s pre=%s inv=%s post=%s)" % (
@@ -1127,8 +1238,8 @@ class VideoProcessor:
                         annot_s = "%.0f(rsz=%s jpg=%s)" % (_perf_annot_ms, rsz_s, jpg_s)
                     else:
                         annot_s = "-"
-                    plog("[PERF] cpy=%.0fms qw=%.0fms mot=%.0fms gcrop=%s crop=%s tf=%s filt=%s world=%s trk=%s ann=%s ph=%s",
-                         cpy, qw, mot, getcrop_s, crop_s, tflite_s, filt_s, world_s, track_s, annot_s, self._phase)
+                    plog("[PERF] cpy=%.0fms qw=%.0fms mot=%.0fms gcrop=%s sub=%s tf=%s filt=%s world=%s trk=%s ann=%s ph=%s",
+                         cpy, qw, mot, getcrop_s, sub_s, tflite_s, filt_s, world_s, track_s, annot_s, self._phase)
                     
                     # Rate-limit inject mode
                 if self.inject_cat:
