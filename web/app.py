@@ -116,10 +116,9 @@ class VideoProcessor:
         self._ring_main = [None, None, None]      # Pre-allocated in start()
         self._ring_lores_y = [None, None, None]
         self._ring_lores_bgr = [None, None, None]
-        self._ring_has_bgr = [False, False, False]  # Whether BGR was computed for this slot
-        self._ring_write_idx = 0
-        self._ring_read_idx = 0
-        self._ring_cap_ms = 0.0
+        self._ring_lores_bgr_valid = [False, False, False]  # Whether BGR was computed for this slot
+        self._ring_last_written = -1  # Slot index [0-2] of last completed write (-1 = none)
+        self._ring_copy_ms = 0.0   # Last DMA→ring memcpy time (ms)
         
         # Async AI thread (Stage 4)
         self._ai_request_queue = None
@@ -568,14 +567,14 @@ class VideoProcessor:
         t0 = time.perf_counter()
         
         try:
-            wi = self._ring_write_idx % 3
+            wi = (self._ring_last_written + 1) % 3
             
             # Copy main frame into pre-allocated ring slot (no alloc)
             with MappedArray(request, "main", write=False) as m:
                 np.copyto(self._ring_main[wi], m.array)
             
             # Copy lores into pre-allocated ring slot
-            self._ring_has_bgr[wi] = False
+            self._ring_lores_bgr_valid[wi] = False
             if self._using_lores:
                 with MappedArray(request, "lores", write=False) as m:
                     lores_raw = m.array
@@ -584,10 +583,10 @@ class VideoProcessor:
                     if self.stream_clients > 0:
                         cv2.cvtColor(lores_raw, cv2.COLOR_YUV2BGR_I420,
                                      dst=self._ring_lores_bgr[wi])
-                        self._ring_has_bgr[wi] = True
+                        self._ring_lores_bgr_valid[wi] = True
             
-            self._ring_cap_ms = round((time.perf_counter() - t0) * 1000, 1)
-            self._ring_write_idx = wi + 1  # Advance write pointer
+            self._ring_copy_ms = round((time.perf_counter() - t0) * 1000, 1)
+            self._ring_last_written = wi  # Publish completed slot
             self._frame_ready.set()
             
         except Exception as e:
@@ -621,24 +620,24 @@ class VideoProcessor:
                         time.sleep(0.01)
                         continue
                 
-                wi = self._ring_write_idx % 3
+                wi = (self._ring_last_written + 1) % 3
                 
                 # Copy into ring buffer (resize if shape mismatch)
                 ring_shape = self._ring_main[wi].shape
                 if frame.shape != ring_shape:
                     frame = cv2.resize(frame, (ring_shape[1], ring_shape[0]))
                 np.copyto(self._ring_main[wi], frame)
-                self._ring_has_bgr[wi] = False
+                self._ring_lores_bgr_valid[wi] = False
                 if self._using_lores:
                     cv2.resize(frame, self._lores_resolution,
                                interpolation=cv2.INTER_LINEAR,
                                dst=self._ring_lores_bgr[wi])
                     cv2.cvtColor(self._ring_lores_bgr[wi], cv2.COLOR_BGR2GRAY,
                                  dst=self._ring_lores_y[wi])
-                    self._ring_has_bgr[wi] = True
+                    self._ring_lores_bgr_valid[wi] = True
                 
-                self._ring_cap_ms = round((time.perf_counter() - t0) * 1000, 1)
-                self._ring_write_idx = wi + 1
+                self._ring_copy_ms = round((time.perf_counter() - t0) * 1000, 1)
+                self._ring_last_written = wi  # Publish completed slot
                 self._frame_ready.set()
                 
             except Exception as e:
@@ -792,6 +791,12 @@ class VideoProcessor:
                         old_lores = self._lores_resolution
                         self._lores_resolution = (new_lores_w, new_lores_h)
                         self._using_lores = True
+                        # Re-allocate ring buffer lores arrays for new resolution
+                        for i in range(3):
+                            self._ring_lores_y[i] = np.empty((new_lores_h, new_lores_w), dtype=np.uint8)
+                            self._ring_lores_bgr[i] = np.empty((new_lores_h, new_lores_w, 3), dtype=np.uint8)
+                            self._ring_lores_bgr_valid[i] = False
+                        plog("[RING] Lores re-allocated for %s×%s", new_lores_w, new_lores_h)
                         profile = config.PERFORMANCE_PROFILES.get(self.current_profile, {})
                         adjusted_scale = self._lores_motion_scale(profile.get("motion_scale", 0.25))
                         self.motion_detector.update_parameters(detection_scale=adjusted_scale)
@@ -806,17 +811,19 @@ class VideoProcessor:
                     break
                 
                 # Read from ring buffer (no lock needed — single writer, single reader)
-                ri = (self._ring_write_idx - 1) % 3
+                ri = self._ring_last_written
+                if ri < 0:
+                    continue  # No frame written yet
                 frame = self._ring_main[ri]
-                frame_lores = self._ring_lores_bgr[ri] if self._ring_has_bgr[ri] else None
+                frame_lores = self._ring_lores_bgr[ri] if self._ring_lores_bgr_valid[ri] else None
                 frame_lores_y = self._ring_lores_y[ri] if self._using_lores else None
-                _lores_from_isp = (self._using_lores and not self._ring_has_bgr[ri])
-                cap_ms = self._ring_cap_ms
+                _lores_y_only = (self._using_lores and not self._ring_lores_bgr_valid[ri])
+                copy_ms = self._ring_copy_ms
                 
                 if frame is None:
                     continue
                 self._last_queue_wait_ms = round((time.perf_counter() - t_qw) * 1000, 1)
-                self._last_capture_ms = cap_ms
+                self._last_capture_ms = copy_ms
                 
                 frame_h, frame_w = frame.shape[:2]
                 tracked_objects = {}
@@ -829,7 +836,7 @@ class VideoProcessor:
                         frame_lores = cv2.resize(frame, self._lores_resolution,
                                                  interpolation=cv2.INTER_LINEAR)
                         frame_lores_y = None
-                        _lores_from_isp = False
+                        _lores_y_only = False
                 
                 # ══════════════════════════════════════════════════════════
                 # PHASE STATE MACHINE: IDLE → ACQUISITION → TRACKING → WATCH
