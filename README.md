@@ -140,6 +140,100 @@ First detection after IDLE:
   Subsequent invokes: inv=160-220ms (warm)
 ```
 
+### Processor Timeline per Phase (Pi Zero 2W, 4× Cortex-A53)
+
+Each column is 50ms. Camera delivers one frame every 100ms (10 FPS).
+
+**IDLE — Motion only, TFLite not loaded**
+
+```
+              0ms        50ms       100ms      150ms      200ms
+              |           |           |           |           |
+Callback:     ▓▓cpy 12ms▓            ▓▓cpy 12ms▓
+              │                       │
+Core 0:       ├──mot 38ms──┤ sleep   ├──mot 38ms──┤ sleep
+(Process)     │  trk 0.5   │  60ms   │  trk 0.5   │  60ms
+              │             │         │             │
+Cores 1-3:    ░░░░░░░░░░░ sleeping ░░░░░░░░░░░░░ sleeping ░░░
+(AI thread)   (idle, model unloaded)
+
+              Core 0 usage: ~50%  |  Cores 1-3: 0%
+```
+
+**ACQUISITION — Motion triggered, TFLite loading, AI every frame**
+
+```
+              0ms        50ms       100ms      150ms      200ms      250ms
+              |           |           |           |           |           |
+Callback:     ▓▓cpy 15ms▓            ▓▓cpy 15ms▓            ▓▓cpy 15ms▓
+              │                       │                       │
+Core 0:       ├──mot 50ms──┤sub 1ms  ├──mot 50ms──┤sub 1ms  ├──mot──...
+(Process)     │             │ ──┐    │  fetch ✗    │ ──┐    │  fetch ✓
+              │             │   │    │  (AI busy)  │   │    │  result!
+              │             │   │    │             │   │    │
+Cores 1-3:   ░░░░░░░░░░░░░░│   └──▶ ████ TFLite detect ███████   └──▶ ████...
+(AI thread)                 │        ████ inv=190ms ███████████        ████
+                            │        (load model on first call)
+                            queue
+
+              Core 0 usage: ~55%  |  Cores 1-3: ~65% (TFLite 3 threads)
+```
+
+**TRACKING — Cat confirmed, AI every 2nd processed frame**
+
+```
+              0ms        50ms       100ms      150ms      200ms      250ms      300ms
+              |           |           |           |           |           |           |
+Callback:     ▓▓cpy 15ms▓            ▓▓cpy 15ms▓            ▓▓cpy 15ms▓
+              │                       │                       │
+Core 0:       ├──mot 45ms──┤sub 1ms  ├──mot 45ms──┤         ├──mot 45ms──┤sub 1ms
+(Process)     │             │ ──┐    │  fetch ✓   │ sleep   │  fetch ✓   │ ──┐
+              │  trk 0.5    │   │    │  filt+world│  80ms   │  filt+world│   │
+              │             │   │    │  trk 0.5   │         │  trk 0.5   │   │
+              │             │   │    │             │         │             │   │
+Cores 1-3:   ░░░░░░░░░░░░░░│   └──▶ ████ TFLite inv=190ms █████████ idle │   └──▶...
+(AI thread)                 │        ████████████████████████████████░░░░░│
+                            queue                                        queue
+
+              Frame 1: submit AI  →  Frame 2: fetch result  →  Frame 3: submit AI
+              (alternating pattern: sub → tf → sub → tf → ...)
+
+              Core 0 usage: ~50%  |  Cores 1-3: ~50% (190ms work per 200ms)
+```
+
+**WATCH — No motion, scanning for cat, AI every 2nd frame (center crop)**
+
+```
+              0ms        50ms       100ms      150ms      200ms      250ms      300ms
+              |           |           |           |           |           |           |
+Callback:     ▓▓cpy 12ms▓            ▓▓cpy 12ms▓            ▓▓cpy 12ms▓
+              │                       │                       │
+Core 0:       ├──mot 40ms──┤sub 1ms  ├──mot 40ms──┤         ├──mot 40ms──┤sub 1ms
+(Process)     │             │ ──┐    │  fetch ✓   │ sleep   │  fetch ✓   │ ──┐
+              │  trk 0.5    │   │    │  filt+world│  80ms   │  filt+world│   │
+              │             │   │    │  trk 0.5   │         │  trk 0.5   │   │
+              │             │   │    │             │         │             │   │
+Cores 1-3:   ░░░░░░░░░░░░░░│   └──▶ ████ TFLite inv=190ms █████████ idle │   └──▶...
+(AI thread)                 │        ████ (center crop)  ███████████░░░░░│
+                            queue                                        queue
+
+              Same as TRACKING but crop is center of frame (no motion bbox).
+              If motion resumes → TRACKING. If no detection 30s → IDLE.
+
+              Core 0 usage: ~45%  |  Cores 1-3: ~50%
+```
+
+**Summary — CPU distribution across phases:**
+
+```
+Phase        Core 0 (Process)     Cores 1-3 (AI)       Total CPU
+─────────    ──────────────────   ─────────────────    ──────────
+IDLE         ~50% (mot+sleep)     0% (sleeping)        ~12%
+ACQUISITION  ~55% (mot+sub)       ~65% (load+detect)   ~55%
+TRACKING     ~50% (mot+sub+trk)   ~50% (detect)        ~50%
+WATCH        ~45% (mot+sub+trk)   ~50% (detect)        ~48%
+```
+
 ---
 
 ## ✨ Features
