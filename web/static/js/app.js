@@ -129,17 +129,39 @@ function startH264Stream() {
         startOverlayLoop();
     };
     
+    // Drop frames while tab is hidden to prevent buffer buildup
+    let _h264PageHidden = false;
+    document.addEventListener('visibilitychange', () => {
+        if (document.hidden) {
+            _h264PageHidden = true;
+        } else if (_h264PageHidden) {
+            _h264PageHidden = false;
+            // Tab became visible — destroy and recreate jMuxer to flush stale buffer
+            if (h264Jmuxer && h264Ws && h264Ws.readyState === WebSocket.OPEN) {
+                console.log('[H264] Tab visible — flushing stale buffer');
+                try { h264Jmuxer.destroy(); } catch(e) {}
+                h264Jmuxer = new JMuxer({
+                    node: 'h264-video',
+                    mode: 'video',
+                    fps: 15,
+                    flushingTime: 100,
+                    debug: false
+                });
+            }
+        }
+    });
+    
     h264Ws.onmessage = (event) => {
         if (event.data instanceof ArrayBuffer) {
-            // Binary: H.264 NALU data → feed to jMuxer
-            if (h264Jmuxer) {
+            // Binary: H.264 NALU data → feed to jMuxer (skip if tab hidden)
+            if (h264Jmuxer && !_h264PageHidden) {
                 h264Jmuxer.feed({ video: new Uint8Array(event.data) });
             }
         } else {
             // Text: JSON overlay data → draw on canvas
             try {
                 h264Overlays = JSON.parse(event.data);
-                drawH264Overlays();
+                if (!_h264PageHidden) drawH264Overlays();
             } catch(e) {
                 console.warn('[H264] Invalid overlay JSON:', e);
             }
