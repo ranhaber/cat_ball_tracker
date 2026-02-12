@@ -20,7 +20,7 @@ Detection and tracking work **independently of the web UI** — the system runs 
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
-│  RPi Zero 2W (416MB RAM, 4-core ARM Cortex-A53)                    │
+│  RPi Zero 2W (416MB RAM, 4-core ARM Cortex-A53) @ 5 FPS            │
 │                                                                     │
 │  ┌─────────────────────────────────────────────────────────────┐    │
 │  │  Camera Module 3 — ISP Dual-Stream (v3.9.0+)               │    │
@@ -28,18 +28,19 @@ Detection and tracking work **independently of the web UI** — the system runs 
 │  │  │  main stream     │   │  lores stream (ISP h/w)    │     │    │
 │  │  │  2304×1296 RGB   │   │  960×540 I420 (YUV420)     │     │    │
 │  │  │  (AI crop,       │   │  Y plane → motion (free)   │     │    │
-│  │  │   snapshots,     │   │  I420→BGR deferred to       │     │    │
-│  │  │   recording)     │   │  stream annotation          │     │    │
+│  │  │   snapshots)     │   │  I420→BGR deferred to       │     │    │
+│  │  │                  │   │  stream annotation          │     │    │
 │  │  └────────┬─────────┘   └─────────┬──────────────────┘     │    │
+│  │  Raw stream: disabled (saves ~20MB DMA RAM)                │    │
 │  └───────────┼───────────────────────┼─────────────────────────┘    │
 │              │                       │                              │
 │  ════════════╪═══════════════════════╪════════════════════════════  │
-│  4-THREAD PIPELINED ARCHITECTURE (v3.11.0+)                        │
+│  PIPELINED CAPTURE ARCHITECTURE (v3.14.0)                          │
 │  ════════════╪═══════════════════════╪════════════════════════════  │
 │              │                       │                              │
 │  ┌───────────┴───────────────────────┴─────────────────────────┐   │
 │  │  Thread: CatDome-Cap (Core 1) — Capture                     │   │
-│  │  - Blocks on camera.captured_request()                      │   │
+│  │  - Blocks on camera.captured_request() every 200ms (5 FPS)  │   │
 │  │  - MappedArray zero-copy for lores (Phase 2)                │   │
 │  │  - Queues (frame, lores, Y-plane) to processing thread      │   │
 │  │  - Handles lores reconfigure                                │   │
@@ -50,21 +51,9 @@ Detection and tracking work **independently of the web UI** — the system runs 
 │  │  Thread: CatDome-Proc (Core 0) — Processing                  │  │
 │  │  - queue.get() → inject cat (if active) → motion detect      │  │
 │  │  - Phase state machine (IDLE/ACQUISITION/TRACKING/WATCH)      │  │
-│  │  - Submits crops to AI thread (non-blocking)                  │  │
-│  │  - Fetches AI results (non-blocking), runs tracker            │  │
-│  │  - Annotation → JPEG/overlay → recording                     │  │
-│  │  - NEVER blocked by TFLite inference                          │  │
-│  └────────────┬────────────────────────────────┬────────────────┘  │
-│    submit crop│                                │fetch result       │
-│               ▼                                ▲                    │
-│  ┌──────────────────────────────────────────────────────────────┐  │
-│  │  Thread: CatDome-AI (Cores 2-3) — TFLite Inference           │  │
-│  │  - Blocks on ai_request_queue.get()                           │  │
-│  │  - detector.detect() with XNNPACK (num_threads=2)             │  │
-│  │  - Inject-cat fallback detection                              │  │
-│  │  - Pushes results to ai_result_queue                          │  │
-│  │  - Auto-unloads model after 10s idle (kills XNNPACK spin)     │  │
-│  │  - ONLY thread that touches detector.interpreter              │  │
+│  │  - TFLite AI detection (synchronous, ~610ms per invoke)       │  │
+│  │  - Centroid tracker + world coordinate computation            │  │
+│  │  - Annotation → JPEG/overlay → recording (if enabled)         │  │
 │  └──────────────────────────────────────────────────────────────┘  │
 │                                                                     │
 │  ┌──────────────────────────────────────────────────────────────┐  │
@@ -93,23 +82,24 @@ Detection and tracking work **independently of the web UI** — the system runs 
 │  Thread Affinity (Pi Zero 2W, 4× Cortex-A53):                     │
 │  ┌─────────┬─────────┬─────────┬─────────┐                        │
 │  │ Core 0  │ Core 1  │ Core 2  │ Core 3  │                        │
-│  │ Process │ Capture │    AI (XNNPACK)    │                        │
-│  │ mot+ann │ cam wait│    TFLite invoke   │                        │
-│  │ ~55ms   │ +memcpy │    ~220ms/invoke   │                        │
-│  │ /frame  │ ~17ms   │    (2 threads)     │                        │
+│  │ Process │ Capture │   System / Flask   │                        │
+│  │ mot+tf  │ cam wait│   + XNNPACK when   │                        │
+│  │ +ann    │ +memcpy │   TFLite active    │                        │
 │  └─────────┴─────────┴─────────┴─────────┘                        │
 │                                                                     │
-│  CPU optimization:                                                  │
+│  Optimizations:                                                     │
+│  - 5 FPS camera: halves CPU/RAM churn vs 10+ FPS                  │
 │  - Pipelined capture: camera wait overlaps with processing (qw=0)  │
-│  - Async AI: TFLite runs on cores 2-3, never blocks process thread │
-│  - TFLite warmup: file-cache warmed at boot (first detect 3.5s→0.5s)│
-│  - H.264: hardware encoder on lores YUV420, zero CPU cost          │
+│  - TFLite warmup: file-cache warmed at boot (first detect 0.2s)   │
+│  - Raw stream disabled: saves ~20MB DMA RAM                        │
+│  - Recording default off: saves ~10MB during detection             │
+│  - H.264: hardware encoder, zero CPU cost                          │
 │  - ISP lores: motion + stream resize offloaded to camera hardware  │
 │  - Y-plane: motion uses I420 Y channel directly (skips 2 cvtColor) │
 │  - MappedArray: zero-copy lores view, skip full lores memcpy       │
-│  - Manual focus: fixed LensPosition, no AF hunting/CPU overhead    │
+│  - Manual focus: fixed LensPosition, no AF hunting                 │
 │  - Deferred BGR: YUV→BGR only when stream clients are watching     │
-│  - TFLite: 0 threads idle (auto-unload after 10s), 2 when active  │
+│  - TFLite: 0 threads idle (auto-unload on IDLE), 3 when active    │
 └─────────────────────────────────────────────────────────────────────┘
                           │
                           ▼ (HTTP, optional)
@@ -124,22 +114,20 @@ Detection and tracking work **independently of the web UI** — the system runs 
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
-### TRACKING Phase Timeline (v3.13.0+)
+### Measured Performance (v3.14.0 @ 5 FPS)
 
 ```
-Before v3.11 (sequential, single-threaded):
-Core 0: |cap(60)│mot(28)│████████ tf(175ms) ████████│ann(26)│ |cap│mot│ann│ |cap│mot│ann│
-         Frame N (AI frame, BLOCKED 175ms)            Frame N+1   Frame N+2
+IDLE (no motion):
+  cap=200ms  qw=160ms  mot=38ms  FPS=5.0
 
-After v3.13 (pipelined capture + async AI):
-Camera:    |──────100ms──────|──────100ms──────|──────100ms──────|
-Core 1:    |---wait---memcpy-|---wait---memcpy-|---wait---memcpy-| (Capture)
-Core 0:    |qw=0|mot|trk|ann|qw=0|mot|trk|ann|qw=0|mot|trk|ann| (Process)
-                 ↑submit crop                   ↑fetch result
-Core 2-3:        |██████████ tf(220ms) █████████|                  (AI)
-                 ↑ started frame N              ↑ result ready
+TRACKING (cat detected, AI every 3rd frame):
+  cap=200ms  qw=0ms   mot=38ms  tf=615ms(inv=610ms)  FPS=2.5
+  Zero swap stalls. Consistent frame times. Stable for 10+ minutes.
 
-Process thread: ~55ms/frame steady (never blocked by TFLite)
+First detection after IDLE:
+  TFLite reload: ld=20ms (file cache warm from Phase 0 warmup)
+  First invoke: inv=620ms
+  Total time to detect: ~650ms
 ```
 
 ---
