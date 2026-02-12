@@ -172,43 +172,43 @@ PERFORMANCE_PROFILES = {
     "balanced": {
         "name": "Balanced",
         "description": "Recommended: Best trade-off between speed and quality",
-        "jpeg_quality": 60,  # Reduced from 65 to save memory
-        "motion_crop_size": (380, 380),  # Reduced from 400 to save RAM
+        "jpeg_quality": 60,
+        "motion_crop_size": (380, 380),
         "motion_scale": 0.30,
         "motion_threshold": 25,
         "motion_min_area": 80,
         "tflite_threads": 3,
-        "estimated_fps": "5-7 FPS",
-        "estimated_ram": "190MB",  # Updated estimate
-        "estimated_cpu": "55-60%",  # Updated estimate
+        "estimated_fps": "2.5 FPS (TRACKING), 5 FPS (IDLE)",  # Measured @ 5 FPS camera
+        "estimated_ram": "265MB",  # Measured: 260-270MB used, ~155MB available
+        "estimated_cpu": "40-50%",  # Measured: stable, no swap stalls
         "detection_range": "0-12m"
     },
     "performance": {
         "name": "Performance (13m)",
         "description": "Optimized for 13m max distance detection",
-        "jpeg_quality": 55,  # Reduced from 60 to save memory
-        "motion_crop_size": (400, 400),  # Reduced from 420 to save RAM
+        "jpeg_quality": 55,
+        "motion_crop_size": (400, 400),
         "motion_scale": 0.35,
         "motion_threshold": 25,
         "motion_min_area": 50,
         "tflite_threads": 3,
-        "estimated_fps": "4-6 FPS",
-        "estimated_ram": "200MB",  # Updated estimate
-        "estimated_cpu": "55-65%",  # Updated estimate
+        "estimated_fps": "2.5 FPS (TRACKING), 5 FPS (IDLE)",  # Measured @ 5 FPS camera
+        "estimated_ram": "270MB",  # Slightly more than balanced (larger crop)
+        "estimated_cpu": "40-55%",
         "detection_range": "0-13m"
     },
     "quality": {
         "name": "Quality",
         "description": "Best accuracy for close-range detailed detection",
-        "jpeg_quality": 70,  # Reduced from 75 to save memory
-        "motion_crop_size": (450, 450),  # Reduced from 480 to save RAM
+        "jpeg_quality": 70,
+        "motion_crop_size": (450, 450),
         "motion_scale": 0.35,
         "motion_threshold": 18,
         "motion_min_area": 80,
         "tflite_threads": 3,
-        "estimated_fps": "3-5 FPS",
-        "estimated_ram": "210MB",  # Updated estimate
-        "estimated_cpu": "65-70%",  # Updated estimate
+        "estimated_fps": "2.5 FPS (TRACKING), 5 FPS (IDLE)",  # Measured @ 5 FPS camera
+        "estimated_ram": "275MB",  # Largest crop size
+        "estimated_cpu": "45-55%",
         "detection_range": "0-12m (high detail)"
     }
 }

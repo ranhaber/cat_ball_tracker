@@ -712,11 +712,13 @@ DEFAULT_FRAME_SKIP = 2
 
 # Performance Profiles: balanced, performance (default), quality
 DEFAULT_PERFORMANCE_PROFILE = "performance"
+DEFAULT_FRAMERATE = 5   # 5 FPS: stable on Pi Zero 416MB (no swap stalls)
 
 # Motion-First
 MOTION_FIRST_ENABLED = True
 MOTION_DETECTION_SCALE = 0.35
 MOTION_CROP_SIZE = (400, 400)       # Fixed crop size for AI
+TFLITE_NUM_THREADS = 3              # Use 3 of 4 cores for inference
 
 # Server
 HOST = "0.0.0.0"
@@ -757,23 +759,27 @@ All application output goes to **stdout** (or via the async log writer to stdout
 
 Every phase-block iteration (every processed frame) a single line is written to the log:
 
-`[PERF] cap=850ms motion=45ms crop=0.1 tflite=72 track=0.2 annot=12 phase=IDLE`
+`[PERF] cap=200ms qw=160ms mot=38ms gcrop=- crop=- tf=- filt=- world=- trk=0.0 ann=- ph=IDLE`
 
-| Field | Meaning |
-|-------|--------|
-| **cap** | Time (ms) to get one raw frame from the camera (blocking). |
-| **motion** | Time (ms) for motion detection (resize to ¼, background, contours). |
-| **crop** | Time (ms) to slice the crop from the frame (crop only; `-` when no crop). |
-| **tflite** | Time (ms) for TFLite to run on the 300×300 (or full frame); `-` when AI did not run this frame. |
-| **track** | Time (ms) for tracker update + merge IDs. |
-| **annot** | Time (ms) for draw + resize + JPEG encode (when stream has clients); `-` when no stream. |
-| **phase** | IDLE / ACQUISITION / TRACKING / WATCH. |
+| Field | Meaning | Typical (5 FPS) |
+|-------|--------|-----------------|
+| **cap** | Capture thread: camera wait + memcpy (ms). | 200ms (camera interval) |
+| **qw** | Queue wait: how long process thread waited for next frame (ms). Low = good pipelining overlap. | 160ms (IDLE), 0ms (TRACKING) |
+| **mot** | Motion detection: resize, background model, contours (ms). | 38ms |
+| **gcrop** | Time to compute crop region (ms); `-` when not in AI phase. | 0ms |
+| **crop** | Time to slice crop from frame (ms); `-` when no AI. | 0ms |
+| **tf** | TFLite inference total (ms) with sub-breakdown `(ld=load pre=preprocess inv=invoke post=postprocess)`; `-` when AI did not run. | 615ms (inv=610ms) |
+| **filt** | Perimeter filter + temporal confirmation (ms). | 0.1ms |
+| **world** | World coordinate computation (ms). | 0.3ms |
+| **trk** | Tracker update + merge IDs (ms). | 0.5ms |
+| **ann** | Annotation + JPEG encode (ms); `-` when no stream clients. | 28ms (with stream) |
+| **ph** | Phase: IDLE / ACQUISITION / TRACKING / WATCH. | |
 
 Use this to find the bottleneck: e.g. high **cap** → camera; high **motion** → motion scale/resolution; high **tflite** → model/threads; high **annot** → stream resolution or JPEG quality.
 
 ### Low FPS (how to find the cause)
 
-The **displayed FPS** is processed frames per second (how often the phase block runs). Expected range is **3–7 FPS** depending on profile (see § Expected FPS from the code).
+The **displayed FPS** is processed frames per second (how often the phase block runs). At 5 FPS camera rate: **5 FPS** in IDLE, **~2.5 FPS** in TRACKING (TFLite invoke blocks ~610ms every 3rd frame).
 
 1. **Check FPS diagnostics in the API**  
    Open `GET /api/status` (or the status payload used by the web UI). It includes:
@@ -787,7 +793,7 @@ The **displayed FPS** is processed frames per second (how often the phase block 
    - **RAM / swap** — if the system is swapping (`free -h`), both capture and motion can slow down; reduce load or add RAM.
 
 2. **Quick checks**
-   - Settings → **Framerate**: 15 (or 10) is typical; 5 or 1 will cap FPS.
+   - Settings → **Framerate**: 5 FPS is recommended for Pi Zero (saves RAM/CPU). 10+ possible but may cause swap pressure.
    - Settings → **Frame skip**: 1 or 2; higher values reduce displayed FPS.
    - In IDLE, the loop does: capture → (every `frame_skip` iterations) motion → sleep(0.001). So per “processed” frame, cost ≈ capture + motion; if capture is ~800 ms you get ~1.2 FPS.
 
