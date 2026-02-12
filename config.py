@@ -249,7 +249,7 @@ FRAME_SKIP_OPTIONS = [1, 2, 3, 4, 5]
 DEFAULT_RESOLUTION = (2304, 1296)   # 2x binned mode for 13m detection
 # Changed to 640x360 to reduce memory pressure on RPi Zero 2W
 DEFAULT_STREAM_RESOLUTION = (640, 360)  # Low stream quality - saves RAM
-DEFAULT_FRAMERATE = 15
+DEFAULT_FRAMERATE = 5   # Reduced from 15: halves CPU/RAM churn, still catches cats reliably
 DEFAULT_FRAME_SKIP = 2
 
 # ============================================================================
