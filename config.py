@@ -146,7 +146,7 @@ USE_THREADED_CAPTURE = True
 # Number of threads for TFLite inference
 # Reduced from 4 to 3 to leave one core for system tasks
 # This improves overall responsiveness and reduces memory pressure
-TFLITE_NUM_THREADS = 2  # AI thread pinned to cores 2-3 (Phase 3)
+TFLITE_NUM_THREADS = 3  # Use 3 of 4 cores for inference
 
 # OPTIMIZATION J: Enable GPU acceleration (OpenCL/UMat) if available
 # Set to True to attempt GPU-accelerated operations
@@ -177,7 +177,7 @@ PERFORMANCE_PROFILES = {
         "motion_scale": 0.30,
         "motion_threshold": 25,
         "motion_min_area": 80,
-        "tflite_threads": 2,
+        "tflite_threads": 3,
         "estimated_fps": "5-7 FPS",
         "estimated_ram": "190MB",  # Updated estimate
         "estimated_cpu": "55-60%",  # Updated estimate
@@ -191,7 +191,7 @@ PERFORMANCE_PROFILES = {
         "motion_scale": 0.35,
         "motion_threshold": 25,
         "motion_min_area": 50,
-        "tflite_threads": 2,
+        "tflite_threads": 3,
         "estimated_fps": "4-6 FPS",
         "estimated_ram": "200MB",  # Updated estimate
         "estimated_cpu": "55-65%",  # Updated estimate
@@ -205,7 +205,7 @@ PERFORMANCE_PROFILES = {
         "motion_scale": 0.35,
         "motion_threshold": 18,
         "motion_min_area": 80,
-        "tflite_threads": 2,  # AI thread on cores 2-3 (Phase 3)
+        "tflite_threads": 3,
         "estimated_fps": "3-5 FPS",
         "estimated_ram": "210MB",  # Updated estimate
         "estimated_cpu": "65-70%",  # Updated estimate
