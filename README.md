@@ -2,7 +2,7 @@
 
 A real-time cat and ball detection system for Raspberry Pi Zero 2W with Camera Module 3. Features motion-first detection for efficiency, a web interface for live streaming, and zone-based tracking.
 
-**Version:** 3.16.0
+**Version:** 3.16.1
 
 **For agents and developers:** See **[AGENTS.md](AGENTS.md)** for project guidelines, concurrency rules, and where to find things. Use it as the single entry point before diving into code or other docs.
 
@@ -222,6 +222,20 @@ These numbers are **estimated from the code without running on the RPi**. They a
 | Misc (stacks, allocator, libs) | ~10–15 | Threads, OpenCV temporaries |
 
 **Accuracy of this estimate:** **Medium (±15–25%)**. Exact buffer sizes (frame, motion, TFLite input) are known from code; TFLite and picamera2 in-process footprint depend on the runtime and driver and are not measured here. To get real numbers on the RPi: use the Developer tab (system info / process RSS) or `ps -o rss= -p $(pgrep -f "python.*main")` and divide by 1024 for MB.
+
+### Improving CPU/RAM when only detecting cat
+
+The app uses the **COCO SSD MobileNet V1 1.0 quant** model (80 classes) and filters detections to **cat** (class 17) in code. The full 80-class forward pass still runs every inference — filtering happens only after `get_tensor()`, so **there is no CPU or RAM saving from “cat-only” with the current model**. To reduce cost you need a different model or configuration.
+
+| Option | CPU impact | RAM impact | Effort | Notes |
+|--------|------------|------------|--------|--------|
+| **Current setup** | — | — | — | Already quantized, lazy load, 3 TFLite threads; post-filter to cat only. |
+| **Fewer TFLite threads** | Lower CPU use (less contention) | Same | Low | e.g. `TFLITE_NUM_THREADS = 2` in config or profile; may increase inference time. |
+| **Smaller pre-built TFLite model** | Lower (fewer ops) | Lower (smaller graph + smaller input buffer) | Low–medium | Use a variant with smaller input (e.g. 192×192) or 0.75 depth if available in the same SSD MobileNet family. Requires checking TF/TFLite model zoo and updating `MODEL_URL` / `MODEL_FILENAME` and detector input shape. |
+| **Custom cat-only TFLite model** | Lower (smaller detection head + optional smaller backbone) | Lower (smaller model file and outputs) | High | Train a single-class (cat) detector with [TFLite Model Maker](https://www.tensorflow.org/lite/models/modify/model_maker) or TensorFlow Object Detection API; export to `.tflite`. Same or smaller backbone (e.g. MobileNet) with one class instead of 80 reduces last-layer compute and model size. Needs a labeled cat dataset and training pipeline. |
+| **Smaller crop → same model** | Same per run; fewer runs if motion is smaller | Same | Low | Crop size is already profile-based (e.g. 400×400); smaller crop doesn’t change TFLite input size (still 300×300 after resize). |
+
+**Summary:** Yes, it is possible to improve CPU and RAM by focusing on cat-only, but not by configuration alone. The meaningful levers are: **(1)** switch to a smaller pre-built SSD MobileNet TFLite model (smaller input or depth), or **(2)** train and deploy a custom cat-only TFLite model. Reducing TFLite threads can lower CPU usage with a small config change.
 
 ### Logging (non-blocking)
 
@@ -838,6 +852,7 @@ The **displayed FPS** is processed frames per second (how often the phase block 
 
 ## 📝 Version History
 
+- **v3.16.1** - Code review fixes: generation counter for torn-read detection on ring buffer, AI result via variable+lock (latest-wins, no queue race), idle timer reset to stop repeated gc.collect, inject_cat copies frame before paste (no ring slot mutation), duplicate-frame guard via `_ring_last_read`. Naming cleanup: `_ring_lores_bgr_valid`, `_ring_copy_ms`, `_ring_last_written`. Lores ring re-allocation on reconfigure.
 - **v3.16.0** - Ring buffer + async AI: 3-slot pre-allocated ring buffer (zero per-frame alloc), async TFLite thread (CatDome-AI on cores 1-3). Process thread submits crop non-blocking, AI results arrive with 1-frame latency. Camera FPS restored to 10. Model lifecycle owned by AI thread (load/unload after 3s idle).
 - **v3.15.0** - Callback-driven capture: replace capture thread with picamera2 post_callback (one less thread, Core 1 freed). PERF log `cap` renamed to `cpy` (memcpy time only, camera wait no longer measured).
 - **v3.14.0** - Revert Phase 3 async AI (RAM cost too high for Pi Zero 416MB). Keep Phases 0-2, raw stream disabled, 5 FPS camera, recording default off. Stable at ~265MB used / ~128MB available.

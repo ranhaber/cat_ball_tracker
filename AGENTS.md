@@ -24,7 +24,7 @@ This document consolidates knowledge from README, code reviews, and optimization
 
 ## 2. Architecture (threads and flow)
 
-**3 threads + picamera2 callback (v3.16.0):**
+**3 threads + picamera2 callback (v3.16.1):**
 
 | Thread | Core | Role | Key constraint |
 |--------|------|------|----------------|
@@ -37,13 +37,15 @@ Plus Flask (CatDome-Main) for the web server.
 
 **Frame pipeline:** picamera2 callback copies DMA→ring buffer → CatDome-Proc reads ring: inject cat → motion → phase logic → submit crop to AI queue (non-blocking) → fetch AI result (1-frame latency) → tracker → annotate → JPEG/overlay → recording.
 
-**Ring buffer:** 3-slot pre-allocated numpy arrays (main + lores_y + lores_bgr). `np.copyto()` in callback, no per-frame allocation.
+**Ring buffer:** 3-slot pre-allocated numpy arrays (main + lores_y + lores_bgr). `np.copyto()` in callback, no per-frame allocation. Generation counter (`_ring_gen`) per slot detects torn reads (odd=writing, even=complete).
 
 **Critical rules:**
 - **CatDome-AI** is the ONLY thread that calls `detector.detect()`, `detector.unload_model()`, or loads the model.
-- **CatDome-Proc** submits AI requests via `_submit_ai()` (non-blocking `put_nowait`); fetches results via `_ai_result_queue.get_nowait()`.
+- **CatDome-Proc** submits AI requests via `_submit_ai()` (non-blocking `put_nowait`); fetches results via `_ai_latest_result` (variable + lock, latest wins).
+- **Ring buffer safety:** callback sets `_ring_gen[slot]` odd before write, even after. Process thread checks gen before+after to detect torn reads. `_ring_last_read` prevents processing the same slot twice.
+- **inject_cat** must `frame.copy()` before `paste_on_frame()` to avoid mutating ring buffer slot.
 - **Never from Flask:** Do not call `motion_detector.reset()` or `detector.unload_model()` from a route. Set flags; process loop checks at start of iteration.
-- **Lores reconfigure** happens in CatDome-Proc (before frame wait).
+- **Lores reconfigure** happens in CatDome-Proc (re-allocates ring lores arrays before frame wait).
 
 Detailed architecture diagram: **README § System Architecture**. Crop vs resize: **README § Crop vs resize**.
 

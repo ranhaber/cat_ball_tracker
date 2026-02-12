@@ -117,12 +117,15 @@ class VideoProcessor:
         self._ring_lores_y = [None, None, None]
         self._ring_lores_bgr = [None, None, None]
         self._ring_lores_bgr_valid = [False, False, False]  # Whether BGR was computed for this slot
+        self._ring_gen = [0, 0, 0]   # Generation counter per slot (odd=writing, even=complete)
         self._ring_last_written = -1  # Slot index [0-2] of last completed write (-1 = none)
+        self._ring_last_read = -1     # Slot index last consumed by process thread
         self._ring_copy_ms = 0.0   # Last DMA→ring memcpy time (ms)
         
         # Async AI thread (Stage 4)
         self._ai_request_queue = None
-        self._ai_result_queue = None
+        self._ai_latest_result = None         # Latest AI result (tuple or None)
+        self._ai_result_lock = threading.Lock()  # Protects _ai_latest_result
         self._ai_thread = None
         
         # Frame storage for streaming
@@ -516,7 +519,7 @@ class VideoProcessor:
         
         # AI thread (async TFLite on cores 1-3)
         self._ai_request_queue = queue.Queue(maxsize=1)
-        self._ai_result_queue = queue.Queue(maxsize=1)
+        self._ai_latest_result = None
         threading.stack_size(256 * 1024)
         self._ai_thread = threading.Thread(target=self._ai_loop, daemon=True, name="CatDome-AI")
         self._ai_thread.start()
@@ -569,6 +572,8 @@ class VideoProcessor:
         try:
             wi = (self._ring_last_written + 1) % 3
             
+            self._ring_gen[wi] += 1  # Odd → write in progress
+            
             # Copy main frame into pre-allocated ring slot (no alloc)
             with MappedArray(request, "main", write=False) as m:
                 np.copyto(self._ring_main[wi], m.array)
@@ -585,6 +590,7 @@ class VideoProcessor:
                                      dst=self._ring_lores_bgr[wi])
                         self._ring_lores_bgr_valid[wi] = True
             
+            self._ring_gen[wi] += 1  # Even → write complete
             self._ring_copy_ms = round((time.perf_counter() - t0) * 1000, 1)
             self._ring_last_written = wi  # Publish completed slot
             self._frame_ready.set()
@@ -622,6 +628,8 @@ class VideoProcessor:
                 
                 wi = (self._ring_last_written + 1) % 3
                 
+                self._ring_gen[wi] += 1  # Odd → write in progress
+                
                 # Copy into ring buffer (resize if shape mismatch)
                 ring_shape = self._ring_main[wi].shape
                 if frame.shape != ring_shape:
@@ -636,6 +644,7 @@ class VideoProcessor:
                                  dst=self._ring_lores_y[wi])
                     self._ring_lores_bgr_valid[wi] = True
                 
+                self._ring_gen[wi] += 1  # Even → write complete
                 self._ring_copy_ms = round((time.perf_counter() - t0) * 1000, 1)
                 self._ring_last_written = wi  # Publish completed slot
                 self._frame_ready.set()
@@ -673,8 +682,8 @@ class VideoProcessor:
     def _ai_loop(self):
         """Async AI inference thread — runs TFLite on cores 1-3.
         
-        Blocks on _ai_request_queue, runs detect(), puts result on
-        _ai_result_queue.  Handles model load/unload lifecycle.
+        Blocks on _ai_request_queue, runs detect(), publishes result to
+        _ai_latest_result (latest wins).  Handles model load/unload lifecycle.
         """
         # Set OS thread name
         try:
@@ -706,6 +715,7 @@ class VideoProcessor:
                             self.detector.unload_model()
                             reclaim_memory()
                             plog("[AI] Model unloaded (idle %.0fs)", _AI_IDLE_UNLOAD_SEC)
+                        _idle_since = time.perf_counter()  # Reset to avoid repeated gc.collect
                     continue
                 
                 _idle_since = time.perf_counter()
@@ -722,12 +732,9 @@ class VideoProcessor:
                     x1, y1, x2, y2, conf, class_id = det
                     detections.append((x1 + cx, y1 + cy, x2 + cx, y2 + cy, conf, class_id))
                 
-                # Put result (drop old if unconsumed)
-                try:
-                    self._ai_result_queue.get_nowait()
-                except queue.Empty:
-                    pass
-                self._ai_result_queue.put((detections, crop_region, tflite_ms, tflite_detail))
+                # Publish result (latest wins — old unconsumed result is overwritten)
+                with self._ai_result_lock:
+                    self._ai_latest_result = (detections, crop_region, tflite_ms, tflite_detail)
                 
             except Exception as e:
                 plog("[AI] Error: %s", e)
@@ -814,6 +821,12 @@ class VideoProcessor:
                 ri = self._ring_last_written
                 if ri < 0:
                     continue  # No frame written yet
+                if ri == self._ring_last_read:
+                    continue  # Same slot as last time (event race) — wait for new frame
+                _gen_before = self._ring_gen[ri]  # Snapshot generation (even=stable)
+                if _gen_before % 2 != 0:
+                    continue  # Write in progress — skip
+                self._ring_last_read = ri
                 frame = self._ring_main[ri]
                 frame_lores = self._ring_lores_bgr[ri] if self._ring_lores_bgr_valid[ri] else None
                 frame_lores_y = self._ring_lores_y[ri] if self._using_lores else None
@@ -830,6 +843,7 @@ class VideoProcessor:
                 
                 # ── Inject cat: simulate a camera frame that contains a moving cat ──
                 if self.inject_cat and self.inject_cat_handler:
+                    frame = frame.copy()  # Copy before paste to avoid mutating ring buffer slot
                     frame = self.inject_cat_handler.paste_on_frame(frame)
                     # Re-derive lores from main so motion detection sees the cat
                     if self._using_lores:
@@ -1024,9 +1038,12 @@ class VideoProcessor:
                         self._submit_ai(frame, crop_region)
                         _perf_crop_ms = round((time.perf_counter() - t0) * 1000, 1)
                     
-                    # ── ASYNC AI: fetch result (non-blocking, 1-frame latency) ──
-                    try:
-                        ai_result = self._ai_result_queue.get_nowait()
+                    # ── ASYNC AI: fetch latest result (non-blocking, 1-frame latency) ──
+                    with self._ai_result_lock:
+                        ai_result = self._ai_latest_result
+                        self._ai_latest_result = None  # Consume it
+                    
+                    if ai_result is not None:
                         detections, _ai_crop_region, _perf_tflite_ms, _perf_tflite_detail = ai_result
                         
                         # Inject Cat fallback: if TFLite didn't detect the pasted cat
@@ -1095,8 +1112,6 @@ class VideoProcessor:
                                 "injected": is_injected
                             })
                         _perf_world_ms = round((time.perf_counter() - t_world) * 1000, 1)
-                    except queue.Empty:
-                        pass  # No AI result yet — use last_detections from previous frame
                     
                     # ── Tracking ──
                     t_track_start = time.perf_counter()
@@ -1214,6 +1229,11 @@ class VideoProcessor:
                         else:
                             if self._recording_writer is not None and (now - self._recording_last_detection_time) >= self.record_after_detection_sec:
                                 self._stop_recording()
+                    
+                    # Torn-read detection: check if callback overwrote our slot during processing
+                    if self._ring_gen[ri] != _gen_before:
+                        plog("[RING] Torn read on slot %d (gen %d→%d) — frame may be corrupt",
+                             ri, _gen_before, self._ring_gen[ri])
                     
                     # Per-step timings to log every phase-block iteration (bottleneck analysis)
                     # cpy = callback copy time (DMA→ring buffer memcpy, ~17ms)
