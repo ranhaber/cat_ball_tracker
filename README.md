@@ -122,27 +122,29 @@ Detection and tracking work **independently of the web UI** — the system runs 
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
-### Measured Performance (v3.14.0 @ 5 FPS)
+### Measured Performance (v3.16.1 @ 10 FPS, async AI)
 
 ```
 IDLE (no motion):
-  cap=200ms  qw=160ms  mot=38ms  FPS=5.0
+  cpy=12ms  qw=60ms  mot=38ms  FPS=10.0
+  Process loop on Core 0, AI thread idle on Cores 1-3.
 
-TRACKING (cat detected, AI every 3rd frame):
-  cap=200ms  qw=0ms   mot=38ms  tf=615ms(inv=610ms)  FPS=2.5
-  Zero swap stalls. Consistent frame times. Stable for 10+ minutes.
+TRACKING (cat detected, AI every 2nd frame):
+  cpy=12-18ms  qw=0-90ms  mot=39-55ms  tf=160-230ms(inv=153-225ms)  FPS=10
+  AI runs async on Cores 1-3 — process loop never blocked by TFLite.
+  ~5 AI detections/sec. Zero swap stalls. Stable for 10+ minutes.
 
 First detection after IDLE:
-  TFLite reload: ld=20ms (file cache warm from Phase 0 warmup)
-  First invoke: inv=620ms
-  Total time to detect: ~650ms
+  TFLite reload: ld=170-270ms (file cache warm from Phase 0 warmup)
+  First invoke: inv=360-730ms (cold XNNPACK)
+  Subsequent invokes: inv=160-220ms (warm)
 ```
 
 ---
 
 ## ✨ Features
 
-- **🐱 Cat & Ball Detection** - TensorFlow Lite MobileNet SSD (loaded on demand, unloaded after 10s idle)
+- **🐱 Cat & Ball Detection** - TensorFlow Lite MobileNet SSD (async on dedicated AI thread, loaded on demand, unloaded after 3s idle)
 - **🎯 Motion-First Detection** - AI only runs when motion detected inside the detection zone
 - **🎯 Fixed 300x300 Crop** - No-scale AI input preserves object pixel size for better detection
 - **⏱️ Temporal Confirmation** - Require detection in N consecutive frames (reduces false positives)
@@ -729,12 +731,11 @@ DETECTION_CONFIRM_FRAMES = 1        # Require N consecutive frames (1-5)
 # Camera (dual-resolution system)
 DEFAULT_RESOLUTION = (2304, 1296)   # Capture resolution (13m detection range)
 DEFAULT_STREAM_RESOLUTION = (640, 360)  # Stream resolution (saves RAM)
-DEFAULT_FRAMERATE = 15
-DEFAULT_FRAME_SKIP = 2
+DEFAULT_FRAMERATE = 10             # 10 FPS with async AI (ring buffer + dedicated AI thread)
+DEFAULT_FRAME_SKIP = 1             # Process every frame (async AI has headroom)
 
 # Performance Profiles: balanced, performance (default), quality
 DEFAULT_PERFORMANCE_PROFILE = "performance"
-DEFAULT_FRAMERATE = 5   # 5 FPS: stable on Pi Zero 416MB (no swap stalls)
 
 # Motion-First
 MOTION_FIRST_ENABLED = True

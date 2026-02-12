@@ -178,9 +178,9 @@ PERFORMANCE_PROFILES = {
         "motion_threshold": 25,
         "motion_min_area": 80,
         "tflite_threads": 3,
-        "estimated_fps": "2.5 FPS (TRACKING), 5 FPS (IDLE)",  # Measured @ 5 FPS camera
-        "estimated_ram": "265MB",  # Measured: 260-270MB used, ~155MB available
-        "estimated_cpu": "40-50%",  # Measured: stable, no swap stalls
+        "estimated_fps": "10 FPS (async AI, ~5 detections/sec)",
+        "estimated_ram": "290MB (ring 32MB + TFLite 15MB)",
+        "estimated_cpu": "45-55%",
         "detection_range": "0-12m"
     },
     "performance": {
@@ -192,9 +192,9 @@ PERFORMANCE_PROFILES = {
         "motion_threshold": 25,
         "motion_min_area": 50,
         "tflite_threads": 3,
-        "estimated_fps": "2.5 FPS (TRACKING), 5 FPS (IDLE)",  # Measured @ 5 FPS camera
-        "estimated_ram": "270MB",  # Slightly more than balanced (larger crop)
-        "estimated_cpu": "40-55%",
+        "estimated_fps": "10 FPS (async AI, ~5 detections/sec)",
+        "estimated_ram": "295MB (ring 32MB + TFLite 15MB)",
+        "estimated_cpu": "45-60%",
         "detection_range": "0-13m"
     },
     "quality": {
@@ -206,9 +206,9 @@ PERFORMANCE_PROFILES = {
         "motion_threshold": 18,
         "motion_min_area": 80,
         "tflite_threads": 3,
-        "estimated_fps": "2.5 FPS (TRACKING), 5 FPS (IDLE)",  # Measured @ 5 FPS camera
-        "estimated_ram": "275MB",  # Largest crop size
-        "estimated_cpu": "45-55%",
+        "estimated_fps": "10 FPS (async AI, ~5 detections/sec)",
+        "estimated_ram": "300MB (ring 32MB + TFLite 15MB)",
+        "estimated_cpu": "50-60%",
         "detection_range": "0-12m (high detail)"
     }
 }
