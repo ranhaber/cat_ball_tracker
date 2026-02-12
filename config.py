@@ -158,7 +158,7 @@ USE_GPU_ACCELERATION = True
 # ============================================================================
 PHASE_DETECTION_TIMEOUT = 30      # Seconds with no detection → back to IDLE
 PHASE_ACQUISITION_TIMEOUT = 10    # Seconds with no motion in ACQUISITION → back to IDLE
-PHASE_TRACKING_AI_INTERVAL = 3    # Run TFLite every Nth processed frame in TRACKING
+PHASE_TRACKING_AI_INTERVAL = 2    # Run TFLite every Nth processed frame in TRACKING (was 3 when sync ~610ms, now async ~170ms)
 PHASE_WATCH_AI_INTERVAL = 2       # Run TFLite every Nth processed frame in WATCH
 INJECT_FALLBACK_CONFIDENCE = 0.95 # Confidence for injected fake detections
 INJECT_BBOX_PROXIMITY_PX = 100    # Pixel threshold for matching TFLite detection to injected cat
