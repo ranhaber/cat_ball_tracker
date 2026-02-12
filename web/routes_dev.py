@@ -178,18 +178,30 @@ def init_dev_routes(video_processor):
         
         return jsonify(info)
     
+    # Cache service status to avoid expensive subprocess forks (sudo+systemctl)
+    _service_status_cache = {}  # {name: (status_str, timestamp)}
+    _SERVICE_CACHE_TTL = 30.0   # Seconds between actual systemctl calls
+    
     @dev_bp.route('/api/dev/service/<name>', methods=['GET'])
     def dev_service_status(name):
-        """Get status of a system service."""
+        """Get status of a system service (cached, checks at most once per 30s)."""
         import subprocess
+        import time as _time
         allowed = ['rpi-connect']
         if name not in allowed:
             return jsonify({"error": f"Service '{name}' not allowed"}), 403
+        
+        # Return cached status if fresh enough
+        cached = _service_status_cache.get(name)
+        if cached and (_time.time() - cached[1]) < _SERVICE_CACHE_TTL:
+            return jsonify({"service": name, "status": cached[0]})
+        
         try:
             result = subprocess.run(
                 ['sudo', 'systemctl', 'is-active', name],
                 capture_output=True, text=True, timeout=5)
             status = result.stdout.strip()
+            _service_status_cache[name] = (status, _time.time())
             return jsonify({"service": name, "status": status})
         except Exception as e:
             return jsonify({"service": name, "status": "unknown", "error": str(e)})
@@ -222,6 +234,10 @@ def init_dev_routes(video_processor):
             status_result = subprocess.run(
                 ['sudo', 'systemctl', 'is-active', name],
                 capture_output=True, text=True, timeout=5)
+            
+            # Update cache after toggle
+            import time as _time
+            _service_status_cache[name] = (status_result.stdout.strip(), _time.time())
             
             print(f"[DEV] Service {name}: {action} → {status_result.stdout.strip()}")
             return jsonify({
