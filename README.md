@@ -2,7 +2,7 @@
 
 A real-time cat and ball detection system for Raspberry Pi Zero 2W with Camera Module 3. Features motion-first detection for efficiency, a web interface for live streaming, and zone-based tracking.
 
-**Version:** 3.17.1
+**Version:** 3.17.2
 
 **For agents and developers:** See **[AGENTS.md](AGENTS.md)** for project guidelines, concurrency rules, and where to find things. Use it as the single entry point before diving into code or other docs.
 
@@ -958,6 +958,7 @@ The **displayed FPS** is processed frames per second (how often the phase block 
 
 ## 📝 Version History
 
+- **v3.17.2** - Race condition fixes: AI crop double-buffer (prevent overwrite during inference), ring buffer reader-skip (prevent slot overwrite during GC spikes), set_framerate callback re-registration (prevent hang), motion reset via flag (prevent TypeError), lores re-alloc callback pause (prevent segfault), detector class/threshold snapshot (prevent mixed filtering). WATCH phase TypeError fix.
 - **v3.17.1** - Pre-allocate hot-path buffers: motion detector (5 buffers with `dst=`, eliminates 1.86MB/frame alloc), stream frame buffer (691KB/frame), AI crop buffer (270KB/call). Total allocation churn reduced from ~29MB/s to ~0.8MB/s (JPEG only). Near-zero GC pressure in steady state.
 - **v3.17.0** - Crop 300×300 matching TFLite native input: skip resize step, 27% more cat pixels at 13m (43×22 vs 34×17), ~5ms faster per AI call. Docs audit: fix stale architecture refs, update PERF log fields, merge detection range docs, update file tree and profiles. Cache rpi-connect status check (30s TTL). H.264 tab-switch buffer flush fix.
 - **v3.16.1** - Code review fixes: generation counter for torn-read detection on ring buffer, AI result via variable+lock (latest-wins, no queue race), idle timer reset to stop repeated gc.collect, inject_cat copies frame before paste (no ring slot mutation), duplicate-frame guard via `_ring_last_read`. Naming cleanup: `_ring_lores_bgr_valid`, `_ring_copy_ms`, `_ring_last_written`. Lores ring re-allocation on reconfigure.
