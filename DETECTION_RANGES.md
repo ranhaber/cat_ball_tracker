@@ -20,7 +20,7 @@
 
 | Distance | Cat in main frame | After 0.35 scale | Scaled area | Min area 50 | Motion? |
 |----------|------------------|-------------------|-------------|-------------|---------|
-| 2m | 280×140 px | 98×49 px | 4,802 | Pass | YES |
+| 2.5m | 220×110 px | 77×39 px | 3,003 | Pass | YES |
 | 5m | 112×56 px | 39×20 px | 780 | Pass | YES |
 | 8m | 70×35 px | 25×12 px | 300 | Pass | YES |
 | 10m | 56×28 px | 20×10 px | 200 | Pass | YES |
@@ -33,7 +33,7 @@
 
 | Distance | Cat in main frame | After 0.30 scale | Scaled area | Min area 80 | Motion? |
 |----------|------------------|-------------------|-------------|-------------|---------|
-| 2m | 280×140 px | 84×42 px | 3,528 | Pass | YES |
+| 2.5m | 220×110 px | 66×33 px | 2,178 | Pass | YES |
 | 8m | 70×35 px | 21×11 px | 231 | Pass | YES |
 | 10m | 56×28 px | 17×8 px | 136 | Pass | YES |
 | 12m | 47×23 px | 14×7 px | 98 | Pass | YES |
@@ -47,6 +47,7 @@ in the crop determines whether TFLite can classify it.
 
 | Distance | Cat in main | In 400px crop | After resize to 300×300 | Detectable? |
 |----------|------------|---------------|------------------------|-------------|
+| 2.5m | 220×110 px | ~220×110 px | ~165×83 px | YES |
 | 5m | 112×56 px | ~112×56 px | ~84×42 px | YES |
 | 8m | 70×35 px | ~70×35 px | ~53×26 px | YES |
 | 10m | 56×28 px | ~56×28 px | ~42×21 px | YES |
