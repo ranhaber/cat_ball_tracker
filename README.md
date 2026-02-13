@@ -887,20 +887,20 @@ All application output goes to **stdout** (or via the async log writer to stdout
 
 Every phase-block iteration (every processed frame) a single line is written to the log:
 
-`[PERF] cpy=17ms qw=80ms mot=38ms gcrop=- sub=- tf=- filt=- world=- trk=0.0 ann=- ph=IDLE`
+`[PERF] cpy=12ms qw=60ms mot=38ms gcrop=- sub=- tf=- filt=- world=- trk=0.5 ann=- ph=IDLE`
 
-| Field | Meaning | Typical (10 FPS) |
+| Field | Meaning | Typical (10 FPS, v3.17) |
 |-------|--------|-----------------|
-| **cpy** | Callback memcpy time: DMA→ring buffer via np.copyto (ms). | 17ms |
-| **qw** | Event wait: how long process thread waited for next frame (ms). Low = good pipelining. | 80ms (IDLE), ~60ms (TRACKING) |
-| **mot** | Motion detection: resize, background model, contours (ms). | 38ms |
+| **cpy** | Callback memcpy time: DMA→ring buffer via np.copyto (ms). | 12-15ms |
+| **qw** | Event wait: how long process thread waited for next frame (ms). Low = good pipelining. | 60ms (IDLE), 0-90ms (TRACKING) |
+| **mot** | Motion detection: resize, background model, contours (ms). Pre-allocated buffers. | 38-42ms |
 | **gcrop** | Time to compute crop region (ms); `-` when not in AI phase. | 0ms |
-| **sub** | AI submit time: crop copy + queue put_nowait (ms); `-` when no AI. Non-blocking. | 1-2ms |
-| **tf** | TFLite invoke time from async AI thread (ms) with sub-breakdown `(ld=load pre=preprocess inv=invoke post=postprocess)`; `-` when no AI result fetched this frame. 1-frame latency. | 450ms (inv=440ms) |
+| **sub** | AI submit time: double-buffered crop copy + queue put (ms); `-` when no AI. Non-blocking. | 0.7-1.2ms |
+| **tf** | TFLite invoke time from async AI thread (ms) with sub-breakdown `(ld=load pre=preprocess inv=invoke post=postprocess)`; `-` when no AI result fetched this frame. 1-frame latency. 300×300 crop = no resize (pre=0.5ms). | 160ms (pre=0.5 inv=158) |
 | **filt** | Perimeter filter + temporal confirmation (ms); only when AI result fetched. | 0.1ms |
 | **world** | World coordinate computation (ms); only when AI result fetched. | 0.3ms |
 | **trk** | Tracker update + merge IDs (ms). | 0.5ms |
-| **ann** | Annotation + JPEG encode (ms); `-` when no stream clients. | 28ms (with stream) |
+| **ann** | Annotation + JPEG encode (ms) with sub-breakdown `(rsz=resize jpg=jpeg)`; `-` when no stream clients. Pre-allocated stream buffer. | 28ms (with stream) |
 | **ph** | Phase: IDLE / ACQUISITION / TRACKING / WATCH. | |
 
 Use this to find the bottleneck: e.g. high **cpy** → DMA copy slow; high **qw** → process loop faster than camera; high **mot** → motion scale/resolution; high **tf** → model/threads; high **ann** → stream resolution or JPEG quality. Note: **tf** shows the AI thread's time, reported with 1-frame latency (async).
