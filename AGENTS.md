@@ -24,11 +24,11 @@ This document consolidates knowledge from README, code reviews, and optimization
 
 ## 2. Architecture (threads and flow)
 
-**3 threads + picamera2 callback (v3.16.1):**
+**3 threads + picamera2 callback (v3.17.2):**
 
 | Thread | Core | Role | Key constraint |
 |--------|------|------|----------------|
-| **picamera2 internal** | any | Camera ISP: delivers frames via `post_callback` | Copies DMA→ring buffer (~17ms), signals event |
+| **picamera2 internal** | any | Camera ISP: delivers frames via `post_callback` | Copies DMA→ring buffer (~12ms), signals event; skips reader's slot |
 | **CatDome-Proc** | 0 | Processing: motion → AI submit → track → annotate | Reads ring buffer; submits AI non-blocking |
 | **CatDome-AI** | 1-3 | Async TFLite inference | Owns detector lifecycle (load/unload after 3s idle) |
 | **CatDome-Log** | any | Async logging (queue → stdout) | Non-blocking plog() |
@@ -68,7 +68,7 @@ When **inject_cat** is True, the cat is pasted on the camera frame (simulating a
 - **Resize:** Three places — (1) motion: full frame → ¼ size for motion; (2) TFLite: crop or full frame → model input (e.g. 300×300); (3) stream: raw frame → stream resolution **first**, then draw annotations on the small frame (avoids drawing on the 9 MB capture frame). Detector skips resize when input already matches model size (e.g. crop 300×300).
 - **Scaled perimeter cache:** Perimeter polygon scaled to stream resolution is pre-computed once (`_get_scaled_perimeter`) and cached. Invalidated when perimeter is set/cleared or stream resolution changes. Detection boxes and motion regions are scaled inline with simple multiply (cheap).
 
-Crop size 400×400 is used for the "Performance (13 m)" profile for robustness at long range; 300×300 is more efficient but less margin. See README § "Why not crop to TFLite size?" and § "Effect on detection and tracking to 13 m".
+All profiles use 300×300 crop matching TFLite's native input — no resize step, 27% more cat pixels at distance vs the old 380-400px crops. See DETECTION_RANGES.md for pixel-size analysis at each distance.
 
 ### Inject Cat (test mode)
 
@@ -131,7 +131,7 @@ Crop size 400×400 is used for the "Performance (13 m)" profile for robustness a
 
 - **Run tests:** `python tests/run_tests.py` (optionally `python tests/run_tests.py inject_cat` for one module). Tests use mocks (no real camera/TFLite). **All tests must pass** before committing.
 - **Adding features:** Prefer extending existing modules (e.g. new route in appropriate `routes_*.py`, new phase logic in _process_loop with same lock/thread rules). If adding locks, document in CODE_REVIEW_DEADLOCKS and preserve lock order.
-- **Performance:** See **OPTIMIZATION_LOG.md** for what’s been done (frame reuse, pre-alloc buffers, narrow locks, JPEG pre-compute, etc.). Avoid new per-frame allocations in the hot path; use pre-alloc or reuse.
+- **Performance:** All hot-path buffers are pre-allocated (ring buffer, motion detector, stream frame, AI crop double-buffer). Avoid new per-frame allocations; use dst= parameter or pre-alloc buffers. Allocation churn is <1MB/sec.
 
 ---
 
@@ -142,7 +142,7 @@ Crop size 400×400 is used for the "Performance (13 m)" profile for robustness a
 - **stream_clients:** Use increment/decrement methods and locked getter; no raw += from routes.
 - **Config mutation:** Don’t change `config.MOTION_CROP_SIZE` at runtime; use `VideoProcessor.current_motion_crop_size` (and similar for other profile-driven values).
 - **Null checks:** Guard `inject_cat_handler` (and similar) in routes — return 503 if processor not started.
-- **13 m range:** Keep crop size 400×400 for the Performance (13 m) profile; 300×300 is riskier at long range (less margin for centering).
+- **13 m range:** All profiles use 300×300 crop (matches TFLite input, no resize). At 13m the cat is 43×22px — above MobileNet minimum (~20px). See DETECTION_RANGES.md.
 
 ---
 
@@ -153,7 +153,7 @@ Crop size 400×400 is used for the "Performance (13 m)" profile for robustness a
 | **README.md** | User-facing overview, setup, API, phase diagram, frame timeline, crop vs resize, 13 m and efficiency notes. |
 | **docs/CODE_REVIEW_DEADLOCKS.md** | Lock inventory, deadlock analysis, data races, hold-time. |
 | **docs/CODE_REVIEW.md** | Past high/medium/low review items; many already fixed (frame storage, config mutation, inject_cat_handler guard). |
-| **OPTIMIZATION_LOG.md** | Implemented optimizations (frame reuse, color conversion, pre-alloc, GPU motion, etc.). |
+
 | **AGENTS.md** (this file) | Single entry point for agents: architecture, rules, where to look, pitfalls. |
 
 ---
@@ -163,6 +163,6 @@ Crop size 400×400 is used for the "Performance (13 m)" profile for robustness a
 - [ ] Read this file and CODE_REVIEW_DEADLOCKS for concurrency.
 - [ ] For process-loop changes: preserve lock order (jpeg then frame); no reset/unload from Flask.
 - [ ] For new routes: use VideoProcessor getters/setters or dedicated methods (e.g. increment_stream_clients); guard optional handlers (inject_cat_handler, etc.).
-- [ ] For crop/size changes: see README § Crop vs resize and § 13 m / efficiency; keep 400 for 13 m profile.
+- [ ] For crop/size changes: all profiles use 300×300 (matches TFLite input). See README § Crop vs resize and DETECTION_RANGES.md.
 - [ ] Run `python tests/run_tests.py` after changes; fix any failures.
 - [ ] Bump version in main.py (and README) when releasing; commit message can reference version and main change.

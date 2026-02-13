@@ -60,7 +60,7 @@ feature size (~20px).
 
 ---
 
-## Current Profiles (v3.16.1, 10 FPS, async AI)
+## Current Profiles (v3.17.2, 10 FPS, async AI)
 
 | Profile | motion_scale | min_area | crop_size | Reliable range | Measured FPS |
 |---------|-------------|----------|-----------|----------------|-------------|
@@ -70,7 +70,7 @@ feature size (~20px).
 
 All profiles use 300×300 crop matching TFLite's native input — no resize step,
 27% more cat pixels vs the old 380-400px crops. AI runs async on Cores 1-3
-(~190ms invoke, ~5 detections/sec at 10 FPS).
+(~160ms invoke, ~5 detections/sec at 10 FPS).
 
 ---
 
