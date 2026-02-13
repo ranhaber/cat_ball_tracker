@@ -625,23 +625,74 @@ function initProfileSelector() {
         });
     });
     
-    // Load current profile on startup
-    loadCurrentProfile();
+    // Load profiles and current selection (single source of truth from config)
+    loadPerformanceProfiles();
 }
 
+/** Fetch /api/performance/profiles and render profile cards + set current radio. */
+async function loadPerformanceProfiles() {
+    try {
+        const response = await fetch('/api/performance/profiles');
+        if (!response.ok) return;
+        const data = await response.json();
+        const profiles = data.profiles || {};
+        const current = data.current;
+        const defaultKey = data.default || 'performance';
+
+        // Render each profile card from API data
+        document.querySelectorAll('.profile-option[data-profile]').forEach(label => {
+            const key = label.getAttribute('data-profile');
+            const profile = profiles[key];
+            if (!profile) return;
+
+            const crop = profile.motion_crop_size;
+            const cropStr = Array.isArray(crop) ? `${crop[0]}×${crop[1]}` : (crop && crop.join ? crop.join('×') : '—');
+
+            label.querySelector('.profile-name').textContent = profile.name || key;
+            label.querySelector('.profile-description').textContent = profile.description || '—';
+
+            const fps = profile.estimated_fps || '—';
+            const ram = profile.estimated_ram || '—';
+            const cpu = profile.estimated_cpu || '—';
+            const range = profile.detection_range || '—';
+            label.querySelector('.profile-metrics').innerHTML =
+                `<span>📊 ${fps}</span><span>💾 ${ram}</span><span>⚡ ${cpu}</span><span>📏 ${range}</span>`;
+
+            label.querySelector('.profile-parameters small').textContent =
+                `JPEG: ${profile.jpeg_quality} | Motion Crop: ${cropStr} | Motion Scale: ${profile.motion_scale} | Threshold: ${profile.motion_threshold} | Min Area: ${profile.motion_min_area} | Threads: ${profile.tflite_threads}`;
+
+            const badge = label.querySelector('.profile-badge');
+            if (badge) {
+                if (key === defaultKey) {
+                    badge.style.display = '';
+                    badge.textContent = 'Default';
+                    label.classList.add('recommended');
+                } else {
+                    badge.style.display = 'none';
+                    label.classList.remove('recommended');
+                }
+            }
+        });
+
+        // Set radio to current profile
+        const radio = document.querySelector(`input[name="profile"][value="${current}"]`);
+        if (radio) radio.checked = true;
+
+        console.log(`Profiles loaded; current: ${current}`);
+    } catch (error) {
+        console.error('Error loading performance profiles:', error);
+    }
+}
+
+/** Load current profile only (e.g. after switch to revert radio). Uses /api/performance/profile. */
 async function loadCurrentProfile() {
     try {
         const response = await fetch('/api/performance/profile');
         if (response.ok) {
             const data = await response.json();
             const profileName = data.profile;
-            
-            // Update radio button selection
             const radio = document.querySelector(`input[name="profile"][value="${profileName}"]`);
-            if (radio) {
-                radio.checked = true;
-            }
-            
+            if (radio) radio.checked = true;
             console.log(`Current profile: ${profileName}`);
         }
     } catch (error) {
@@ -1855,31 +1906,12 @@ async function loadCurrentState() {
         await loadConfirmFrames();
         await loadCalibrationStatus();
         await loadLensCalibrationStatus();
-        await loadCurrentProfile();
+        await loadPerformanceProfiles();
         await loadVideoSource();
         await updateStatus();
         
     } catch (error) {
         console.error('Error loading initial state:', error);
-    }
-}
-
-async function loadCurrentProfile() {
-    try {
-        const response = await fetch('/api/performance/profile');
-        if (response.ok) {
-            const data = await response.json();
-            const profileValue = data.profile;
-            
-            // Update the UI to show the current profile
-            const profileRadio = document.querySelector(`input[name="profile"][value="${profileValue}"]`);
-            if (profileRadio) {
-                profileRadio.checked = true;
-                console.log(`Current profile loaded: ${profileValue}`);
-            }
-        }
-    } catch (error) {
-        console.error('Error loading current profile:', error);
     }
 }
 

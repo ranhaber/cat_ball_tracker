@@ -1705,7 +1705,11 @@ class VideoProcessor:
         return True
     
     def get_performance_profiles(self):
-        return {"profiles": config.PERFORMANCE_PROFILES, "current": self.current_profile}
+        return {
+            "profiles": config.PERFORMANCE_PROFILES,
+            "current": self.current_profile,
+            "default": config.DEFAULT_PERFORMANCE_PROFILE,
+        }
     
     def get_current_profile(self):
         return {"profile": self.current_profile, "settings": config.PERFORMANCE_PROFILES.get(self.current_profile, {})}

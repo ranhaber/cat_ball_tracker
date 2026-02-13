@@ -106,66 +106,45 @@
             <!-- Settings Tab -->
             <section id="settings-tab" class="tab-content">
                 <div class="control-panel">
-                    <!-- Performance Profile Selector (v1.8.0 - 3 Optimized Profiles) -->
+                    <!-- Performance Profile Selector (v1.8.0 - 3 Optimized Profiles, populated from API) -->
                     <div class="control-section">
                         <h2>🎛️ Performance Profile</h2>
                         <p>Choose optimization level (for 2304×1296 capture @ 13m max distance):</p>
-                        <div class="profile-selector">
-                            <label class="profile-option">
+                        <div class="profile-selector" id="profile-selector">
+                            <label class="profile-option" data-profile="balanced">
                                 <input type="radio" name="profile" value="balanced">
                                 <div class="profile-content">
                                     <div class="profile-header">
-                                        <span class="profile-name">Balanced</span>
+                                        <span class="profile-name">—</span>
+                                        <span class="profile-badge" style="display: none;">Default</span>
                                     </div>
-                                    <div class="profile-description">Best trade-off between speed and quality</div>
-                                    <div class="profile-metrics">
-                                        <span>📊 5-7 FPS</span>
-                                        <span>💾 190MB</span>
-                                        <span>⚡ 55-60% CPU</span>
-                                        <span>📏 0-12m range</span>
-                                    </div>
-                                    <div class="profile-parameters">
-                                        <small>JPEG: 60 | Motion Crop: 380×380 | Motion Scale: 0.30 | Threshold: 18 | Min Area: 80 | Threads: 3</small>
-                                    </div>
+                                    <div class="profile-description">—</div>
+                                    <div class="profile-metrics">—</div>
+                                    <div class="profile-parameters"><small>—</small></div>
                                 </div>
                             </label>
-                            
-                            <label class="profile-option recommended">
+                            <label class="profile-option" data-profile="performance">
                                 <input type="radio" name="profile" value="performance">
                                 <div class="profile-content">
                                     <div class="profile-header">
-                                        <span class="profile-name">Performance (13m)</span>
-                                        <span class="profile-badge">Default</span>
+                                        <span class="profile-name">—</span>
+                                        <span class="profile-badge" style="display: none;">Default</span>
                                     </div>
-                                    <div class="profile-description">Optimized for 13m maximum distance detection</div>
-                                    <div class="profile-metrics">
-                                        <span>📊 4-6 FPS</span>
-                                        <span>💾 200MB</span>
-                                        <span>⚡ 55-65% CPU</span>
-                                        <span>📏 0-13m range</span>
-                                    </div>
-                                    <div class="profile-parameters">
-                                        <small>JPEG: 55 | Motion Crop: 400×400 | Motion Scale: 0.35 | Threshold: 18 | Min Area: 50 | Threads: 3</small>
-                                    </div>
+                                    <div class="profile-description">—</div>
+                                    <div class="profile-metrics">—</div>
+                                    <div class="profile-parameters"><small>—</small></div>
                                 </div>
                             </label>
-                            
-                            <label class="profile-option">
+                            <label class="profile-option" data-profile="quality">
                                 <input type="radio" name="profile" value="quality">
                                 <div class="profile-content">
                                     <div class="profile-header">
-                                        <span class="profile-name">Quality</span>
+                                        <span class="profile-name">—</span>
+                                        <span class="profile-badge" style="display: none;">Default</span>
                                     </div>
-                                    <div class="profile-description">Best accuracy for close-range detailed detection</div>
-                                    <div class="profile-metrics">
-                                        <span>📊 3-5 FPS</span>
-                                        <span>💾 210MB</span>
-                                        <span>⚡ 65-70% CPU</span>
-                                        <span>📏 0-12m (high detail)</span>
-                                    </div>
-                                    <div class="profile-parameters">
-                                        <small>JPEG: 70 | Motion Crop: 450×450 | Motion Scale: 0.35 | Threshold: 15 | Min Area: 80 | Threads: 3</small>
-                                    </div>
+                                    <div class="profile-description">—</div>
+                                    <div class="profile-metrics">—</div>
+                                    <div class="profile-parameters"><small>—</small></div>
                                 </div>
                             </label>
                         </div>

@@ -81,12 +81,14 @@ class TestPerformanceProfiles(unittest.TestCase):
         self.assertIn(vp.current_profile, config.PERFORMANCE_PROFILES)
     
     def test_get_performance_profiles(self):
-        """get_performance_profiles returns profiles and current."""
+        """get_performance_profiles returns profiles, current, and default."""
         vp = self._make_processor()
         result = vp.get_performance_profiles()
         self.assertIn("profiles", result)
         self.assertIn("current", result)
+        self.assertIn("default", result)
         self.assertEqual(result["profiles"], config.PERFORMANCE_PROFILES)
+        self.assertEqual(result["default"], config.DEFAULT_PERFORMANCE_PROFILE)
     
     def test_get_current_profile(self):
         """get_current_profile returns profile name and settings."""

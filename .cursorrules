@@ -1,0 +1,9 @@
+# Cat Dome — Project rules for AI
+
+When working in this repository:
+
+1. **Read AGENTS.md first.** It is the single entry point for architecture, concurrency rules (locks, never call reset/unload from Flask), where things live, and pitfalls. Use it before making changes to the process loop, routes, or detection pipeline.
+
+2. **For concurrency:** See docs/CODE_REVIEW_DEADLOCKS.md. Preserve lock order (jpeg then frame); use increment_stream_clients/decrement_stream_clients; perform inject-stop cleanup only in the process loop via flags.
+
+3. **After changes:** Run `python tests/run_tests.py` and fix any failures. Bump version in main.py (and README) when releasing.
