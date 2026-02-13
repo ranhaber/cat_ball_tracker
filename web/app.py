@@ -127,7 +127,10 @@ class VideoProcessor:
         self._ai_latest_result = None         # Latest AI result (tuple or None)
         self._ai_result_lock = threading.Lock()  # Protects _ai_latest_result
         self._ai_thread = None
-        self._ai_crop_buf = None              # Pre-allocated crop buffer (re-alloc on profile change)
+        # Double-buffered crop: process writes buf[idx], AI reads buf[1-idx]
+        # Prevents race where process overwrites while AI is still reading
+        self._ai_crop_bufs = [None, None]
+        self._ai_crop_idx = 0
         
         # Frame storage for streaming
         self.current_frame = None
@@ -686,13 +689,16 @@ class VideoProcessor:
                 cw = ch = cs
                 crop_region = (cx, cy, cw, ch)
             
-            # Copy into pre-allocated crop buffer (zero alloc per call)
+            # Copy into double-buffered crop (process writes buf[idx], AI reads buf[1-idx])
+            idx = self._ai_crop_idx
+            buf = self._ai_crop_bufs[idx]
             src = frame[cy:cy+ch, cx:cx+cw]
-            if (self._ai_crop_buf is None or
-                    self._ai_crop_buf.shape[0] != ch or self._ai_crop_buf.shape[1] != cw):
-                self._ai_crop_buf = np.empty((ch, cw, 3), dtype=np.uint8)
-            np.copyto(self._ai_crop_buf, src)
-            self._ai_request_queue.put_nowait((self._ai_crop_buf, crop_region))
+            if buf is None or buf.shape[0] != ch or buf.shape[1] != cw:
+                buf = np.empty((ch, cw, 3), dtype=np.uint8)
+                self._ai_crop_bufs[idx] = buf
+            np.copyto(buf, src)
+            self._ai_request_queue.put_nowait((buf, crop_region))
+            self._ai_crop_idx = 1 - idx  # Swap for next submit
         except queue.Full:
             pass  # AI busy — skip this frame
     
@@ -1707,10 +1713,19 @@ class VideoProcessor:
         self.current_framerate = fps
         settings.update_setting("framerate", fps)
         if self.camera:
+            # Clear callback before stopping to avoid callback during shutdown
+            use_callback = (self.video_source != "file" and not self.camera.use_mock
+                            and _HAS_MAPPED_ARRAY)
+            if use_callback and hasattr(self.camera, 'camera') and self.camera.camera:
+                self.camera.camera.post_callback = None
             self.camera.stop()
             width, height = self.current_resolution
             self.camera = CameraHandler(width=width, height=height, fps=fps)
             self.camera.start()
+            # Re-register callback on new camera
+            if use_callback:
+                self.camera.camera.post_callback = self._frame_callback
+                plog("[FRAMERATE] Callback re-registered on new camera")
         print(f"[SETTING] Framerate changed to: {fps} fps")
         return True
     
