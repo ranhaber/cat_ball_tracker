@@ -40,23 +40,23 @@
 | **13m** | **43×22 px** | **13×7 px** | **91** | Pass | **YES** |
 | 15m | 37×19 px | 11×6 px | 66 | Fail | NO |
 
-### TFLite Detection (300×300 model input)
+### TFLite Detection (300×300 crop = model input, no resize)
 
-TFLite receives a cropped region (380-400px) resized to 300×300. The cat's pixel size
-in the crop determines whether TFLite can classify it.
+Crop is 300×300 — matches TFLite input exactly. No resize needed, cat pixels
+are preserved 1:1 from the main frame.
 
-| Distance | Cat in main | In 400px crop | After resize to 300×300 | Detectable? |
-|----------|------------|---------------|------------------------|-------------|
-| 2.5m | 220×110 px | ~220×110 px | ~165×83 px | YES |
-| 5m | 112×56 px | ~112×56 px | ~84×42 px | YES |
-| 8m | 70×35 px | ~70×35 px | ~53×26 px | YES |
-| 10m | 56×28 px | ~56×28 px | ~42×21 px | YES |
-| 13m | 43×22 px | ~43×22 px | ~32×17 px | MARGINAL |
-| 15m | 37×19 px | ~37×19 px | ~28×14 px | MARGINAL |
+| Distance | Cat in main | In 300×300 crop (= TFLite input) | Detectable? |
+|----------|------------|----------------------------------|-------------|
+| 2.5m | 220×110 px | **220×110 px** (40px margin) | YES |
+| 5m | 112×56 px | **112×56 px** | YES |
+| 8m | 70×35 px | **70×35 px** | YES |
+| 10m | 56×28 px | **56×28 px** | YES |
+| 13m | 43×22 px | **43×22 px** | MARGINAL |
+| 15m | 37×19 px | **37×19 px** | MARGINAL |
 
-At 13m the cat is ~32×17 pixels in the 300×300 input — small but above the
-MobileNet SSD minimum feature size (~20px). Detection works with confidence
-threshold 0.4 but may not fire on every frame.
+At 13m the cat is 43×22 pixels in TFLite input (was 32×17 with the old
+380→300 resize — 27% more pixels now). Above MobileNet SSD minimum
+feature size (~20px).
 
 ---
 
@@ -64,13 +64,13 @@ threshold 0.4 but may not fire on every frame.
 
 | Profile | motion_scale | min_area | crop_size | Reliable range | Measured FPS |
 |---------|-------------|----------|-----------|----------------|-------------|
-| **Balanced** | 0.30 | 80 | 380×380 | 0-13m | 10 |
-| **Performance** | 0.35 | 50 | 400×400 | 0-13m | 10 |
-| **Quality** | 0.35 | 80 | 450×450 | 0-12m (detail) | 10 |
+| **Balanced** | 0.30 | 80 | 300×300 | 0-13m | 10 |
+| **Performance** | 0.35 | 50 | 300×300 | 0-13m | 10 |
+| **Quality** | 0.35 | 80 | 300×300 | 0-12m (detail) | 10 |
 
-All profiles achieve ~10 FPS because AI runs async on Cores 1-3 (~190ms invoke)
-and never blocks the process loop on Core 0. AI detections run ~5/sec
-(every 2nd frame at 10 FPS).
+All profiles use 300×300 crop matching TFLite's native input — no resize step,
+27% more cat pixels vs the old 380-400px crops. AI runs async on Cores 1-3
+(~190ms invoke, ~5 detections/sec at 10 FPS).
 
 ---
 

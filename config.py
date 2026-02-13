@@ -170,7 +170,7 @@ PERFORMANCE_PROFILES = {
         "name": "Balanced",
         "description": "Recommended: Best trade-off between speed and quality",
         "jpeg_quality": 60,
-        "motion_crop_size": (380, 380),
+        "motion_crop_size": (300, 300),  # Match TFLite input — no resize, 27% more cat pixels
         "motion_scale": 0.30,
         "motion_threshold": 25,
         "motion_min_area": 80,
@@ -184,7 +184,7 @@ PERFORMANCE_PROFILES = {
         "name": "Performance (13m)",
         "description": "Optimized for 13m max distance detection",
         "jpeg_quality": 55,
-        "motion_crop_size": (400, 400),
+        "motion_crop_size": (300, 300),  # Match TFLite input — no resize, 27% more cat pixels
         "motion_scale": 0.35,
         "motion_threshold": 25,
         "motion_min_area": 50,
@@ -198,7 +198,7 @@ PERFORMANCE_PROFILES = {
         "name": "Quality",
         "description": "Best accuracy for close-range detailed detection",
         "jpeg_quality": 70,
-        "motion_crop_size": (450, 450),
+        "motion_crop_size": (300, 300),  # Match TFLite input — no resize, 27% more cat pixels
         "motion_scale": 0.35,
         "motion_threshold": 18,
         "motion_min_area": 80,
