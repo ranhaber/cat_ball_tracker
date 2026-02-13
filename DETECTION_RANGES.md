@@ -16,7 +16,7 @@
 
 ### Motion Detection (lores 960×540, scale depends on profile)
 
-**Performance profile (motion_scale=0.35, min_area=50):**
+**Performance profile** (`config.py` → `PERFORMANCE_PROFILES["performance"]`: `motion_scale=0.35`, `motion_min_area=50`):
 
 | Distance | Cat in main frame | After 0.35 scale | Scaled area | Min area 50 | Motion? |
 |----------|------------------|-------------------|-------------|-------------|---------|
@@ -29,10 +29,11 @@
 | 15m | 37×19 px | 13×7 px | 91 | Pass | YES |
 | 20m | 28×14 px | 10×5 px | 50 | Marginal | MARGINAL |
 
-**Balanced profile (motion_scale=0.30, min_area=80):**
+**Balanced profile** (`config.py` → `PERFORMANCE_PROFILES["balanced"]`: `motion_scale=0.30`, `motion_min_area=80`):
 
 | Distance | Cat in main frame | After 0.30 scale | Scaled area | Min area 80 | Motion? |
 |----------|------------------|-------------------|-------------|-------------|---------|
+| 2m | 280×140 px | 84×42 px | 3,528 | Pass | YES |
 | 8m | 70×35 px | 21×11 px | 231 | Pass | YES |
 | 10m | 56×28 px | 17×8 px | 136 | Pass | YES |
 | 12m | 47×23 px | 14×7 px | 98 | Pass | YES |
