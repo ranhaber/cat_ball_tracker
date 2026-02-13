@@ -127,6 +127,7 @@ class VideoProcessor:
         self._ai_latest_result = None         # Latest AI result (tuple or None)
         self._ai_result_lock = threading.Lock()  # Protects _ai_latest_result
         self._ai_thread = None
+        self._ai_crop_buf = None              # Pre-allocated crop buffer (re-alloc on profile change)
         
         # Frame storage for streaming
         self.current_frame = None
@@ -137,6 +138,7 @@ class VideoProcessor:
         # Pre-computed JPEG cache (built in _process_loop, read by get_frame_jpeg)
         self._cached_jpeg = None        # JPEG bytes for MJPEG stream
         self._cached_jpeg_lock = threading.Lock()
+        self._stream_frame_buf = None   # Pre-allocated stream frame (re-alloc on res change)
         self._cached_capture_frame = None  # Raw frame for snapshot/recording
         
         # H.264 WebSocket streaming state
@@ -391,34 +393,42 @@ class VideoProcessor:
     def _resize_for_stream(self, frame, frame_lores, stream_w, stream_h):
         """Get a stream-sized frame, preferring lores to avoid expensive main resize.
         
+        Uses pre-allocated _stream_frame_buf (zero alloc per frame).
         Returns (stream_frame, sx, sy) where sx/sy map main-frame coords to stream coords.
         """
         capture_h, capture_w = frame.shape[:2]
+        
+        # Lazy pre-allocate / re-allocate on resolution change
+        if (self._stream_frame_buf is None or
+                self._stream_frame_buf.shape[0] != stream_h or
+                self._stream_frame_buf.shape[1] != stream_w):
+            self._stream_frame_buf = np.empty((stream_h, stream_w, 3), dtype=np.uint8)
         
         # If lores available and stream fits within lores, resize from lores (very fast)
         if frame_lores is not None:
             lores_h, lores_w = frame_lores.shape[:2]
             if stream_w <= lores_w and stream_h <= lores_h:
                 if stream_w == lores_w and stream_h == lores_h:
-                    stream_frame = frame_lores.copy()
+                    np.copyto(self._stream_frame_buf, frame_lores)
                 else:
-                    stream_frame = cv2.resize(frame_lores, (stream_w, stream_h),
-                                              interpolation=cv2.INTER_LINEAR)
-                # Scale factors: main coords → stream coords (for annotation drawing)
+                    cv2.resize(frame_lores, (stream_w, stream_h),
+                               dst=self._stream_frame_buf,
+                               interpolation=cv2.INTER_LINEAR)
                 sx = stream_w / capture_w
                 sy = stream_h / capture_h
-                return stream_frame, sx, sy
+                return self._stream_frame_buf, sx, sy
         
         # Fallback: resize from main (for stream resolutions larger than lores)
         if stream_w != capture_w or stream_h != capture_h:
-            stream_frame = cv2.resize(frame, (stream_w, stream_h),
-                                      interpolation=cv2.INTER_LINEAR)
+            cv2.resize(frame, (stream_w, stream_h),
+                       dst=self._stream_frame_buf,
+                       interpolation=cv2.INTER_LINEAR)
             sx = stream_w / capture_w
             sy = stream_h / capture_h
         else:
-            stream_frame = frame.copy()
+            np.copyto(self._stream_frame_buf, frame)
             sx = sy = 1.0
-        return stream_frame, sx, sy
+        return self._stream_frame_buf, sx, sy
         
     def start(self):
         """Initialize and start all components"""
@@ -666,16 +676,22 @@ class VideoProcessor:
         try:
             if crop_region:
                 cx, cy, cw, ch = crop_region
-                crop = frame[cy:cy+ch, cx:cx+cw].copy()
             else:
-                # WATCH phase: center crop (saves RAM vs full frame copy)
+                # WATCH phase: center crop
                 fh, fw = frame.shape[:2]
                 cs = min(fw, fh, self.current_motion_crop_size)
                 cx = (fw - cs) // 2
                 cy = (fh - cs) // 2
-                crop = frame[cy:cy+cs, cx:cx+cs].copy()
-                crop_region = (cx, cy, cs, cs)
-            self._ai_request_queue.put_nowait((crop, crop_region))
+                cw = ch = cs
+                crop_region = (cx, cy, cw, ch)
+            
+            # Copy into pre-allocated crop buffer (zero alloc per call)
+            src = frame[cy:cy+ch, cx:cx+cw]
+            if (self._ai_crop_buf is None or
+                    self._ai_crop_buf.shape[0] != ch or self._ai_crop_buf.shape[1] != cw):
+                self._ai_crop_buf = np.empty((ch, cw, 3), dtype=np.uint8)
+            np.copyto(self._ai_crop_buf, src)
+            self._ai_request_queue.put_nowait((self._ai_crop_buf, crop_region))
         except queue.Full:
             pass  # AI busy — skip this frame
     

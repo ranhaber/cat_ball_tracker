@@ -55,6 +55,14 @@ class MotionDetector:
         # Thread safety for parameter updates
         self._lock = threading.Lock()
         
+        # Pre-allocated detection buffers (lazily sized on first detect)
+        self._small_buf = None     # (small_h, small_w) uint8 — resize output
+        self._blur_buf = None      # (small_h, small_w) uint8 — GaussianBlur output
+        self._f32_buf = None       # (small_h, small_w) float32 — for background sum
+        self._delta_buf = None     # (small_h, small_w) uint8 — absdiff output
+        self._thresh_buf = None    # (small_h, small_w) uint8 — threshold + dilate output
+        self._prealloc_shape = None  # Track shape for re-allocation
+        
         # OPTIMIZATION J: Check if GPU acceleration available
         self.use_gpu = getattr(config, 'USE_GPU_ACCELERATION', False) and self._check_gpu_available()
         
@@ -161,36 +169,48 @@ class MotionDetector:
             self.background = None
         self.last_frame_size = current_scaled_size
         
+        # Lazy pre-allocate detection buffers (re-alloc on resolution change)
+        if self._prealloc_shape != (small_h, small_w):
+            self._small_buf = np.empty((small_h, small_w), dtype=np.uint8)
+            self._blur_buf = np.empty((small_h, small_w), dtype=np.uint8)
+            self._f32_buf = np.empty((small_h, small_w), dtype=np.float32)
+            self._delta_buf = np.empty((small_h, small_w), dtype=np.uint8)
+            self._thresh_buf = np.empty((small_h, small_w), dtype=np.uint8)
+            self._prealloc_shape = (small_h, small_w)
+        
         # Y-plane fast path: frame is already grayscale (from ISP lores Y channel).
-        # Skips cvtColor BGR→Gray entirely.
+        # Skips cvtColor BGR→Gray entirely.  All paths use dst= (zero alloc).
         if gray_input:
-            small_gray = cv2.resize(frame, (small_w, small_h), interpolation=cv2.INTER_LINEAR)
-            gray = cv2.GaussianBlur(small_gray, (blur, blur), 0)
+            cv2.resize(frame, (small_w, small_h), dst=self._small_buf,
+                       interpolation=cv2.INTER_LINEAR)
+            cv2.GaussianBlur(self._small_buf, (blur, blur), 0, dst=self._blur_buf)
         # OPTIMIZATION J: Use GPU acceleration if available
         elif self.use_gpu:
             frame_gpu = cv2.UMat(frame)
             small_frame_gpu = cv2.resize(frame_gpu, (small_w, small_h), interpolation=cv2.INTER_LINEAR)
             gray_gpu = cv2.cvtColor(small_frame_gpu, cv2.COLOR_BGR2GRAY)
-            gray = cv2.GaussianBlur(gray_gpu, (blur, blur), 0).get()
+            self._blur_buf[:] = cv2.GaussianBlur(gray_gpu, (blur, blur), 0).get()
         else:
             small_frame = cv2.resize(frame, (small_w, small_h), interpolation=cv2.INTER_LINEAR)
-            gray = cv2.cvtColor(small_frame, cv2.COLOR_BGR2GRAY)
-            gray = cv2.GaussianBlur(gray, (blur, blur), 0)
+            cv2.cvtColor(small_frame, cv2.COLOR_BGR2GRAY, dst=self._small_buf)
+            cv2.GaussianBlur(self._small_buf, (blur, blur), 0, dst=self._blur_buf)
+        gray = self._blur_buf  # Alias for readability below
         
         # Build background model using running sum (avoids np.mean alloc each frame)
-        gray_f32 = gray.astype(np.float32)
+        np.copyto(self._f32_buf, gray, casting='unsafe')  # uint8→float32, zero alloc
         
         # Subtract oldest frame before deque auto-drops it
         if len(self.frame_history) >= self.history_frames:
             self._bg_sum -= self.frame_history[0]
         
-        self.frame_history.append(gray_f32)
+        # Deque needs its own copy (each slot is a different historical frame)
+        self.frame_history.append(self._f32_buf.copy())
         
         # Add new frame to running sum
         if self._bg_sum is None:
-            self._bg_sum = gray_f32.copy()
+            self._bg_sum = self._f32_buf.copy()
         else:
-            self._bg_sum += gray_f32
+            self._bg_sum += self._f32_buf
         
         if len(self.frame_history) < self.history_frames:
             return {
@@ -206,17 +226,17 @@ class MotionDetector:
         np.divide(self._bg_sum, len(self.frame_history), out=self._bg_buffer, casting='unsafe')
         self.background = self._bg_buffer
         
-        # Compute absolute difference
-        frame_delta = cv2.absdiff(self.background, gray)
+        # Compute absolute difference (zero alloc)
+        cv2.absdiff(self.background, gray, dst=self._delta_buf)
         
-        # Threshold to binary (use local 'threshold' not self.motion_threshold)
-        _, thresh = cv2.threshold(frame_delta, threshold, 255, cv2.THRESH_BINARY)
+        # Threshold to binary (zero alloc)
+        cv2.threshold(self._delta_buf, threshold, 255, cv2.THRESH_BINARY, dst=self._thresh_buf)
         
-        # Dilate to fill gaps
-        thresh = cv2.dilate(thresh, None, iterations=2)
+        # Dilate to fill gaps (in-place on thresh_buf)
+        cv2.dilate(self._thresh_buf, None, iterations=2, dst=self._thresh_buf)
         
-        # Find contours
-        contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        # Find contours (findContours modifies input, but thresh_buf is overwritten next frame)
+        contours, _ = cv2.findContours(self._thresh_buf, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         
         # Filter by area and get bounding boxes (use local 'min_area', 'scale')
         motion_regions = []
