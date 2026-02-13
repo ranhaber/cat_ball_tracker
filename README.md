@@ -132,9 +132,9 @@ IDLE (no motion):
   Process loop on Core 0, AI thread idle on Cores 1-3.
 
 TRACKING (cat detected, AI every 2nd frame):
-  cpy=12-18ms  qw=0-90ms  mot=39-55ms  tf=160-230ms(inv=153-225ms)  FPS=10
-  AI runs async on Cores 1-3 — process loop never blocked by TFLite.
-  ~5 AI detections/sec. Zero swap stalls. Stable for 10+ minutes.
+  cpy=12-18ms  qw=0-90ms  mot=39-50ms  tf=155-217ms(inv=155-216ms)  FPS=10
+  AI runs async on Cores 1-3 (80% utilization) — process loop never blocked.
+  ~5 AI detections/sec. Zero swap stalls. Zero allocation churn. Stable 10+ min.
 
 First detection after IDLE:
   TFLite reload: ld=170-270ms (file cache warm from Phase 0 warmup)
@@ -962,9 +962,9 @@ The **displayed FPS** is processed frames per second (how often the phase block 
 | Memory (RSS) | ~177 MB (2 camera buffers) |
 | Memory (swap) | ~27 MB |
 | Motion detection | ~38-55ms (lores Y-plane) |
-| AI detection (async) | ~160-230ms (inv=153-225ms, on Cores 1-3) |
-| Idle CPU (total, stream off) | ~12% (Core 0 ~50%, Cores 1-3 idle) |
-| Tracking CPU (total, stream off) | ~50% (Core 0 ~50%, Cores 1-3 ~50%) |
+| AI detection (async) | ~155-217ms (inv=155-216ms, on Cores 1-3, 80% util) |
+| Idle CPU (total, stream off) | ~10% (Core 0 ~40%, Cores 1-3 idle) |
+| Tracking CPU (total, stream off) | ~34% (Core 0 ~55%, Cores 1-3 ~80%) |
 | Idle CPU (no browser) | ~25% |
 | TFLite threads | 0 when idle, 3 when tracking |
 | OpenCV threads | 1 when idle, 4 when tracking |

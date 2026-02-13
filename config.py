@@ -177,7 +177,7 @@ PERFORMANCE_PROFILES = {
         "tflite_threads": 3,
         "estimated_fps": "10 FPS (async AI, ~5 detections/sec)",
         "estimated_ram": "290MB (ring 32MB + TFLite 15MB)",
-        "estimated_cpu": "45-55%",
+        "estimated_cpu": "34% total (Core 0: 55%, Cores 1-3: 80%)",
         "detection_range": "0-12m"
     },
     "performance": {
@@ -191,7 +191,7 @@ PERFORMANCE_PROFILES = {
         "tflite_threads": 3,
         "estimated_fps": "10 FPS (async AI, ~5 detections/sec)",
         "estimated_ram": "295MB (ring 32MB + TFLite 15MB)",
-        "estimated_cpu": "45-60%",
+        "estimated_cpu": "34% total (Core 0: 55%, Cores 1-3: 80%)",
         "detection_range": "0-13m"
     },
     "quality": {
@@ -205,7 +205,7 @@ PERFORMANCE_PROFILES = {
         "tflite_threads": 3,
         "estimated_fps": "10 FPS (async AI, ~5 detections/sec)",
         "estimated_ram": "300MB (ring 32MB + TFLite 15MB)",
-        "estimated_cpu": "50-60%",
+        "estimated_cpu": "34% total (Core 0: 55%, Cores 1-3: 80%)",
         "detection_range": "0-12m (high detail)"
     }
 }
