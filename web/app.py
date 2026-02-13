@@ -679,7 +679,8 @@ class VideoProcessor:
             else:
                 # WATCH phase: center crop
                 fh, fw = frame.shape[:2]
-                cs = min(fw, fh, self.current_motion_crop_size)
+                crop_sz = self.current_motion_crop_size
+                cs = min(fw, fh, crop_sz[0] if isinstance(crop_sz, tuple) else crop_sz)
                 cx = (fw - cs) // 2
                 cy = (fh - cs) // 2
                 cw = ch = cs
