@@ -90,24 +90,26 @@ Detection and tracking work **independently of the web UI** — the system runs 
 │  Thread Affinity (Pi Zero 2W, 4× Cortex-A53):                     │
 │  ┌─────────┬─────────┬─────────┬─────────┐                        │
 │  │ Core 0  │ Core 1  │ Core 2  │ Core 3  │                        │
-│  │ Process │ Capture │   System / Flask   │                        │
-│  │ mot+tf  │ cam wait│   + XNNPACK when   │                        │
-│  │ +ann    │ +memcpy │   TFLite active    │                        │
+│  │ Process │         AI Thread           │                        │
+│  │ mot+trk │   TFLite XNNPACK (3 cores)  │                        │
+│  │ +ann    │   async detect + unload      │                        │
 │  └─────────┴─────────┴─────────┴─────────┘                        │
+│  picamera2 callback: any core (DMA→ring buffer copy, ~15ms)        │
 │                                                                     │
 │  Optimizations:                                                     │
-│  - 5 FPS camera: halves CPU/RAM churn vs 10+ FPS                  │
-│  - Pipelined capture: camera wait overlaps with processing (qw=0)  │
+│  - 10 FPS camera: async AI allows full framerate                   │
+│  - Ring buffer: 3-slot pre-allocated, np.copyto (zero alloc)       │
+│  - Async AI: TFLite on Cores 1-3, never blocks process loop       │
 │  - TFLite warmup: file-cache warmed at boot (first detect 0.2s)   │
 │  - Raw stream disabled: saves ~20MB DMA RAM                        │
 │  - Recording default off: saves ~10MB during detection             │
 │  - H.264: hardware encoder, zero CPU cost                          │
 │  - ISP lores: motion + stream resize offloaded to camera hardware  │
 │  - Y-plane: motion uses I420 Y channel directly (skips 2 cvtColor) │
-│  - MappedArray: zero-copy lores view, skip full lores memcpy       │
+│  - MappedArray: DMA read access for ring buffer copy               │
 │  - Manual focus: fixed LensPosition, no AF hunting                 │
 │  - Deferred BGR: YUV→BGR only when stream clients are watching     │
-│  - TFLite: 0 threads idle (auto-unload on IDLE), 3 when active    │
+│  - TFLite: 0 threads idle (auto-unload after 3s), 3 when active   │
 └─────────────────────────────────────────────────────────────────────┘
                           │
                           ▼ (HTTP, optional)
@@ -271,7 +273,7 @@ PHASE 1: IDLE                          PHASE 2: ACQUISITION
        | no detection          PHASE 3: TRACKING       |
        | for 30s              +----------------------------+
        +----------------------| Cat confirmed              |
-       |                      | TFLite every 3rd frame     |
+       |                      | TFLite every 2nd frame     |
        |                      | Motion crop for AI         |
        |                      | CPU: ~60%  RAM: ~87%       |
        |                      +-------------+--------------+
@@ -301,7 +303,7 @@ These numbers are **estimated from the code without running on the RPi**. They a
 |-------|--------|----------------------------|--------|
 | **IDLE** | Not loaded | **~120–145** | Motion only; 1 OpenCV thread; no AI buffers |
 | **ACQUISITION** | Loaded | **~145–175** | +TFLite model + interpreter + pre-alloc input (300×300×3); 4 OpenCV threads |
-| **TRACKING** | Loaded | **~145–175** | Same as ACQUISITION (TFLite every 3rd frame) |
+| **TRACKING** | Loaded | **~145–175** | Same as ACQUISITION (TFLite every 2nd frame) |
 | **WATCH** | Loaded | **~145–175** | Same; TFLite every 2nd frame, full-frame scan |
 
 **Component breakdown (approximate):**
@@ -395,7 +397,7 @@ sequenceDiagram
         Loop->>Loop: get crop_region (motion or inject)
     end
 
-    alt run_ai_detection (ACQ: every frame; TRACK: every 3rd; WATCH: every 2nd)
+    alt run_ai_detection (ACQ: every frame; TRACK: every 2nd; WATCH: every 2nd)
         alt crop_region set
             Loop->>Loop: cropped_frame = frame[cy:cy+ch, cx:cx+cw]
             Loop->>Det: detect(cropped_frame)
@@ -416,7 +418,7 @@ sequenceDiagram
 
 | Step | What happens |
 |------|----------------|
-| 1 | **Frame capture** — Real camera: `get_request()` then `req.make_array("main")` (blocking until frame ready), or `get_frame()` (last frame from capture thread). File: `file_camera.get_frame()`. |
+| 1 | **Frame capture** — Real camera: picamera2 `post_callback` copies DMA→ring buffer via `np.copyto` (~15ms). File/mock fallback: `file_camera.get_frame()` in capture thread. |
 | 2 | **Optional inject** — If `inject_cat`: `paste_on_frame(frame)` (move cat, paste, set bbox). If stream clients > 0: annotate copy, encode JPEG, set `_cached_jpeg` and `current_frame`. |
 | 3 | **Frame-skip gate** — `skip_counter += 1`. Only when `skip_counter >= frame_skip`: reset counter, update FPS, enter phase block. Otherwise loop goes to next frame (no motion, no TFLite). |
 | 4 | **Phase + motion** — According to `_phase`: **IDLE** → `motion_detector.detect(frame)` (resize, gray, running-sum background, diff, contours), filter to perimeter; transition to ACQUISITION if motion in zone. **ACQUISITION/TRACKING/WATCH** → same motion.detect(); then set `run_ai_detection` and `crop_region` (motion bbox or inject bbox; WATCH often has no crop). |
@@ -491,6 +493,7 @@ cat_ball_tracker/
 │   └── camera_handler.py        # RPi Camera Module 3 interface (pause/resume)
 │
 ├── processing/
+│   ├── __init__.py
 │   ├── async_log.py             # Non-blocking logging (queue + writer thread; hot path uses plog)
 │   ├── inject_cat.py            # Inject Cat test mode (paste, vertex movement)
 │   └── memory.py                # RAM stats, reclaim_memory (gc + malloc_trim)
@@ -508,6 +511,7 @@ cat_ball_tracker/
 │   ├── __init__.py
 │   ├── app.py                   # VideoProcessor + Flask app factory
 │   ├── routes_streaming.py      # /, /video_feed, /api/snapshot
+│   ├── routes_h264.py           # /ws/stream (H.264 WebSocket + Canvas overlay)
 │   ├── routes_status.py         # /api/status, /api/mode
 │   ├── routes_perimeter.py      # /api/perimeter, /api/topdown
 │   ├── routes_performance.py    # /api/performance/*
@@ -522,12 +526,19 @@ cat_ball_tracker/
 │
 ├── tests/                       # Unit tests (run manually)
 │   ├── __init__.py
+│   ├── conftest.py              # Shared fixtures (mock camera, Flask app, TFLite)
 │   ├── run_tests.py             # Test runner: python tests/run_tests.py [module]
 │   ├── test_calibration.py      # Homography, world coords, rectangles
-│   ├── test_perimeter.py        # Point-in-polygon, filter_detections
-│   ├── test_tracker.py          # ID assignment, persistence, reset
+│   ├── test_h264_and_lores.py   # H.264 encoder, lores stream, dual-stream
+│   ├── test_inject_cat.py       # Movement, vertex cycling, paste
 │   ├── test_memory.py           # RAM stats, reclaim_memory
-│   └── test_inject_cat.py       # Movement, vertex cycling, paste
+│   ├── test_performance_profiles.py  # Profile switching, parameter validation
+│   ├── test_perimeter.py        # Point-in-polygon, filter_detections
+│   ├── test_phase_state_machine.py   # IDLE→ACQ→TRACK→WATCH transitions
+│   ├── test_post_callback.py    # picamera2 post_callback validation
+│   ├── test_recording.py        # VideoWriter, detection-triggered recording
+│   ├── test_topdown_integration.py   # Top-down view, world coordinates
+│   └── test_tracker.py          # ID assignment, persistence, reset
 │
 ├── models/
 │   ├── .gitkeep
@@ -833,7 +844,7 @@ DEFAULT_PERFORMANCE_PROFILE = "performance"
 
 # Motion-First
 MOTION_FIRST_ENABLED = True
-MOTION_DETECTION_SCALE = 0.35
+MOTION_DETECTION_SCALE = 0.25       # Base value; profiles override (balanced=0.30, performance=0.35)
 MOTION_CROP_SIZE = (400, 400)       # Fixed crop size for AI
 TFLITE_NUM_THREADS = 3              # Use 3 of 4 cores for inference
 
@@ -929,14 +940,14 @@ The **displayed FPS** is processed frames per second (how often the phase block 
 
 | Metric | Value |
 |--------|-------|
-| FPS (with TFLite) | 3-8 FPS |
+| FPS (with async TFLite) | ~10 FPS (AI runs on separate thread, never blocks) |
 | FPS (mock mode) | 15+ FPS |
 | Memory (RSS) | ~177 MB (2 camera buffers) |
 | Memory (swap) | ~27 MB |
-| Motion detection | <15ms |
-| AI detection | 200-500ms (loaded on demand) |
-| Idle CPU (browser open, stream on) | ~50% (was 92%) |
-| Idle CPU (browser open, stream off) | ~35% |
+| Motion detection | ~38-55ms (lores Y-plane) |
+| AI detection (async) | ~160-230ms (inv=153-225ms, on Cores 1-3) |
+| Idle CPU (total, stream off) | ~12% (Core 0 ~50%, Cores 1-3 idle) |
+| Tracking CPU (total, stream off) | ~50% (Core 0 ~50%, Cores 1-3 ~50%) |
 | Idle CPU (no browser) | ~25% |
 | TFLite threads | 0 when idle, 3 when tracking |
 | OpenCV threads | 1 when idle, 4 when tracking |

@@ -956,7 +956,7 @@ class VideoProcessor:
                             plog("[PHASE] ACQUISITION → IDLE (no motion for %ss)", self._acquisition_timeout)
                     
                     # ── PHASE: TRACKING ──
-                    # Cat confirmed. TFLite every 3rd processed frame with motion crop.
+                    # Cat confirmed. TFLite every 2nd processed frame with motion crop.
                     elif self._phase == "TRACKING":
                         t_motion_start = time.perf_counter()
                         if frame_lores_y is not None:

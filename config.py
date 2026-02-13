@@ -137,10 +137,7 @@ H264_ENABLED = True    # Enable H.264 WebSocket streaming (disable to save ~3MB 
 # ============================================================================
 # PERFORMANCE SETTINGS (for RPi Zero 2W optimization)
 # ============================================================================
-# Skip frames for detection (1 = process every frame, 2 = every other, etc.)
-DETECTION_FRAME_SKIP = 2
-
-# Use threading for camera capture
+# Use threading for mock camera capture (real camera uses post_callback)
 USE_THREADED_CAPTURE = True
 
 # Number of threads for TFLite inference
@@ -316,8 +313,8 @@ RECORDING_FOURCC = "avc1"  # H.264 for MP4
 # Pin capture and processing threads to specific cores for cache locality.
 # Disable on dev machines (Linux-only, requires os.sched_setaffinity).
 THREAD_AFFINITY_ENABLED = True
-CAPTURE_THREAD_CORE = 1   # Core 1: camera wait + memcpy
-PROCESS_THREAD_CORE = 0   # Core 0: motion + AI + annotation
+CAPTURE_THREAD_CORE = 1   # Core 1: only used by file/mock fallback capture thread
+PROCESS_THREAD_CORE = 0   # Core 0: motion + tracking + annotation (AI on Cores 1-3)
 
 # ============================================================================
 # Sync FRAME_WIDTH/HEIGHT with DEFAULT_RESOLUTION

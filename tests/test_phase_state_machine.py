@@ -145,7 +145,7 @@ class TestPhaseStateMachine(unittest.TestCase):
         self.assertEqual(vp._phase, "WATCH")
     
     def test_tracking_ai_every_3rd_frame(self):
-        """TRACKING runs AI every 3rd processed frame."""
+        """TRACKING runs AI every 2nd processed frame."""
         vp = self._make_processor()
         vp._phase = "TRACKING"
         ai_frames = []

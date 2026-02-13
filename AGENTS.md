@@ -57,7 +57,7 @@ Detailed architecture diagram: **README § System Architecture**. Crop vs resize
 
 - **IDLE:** Motion only, TFLite not loaded. Motion in zone → ACQUISITION.
 - **ACQUISITION:** TFLite runs every processed frame; crop from motion or inject. Cat found → TRACKING. No motion 10 s → IDLE.
-- **TRACKING:** TFLite every 3rd frame; motion crop. Motion stops → WATCH. No detection 30 s → IDLE.
+- **TRACKING:** TFLite every 2nd frame; motion crop. Motion stops → WATCH. No detection 30 s → IDLE.
 - **WATCH:** TFLite every 2nd frame; often full frame (no crop). Motion again → TRACKING. No detection 30 s → IDLE.
 
 When **inject_cat** is True, the cat is pasted on the camera frame (simulating a real cat). The full pipeline runs normally: motion detection sees the cat, AI detects it, tracker tracks it. On first inject frame, IDLE is force-transitioned to ACQUISITION (no motion history yet). The DMA frame is copied before pasting (inject writes to the frame).
