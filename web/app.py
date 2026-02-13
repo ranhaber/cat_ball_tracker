@@ -214,6 +214,7 @@ class VideoProcessor:
         # Inject Cat test mode (uses InjectCat class from processing/inject_cat.py)
         self.inject_cat = False
         self.inject_cat_handler = None  # Created in start() after perimeter/calibration init
+        self._request_motion_reset = False                # Generic motion reset flag (from Flask settings changes)
         self._request_motion_reset_after_inject = False  # Process loop performs reset (avoids cross-thread race)
         self._request_unload_after_inject = False        # Process loop performs unload (avoids deadlock with detect())
         
@@ -584,6 +585,8 @@ class VideoProcessor:
         
         try:
             wi = (self._ring_last_written + 1) % 3
+            if wi == self._ring_last_read:
+                wi = (wi + 1) % 3  # Skip slot reader is using
             
             self._ring_gen[wi] += 1  # Odd → write in progress
             
@@ -640,6 +643,8 @@ class VideoProcessor:
                         continue
                 
                 wi = (self._ring_last_written + 1) % 3
+                if wi == self._ring_last_read:
+                    wi = (wi + 1) % 3  # Skip slot reader is using
                 
                 self._ring_gen[wi] += 1  # Odd → write in progress
                 
@@ -802,7 +807,12 @@ class VideoProcessor:
         
         while self.running:
             try:
-                # ── Pending cleanup after inject stop (done here to avoid calling from Flask during detect()) ──
+                # ── Pending resets (done here to avoid cross-thread calls during detect()) ──
+                if getattr(self, '_request_motion_reset', False):
+                    self._request_motion_reset = False
+                    if self.motion_detector:
+                        self.motion_detector.reset()
+                        plog("[MOTION] Reset (requested by settings change)")
                 if getattr(self, '_request_motion_reset_after_inject', False):
                     self._request_motion_reset_after_inject = False
                     if self.motion_detector:
@@ -821,11 +831,19 @@ class VideoProcessor:
                         old_lores = self._lores_resolution
                         self._lores_resolution = (new_lores_w, new_lores_h)
                         self._using_lores = True
+                        # Pause callback while re-allocating (prevents write to freed buffer)
+                        _cb_paused = False
+                        if hasattr(self.camera, 'camera') and self.camera.camera:
+                            self.camera.camera.post_callback = None
+                            _cb_paused = True
                         # Re-allocate ring buffer lores arrays for new resolution
                         for i in range(3):
                             self._ring_lores_y[i] = np.empty((new_lores_h, new_lores_w), dtype=np.uint8)
                             self._ring_lores_bgr[i] = np.empty((new_lores_h, new_lores_w, 3), dtype=np.uint8)
                             self._ring_lores_bgr_valid[i] = False
+                        # Resume callback
+                        if _cb_paused:
+                            self.camera.camera.post_callback = self._frame_callback
                         plog("[RING] Lores re-allocated for %s×%s", new_lores_w, new_lores_h)
                         profile = config.PERFORMANCE_PROFILES.get(self.current_profile, {})
                         adjusted_scale = self._lores_motion_scale(profile.get("motion_scale", 0.25))

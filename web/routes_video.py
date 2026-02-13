@@ -134,8 +134,8 @@ def init_video_routes(video_processor):
         
         settings.update_setting("motion_first_enabled", video_processor.motion_first_enabled)
         
-        if video_processor.motion_detector:
-            video_processor.motion_detector.reset()
+        # Request reset via flag — process loop performs it (avoids cross-thread race with detect())
+        video_processor._request_motion_reset = True
         
         return jsonify({
             "success": True,

@@ -267,14 +267,16 @@ class TFLiteDetector:
         scores = self.interpreter.get_tensor(self.output_details[2]['index'])[0]
         
         detections = []
+        _target = self.target_class_id  # Snapshot for consistent filtering (Flask may change mid-loop)
+        _thresh = self.threshold
         
         for i in range(len(scores)):
             score = float(scores[i])
-            if score < self.threshold:
+            if score < _thresh:
                 continue
             
             class_id = int(classes[i]) + 1  # COCO classes are 1-indexed in labels
-            if class_id != self.target_class_id:
+            if class_id != _target:
                 continue
                 
             y1, x1, y2, x2 = boxes[i]
